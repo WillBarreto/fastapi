@@ -36,14 +36,39 @@ async def whatsapp_webhook(request: Request):
         
         print(f"📨 Mensaje de {from_user}: {message_body}")
         
-        # Aquí después conectaremos DeepSeek
+        # Generar respuesta (próximamente con DeepSeek)
         respuesta = "¡Hola! Soy el asistente del Colegio. Próximamente responderé automáticamente."
-        
-        return {"status": "received", "user": from_user, "bot_response": respuesta}
+
+        # ENVIAR RESPUESTA VÍA TWILIO
+        twilio_respuesta = enviar_respuesta_twilio(from_user, respuesta)
+        print(f"📤 Respuesta enviada: {twilio_respuesta}")
+
+        return {"status": "processed"}
     
     except Exception as e:
         print(f"❌ Error: {e}")
         return {"status": "error", "detail": str(e)}
+
+def enviar_respuesta_twilio(to_number: str, mensaje: str):
+    """Envía mensaje de vuelta via Twilio API"""
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    
+    if not account_sid or not auth_token:
+        return "Faltan credenciales Twilio"
+    
+    try:
+        from twilio.rest import Client
+        client = Client(account_sid, auth_token)
+        
+        message = client.messages.create(
+            body=mensaje,
+            from_='whatsapp:+14155238886',  # Número sandbox
+            to=to_number
+        )
+        return f"Mensaje enviado: {message.sid}"
+    except Exception as e:
+        return f"Error Twilio: {e}"
 
 @app.get("/test")
 async def test_endpoint():
