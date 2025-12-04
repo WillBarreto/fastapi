@@ -36,13 +36,13 @@ async def whatsapp_webhook(request: Request):
         
         print(f"📨 Mensaje de {from_user}: {message_body}")
         
-        # Generar respuesta (próximamente con DeepSeek)
-        respuesta = "¡Hola! Soy el asistente del Colegio. Próximamente responderé automáticamente."
-
+        # Respuesta temporal
+        respuesta = "¡Hola! Soy el asistente del Colegio. Estoy en desarrollo, pronto responderé automáticamente."
+        
         # ENVIAR RESPUESTA VÍA TWILIO
-        twilio_respuesta = enviar_respuesta_twilio(from_user, respuesta)
-        print(f"📤 Respuesta enviada: {twilio_respuesta}")
-
+        resultado = enviar_respuesta_twilio(from_user, respuesta)
+        print(f"📤 {resultado}")
+        
         return {"status": "processed"}
     
     except Exception as e:
@@ -76,5 +76,5 @@ async def test_endpoint():
     return {
         "status": "ok",
         "message": "Bot funcionando",
-        "webhook_url": "https://TU-URL.railway.app/webhook/whatsapp"
+        "webhook_url": "https://fastapi-production-efb5.up.railway.app/webhook/whatsapp"
     }
