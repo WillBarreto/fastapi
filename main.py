@@ -3,6 +3,13 @@ from pydantic import BaseModel
 import os
 from twilio.rest import Client  # Importamos al inicio para mejor manejo de errores
 
+print("=" * 50)
+print("DEBUG: Todas las variables de entorno:")
+for key, value in os.environ.items():
+    if "TWILIO" in key.upper():
+        print(f"{key}: {value[:10]}...")  # Muestra solo primeros chars por seguridad
+print("=" * 50)
+
 app = FastAPI()
 
 # Configuración del negocio
