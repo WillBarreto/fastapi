@@ -2,6 +2,9 @@ from fastapi import FastAPI, Request, Form
 import os
 from twilio.rest import Client
 from datetime import datetime
+# Almacenamiento de conversaciones (en memoria)
+conversations = []
+MAX_CONVERSATIONS = 200  # Máximo de mensajes a guardar
 
 app = FastAPI()
 
@@ -65,6 +68,27 @@ async def whatsapp_webhook(
         
         # Enviar respuesta via Twilio
         resultado = enviar_respuesta_twilio(From, respuesta)
+
+        # ================= GUARDAR EN HISTORIAL =================
+        conversation_entry = {
+            "id": len(conversations) + 1,
+            "timestamp": datetime.now().isoformat(),
+            "user": {
+                "number": From,
+                "message": Body
+            },
+            "bot": {
+                "response": respuesta,
+                "status": "sent" if "✅" in resultado else "failed",
+                "sid": resultado.split("SID: ")[1] if "SID:" in resultado else None
+            }
+        }
+        conversations.append(conversation_entry)
+        
+        # Mantener solo los últimos mensajes
+        if len(conversations) > MAX_CONVERSATIONS:
+            conversations.pop(0)
+        # =======================================================
         
         # ================= NUEVO: RESPUESTA DEL BOT =================
         print(f"🤖 BOT: {respuesta}")
@@ -171,6 +195,89 @@ async def test_endpoint():
             "test": "/test",
             "health": "/health"
         }
+    }
+
+@app.get("/conversations")
+async def get_conversations(limit: int = 20):
+    """Obtener últimas conversaciones (JSON)"""
+    return {
+        "total": len(conversations),
+        "limit": limit,
+        "conversations": conversations[-limit:]  # Últimas N conversaciones
+    }
+
+@app.get("/conversations/html")
+async def get_conversations_html():
+    """Panel web con interfaz HTML"""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>💬 WhatsApp Bot - Conversaciones</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+            .header { background: #25D366; color: white; padding: 20px; border-radius: 10px; }
+            .conversation { background: white; margin: 15px 0; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+            .user { background: #DCF8C6; padding: 10px; margin: 5px 0; border-radius: 10px; }
+            .bot { background: #E8E8E8; padding: 10px; margin: 5px 0; border-radius: 10px; }
+            .timestamp { color: #666; font-size: 0.9em; }
+            .status { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 0.8em; }
+            .sent { background: #25D366; color: white; }
+            .failed { background: #FF3B30; color: white; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>💬 WhatsApp Bot - Conversaciones</h1>
+            <p>Total: """ + str(len(conversations)) + """ mensajes</p>
+            <p><a href="/conversations" style="color: white;">Ver JSON</a> | <a href="/" style="color: white;">Inicio</a></p>
+        </div>
+    """
+    
+    # Agregar cada conversación
+    for conv in reversed(conversations[-50:]):  # Últimas 50
+        html_content += f"""
+        <div class="conversation">
+            <div class="timestamp">ID: {conv['id']} | {conv['timestamp']}</div>
+            <div class="timestamp">De: {conv['user']['number']}</div>
+            <div class="user">👤 <strong>Usuario:</strong> {conv['user']['message']}</div>
+            <div class="bot">🤖 <strong>Bot:</strong> {conv['bot']['response']}</div>
+            <div>
+                <span class="status {'sent' if conv['bot']['status'] == 'sent' else 'failed'}">
+                    {conv['bot']['status']}
+                </span>
+                {f" | SID: {conv['bot']['sid']}" if conv['bot']['sid'] else ""}
+            </div>
+        </div>
+        """
+    
+    html_content += """
+        <div style="margin-top: 20px; text-align: center; color: #666;">
+            <p>WhatsApp Bot - Desarrollado con FastAPI + Twilio</p>
+            <p><a href="/webhook/whatsapp" target="_blank">Webhook</a> | 
+               <a href="/health" target="_blank">Health Check</a> | 
+               <a href="/test" target="_blank">Test</a></p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html_content)
+
+@app.get("/conversations/{phone_number}")
+async def get_conversations_by_number(phone_number: str):
+    """Obtener conversaciones de un número específico"""
+    filtered = [
+        conv for conv in conversations 
+        if phone_number in conv['user']['number']
+    ]
+    return {
+        "number": phone_number,
+        "total_conversations": len(filtered),
+        "conversations": filtered[-20:]  # Últimas 20 de ese número
     }
 
 if __name__ == "__main__":
