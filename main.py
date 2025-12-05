@@ -448,8 +448,8 @@ async def crm_panel(db: Session = Depends(get_db)):
         </div>
         
         <div style="margin-top: 30px; text-align: center; color: #666; padding: 20px;">
-            <p>Sistema CRM desarrollado con Will Barreto FastAPI + Twilio + SQLite</p>
-            <p>📧 Contacto técnico: [TU EMAIL] | 📅 {fecha_actual}</p>
+            <p>Sistema WhatsApp CRM desarrollado por Will Barreto FastAPI + Twilio + SQLite</p>
+            <p>📧 Contacto técnico: contacto@willbarreto.com | 📅 {fecha_actual}</p>
         </div>
     </body>
     </html>
