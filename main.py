@@ -1,14 +1,6 @@
 from fastapi import FastAPI, Request, Form
-from pydantic import BaseModel
 import os
-from twilio.rest import Client  # Importamos al inicio para mejor manejo de errores
-
-print("=" * 50)
-print("DEBUG: Todas las variables de entorno:")
-for key, value in os.environ.items():
-    if "TWILIO" in key.upper():
-        print(f"{key}: {value[:10]}...")  # Muestra solo primeros chars por seguridad
-print("=" * 50)
+from twilio.rest import Client
 
 app = FastAPI()
 
@@ -24,11 +16,6 @@ Información clave:
 Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar una cita.'
 """
 
-class WhatsAppMessage(BaseModel):
-    From: str
-    Body: str
-    To: str
-
 @app.get("/")
 async def root():
     return {
@@ -41,17 +28,19 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Endpoint para verificar que el servidor está funcionando"""
-    twilio_account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    api_key = os.getenv("TWILIO_API_KEY")
+    api_secret = os.getenv("TWILIO_API_SECRET")
     twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
     
     return {
         "status": "healthy",
-        "twilio_credentials_loaded": bool(twilio_account_sid and twilio_auth_token and twilio_number),
-        "twilio_number": twilio_number if twilio_number else "No configurado",
+        "twilio_credentials_loaded": bool(account_sid and api_key and api_secret and twilio_number),
+        "twilio_number": twilio_number or "No configurado",
         "variables_loaded": {
-            "TWILIO_ACCOUNT_SID": "✅" if twilio_account_sid else "❌",
-            "TWILIO_AUTH_TOKEN": "✅" if twilio_auth_token else "❌",
+            "TWILIO_ACCOUNT_SID": "✅" if account_sid else "❌",
+            "TWILIO_API_KEY": "✅" if api_key else "❌",
+            "TWILIO_API_SECRET": "✅" if api_secret else "❌",
             "TWILIO_WHATSAPP_NUMBER": "✅" if twilio_number else "❌"
         }
     }
@@ -106,33 +95,37 @@ def generar_respuesta_inteligente(mensaje: str) -> str:
     return "¡Hola! Soy el asistente del Colegio. Puedo ayudarte con:\n• Horarios\n• Ubicación\n• Costos\n• Agendar visitas\n\n¿En qué necesitas información? O si prefieres: https://calendly.com/tu-colegio"
 
 def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
-    """Envía mensaje de vuelta via Twilio API"""
+    """Envía mensaje de vuelta via Twilio API usando API Key"""
     # Obtener variables de entorno
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    api_key = os.getenv("TWILIO_API_KEY")
+    api_secret = os.getenv("TWILIO_API_SECRET")
     twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
     
     # Debug en logs
     print(f"🔍 Debug - Account SID: {'✅' if account_sid else '❌'}")
-    print(f"🔍 Debug - Auth Token: {'✅' if auth_token else '❌'}")
+    print(f"🔍 Debug - API Key: {'✅' if api_key else '❌'}")
+    print(f"🔍 Debug - API Secret: {'✅' if api_secret else '❌'}")
     print(f"🔍 Debug - Twilio Number: {twilio_number if twilio_number else '❌ No configurado'}")
     
     # Validar credenciales
     if not account_sid:
         return "❌ Faltan credenciales Twilio: TWILIO_ACCOUNT_SID"
-    if not auth_token:
-        return "❌ Faltan credenciales Twilio: TWILIO_AUTH_TOKEN"
+    if not api_key:
+        return "❌ Faltan credenciales Twilio: TWILIO_API_KEY"
+    if not api_secret:
+        return "❌ Faltan credenciales Twilio: TWILIO_API_SECRET"
     if not twilio_number:
         return "❌ Faltan credenciales Twilio: TWILIO_WHATSAPP_NUMBER"
     
     try:
-        # Crear cliente Twilio
-        client = Client(account_sid, auth_token)
+        # Crear cliente Twilio con API Key
+        client = Client(api_key, api_secret, account_sid)
         
         # Enviar mensaje
         message = client.messages.create(
             body=mensaje,
-            from_=twilio_number,  # Usa la variable de entorno
+            from_=twilio_number,
             to=to_number
         )
         
@@ -146,9 +139,9 @@ def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
 @app.get("/test")
 async def test_endpoint():
     """Endpoint de prueba"""
-    # Verificar si las variables están cargadas
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    api_key = os.getenv("TWILIO_API_KEY")
+    api_secret = os.getenv("TWILIO_API_SECRET")
     twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
     
     return {
@@ -157,10 +150,11 @@ async def test_endpoint():
         "webhook_url": "https://fastapi-production-efb5.up.railway.app/webhook/whatsapp",
         "credentials_status": {
             "TWILIO_ACCOUNT_SID": "✅ Cargada" if account_sid else "❌ Faltante",
-            "TWILIO_AUTH_TOKEN": "✅ Cargada" if auth_token else "❌ Faltante",
+            "TWILIO_API_KEY": "✅ Cargada" if api_key else "❌ Faltante",
+            "TWILIO_API_SECRET": "✅ Cargada" if api_secret else "❌ Faltante",
             "TWILIO_WHATSAPP_NUMBER": "✅ Cargada" if twilio_number else "❌ Faltante"
         },
-        "twilio_number_example": twilio_number or "No configurado",
+        "twilio_number": twilio_number or "No configurado",
         "endpoints": {
             "root": "/",
             "webhook": "/webhook/whatsapp (POST)",
