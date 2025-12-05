@@ -1,12 +1,73 @@
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from pydantic import BaseModel
 import os
 from twilio.rest import Client
 from datetime import datetime
-# Almacenamiento de conversaciones (en memoria)
-conversations = []
-MAX_CONVERSATIONS = 200  # Máximo de mensajes a guardar
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Enum, Boolean, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.sql import func
+import enum
 
-app = FastAPI()
+# ================= CONFIGURACIÓN DE BASE DE DATOS =================
+DATABASE_URL = "sqlite:///./whatsapp_bot.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# ================= MODELOS DE BASE DE DATOS =================
+
+class ContactStatus(enum.Enum):
+    PROSPECTO_NUEVO = "prospecto_nuevo"
+    PROSPECTO_INFORMADO = "prospecto_informado"
+    VISITA_AGENDADA = "visita_agendada"
+    INSCRIPCION_PENDIENTE = "inscripcion_pendiente"
+    ALUMNO_ACTIVO = "alumno_activo"
+    ALUMNO_INACTIVO = "alumno_inactivo"
+    COMPETENCIA = "competencia"
+    EX_ALUMNO = "ex_alumno"
+
+class Contact(Base):
+    __tablename__ = "contacts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    phone_number = Column(String(20), unique=True, index=True, nullable=False)
+    status = Column(Enum(ContactStatus), default=ContactStatus.PROSPECTO_NUEVO)
+    first_contact = Column(DateTime, default=func.now())
+    last_contact = Column(DateTime, default=func.now(), onupdate=func.now())
+    total_messages = Column(Integer, default=0)
+    notes = Column(Text, nullable=True)
+    is_competitor = Column(Boolean, default=False)
+    
+    # Relación con mensajes
+    messages = relationship("Message", back_populates="contact", cascade="all, delete-orphan")
+
+class Message(Base):
+    __tablename__ = "messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"))
+    direction = Column(Enum('incoming', 'outgoing'), nullable=False)
+    content = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=func.now())
+    twilio_sid = Column(String(50), nullable=True)
+    
+    # Relación con contacto
+    contact = relationship("Contact", back_populates="messages")
+
+# Crear tablas
+Base.metadata.create_all(bind=engine)
+
+# ================= DEPENDENCIA DE BASE DE DATOS =================
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ================= APLICACIÓN FASTAPI =================
+app = FastAPI(title="WhatsApp Bot CRM", version="1.0.0")
 
 # Configuración del negocio
 NEGOCIO_INFO = """
@@ -20,95 +81,170 @@ Información clave:
 Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar una cita.'
 """
 
+# ================= FUNCIONES DE BASE DE DATOS =================
+def get_or_create_contact(db: Session, phone_number: str):
+    """Obtiene o crea un contacto en la base de datos"""
+    contact = db.query(Contact).filter(Contact.phone_number == phone_number).first()
+    
+    if not contact:
+        # Es un nuevo contacto
+        contact = Contact(
+            phone_number=phone_number,
+            status=ContactStatus.PROSPECTO_NUEVO,
+            first_contact=datetime.now(),
+            last_contact=datetime.now(),
+            total_messages=0
+        )
+        db.add(contact)
+        db.commit()
+        db.refresh(contact)
+    
+    return contact
+
+def save_message(db: Session, contact_id: int, direction: str, content: str, twilio_sid: str = None):
+    """Guarda un mensaje en la base de datos"""
+    message = Message(
+        contact_id=contact_id,
+        direction=direction,
+        content=content,
+        timestamp=datetime.now(),
+        twilio_sid=twilio_sid
+    )
+    db.add(message)
+    
+    # Actualizar contador de mensajes del contacto
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if contact:
+        contact.total_messages += 1
+        contact.last_contact = datetime.now()
+    
+    db.commit()
+    return message
+
+def get_conversation_history(db: Session, phone_number: str, limit: int = 10):
+    """Obtiene el historial de conversación de un contacto"""
+    contact = db.query(Contact).filter(Contact.phone_number == phone_number).first()
+    if not contact:
+        return []
+    
+    messages = db.query(Message).filter(Message.contact_id == contact.id)\
+        .order_by(Message.timestamp.desc())\
+        .limit(limit)\
+        .all()
+    
+    return messages[::-1]  # Invertir para orden cronológico
+
+# ================= ENDPOINTS PRINCIPALES =================
 @app.get("/")
 async def root():
     return {
-        "status": "WhatsApp bot activo", 
-        "endpoint": "/webhook/whatsapp",
-        "test": "/test",
-        "health": "/health"
+        "status": "WhatsApp Bot CRM",
+        "endpoints": {
+            "webhook": "/webhook/whatsapp (POST)",
+            "contacts": "/contacts (GET)",
+            "conversations": "/conversations/{phone} (GET)",
+            "panel": "/panel (GET)",
+            "health": "/health (GET)"
+        }
     }
 
 @app.get("/health")
-async def health_check():
-    """Endpoint para verificar que el servidor está funcionando"""
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    api_key = os.getenv("TWILIO_API_KEY")
-    api_secret = os.getenv("TWILIO_API_SECRET")
-    twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
+async def health_check(db: Session = Depends(get_db)):
+    """Verifica salud de la aplicación y base de datos"""
+    try:
+        # Verificar conexión a BD
+        db.execute("SELECT 1")
+        db_status = "✅ Conectada"
+        
+        # Estadísticas
+        total_contacts = db.query(Contact).count()
+        total_messages = db.query(Message).count()
+        
+    except Exception as e:
+        db_status = f"❌ Error: {str(e)}"
+        total_contacts = 0
+        total_messages = 0
     
     return {
         "status": "healthy",
-        "twilio_credentials_loaded": bool(account_sid and api_key and api_secret and twilio_number),
-        "twilio_number": twilio_number or "No configurado",
-        "variables_loaded": {
-            "TWILIO_ACCOUNT_SID": "✅" if account_sid else "❌",
-            "TWILIO_API_KEY": "✅" if api_key else "❌",
-            "TWILIO_API_SECRET": "✅" if api_secret else "❌",
-            "TWILIO_WHATSAPP_NUMBER": "✅" if twilio_number else "❌"
-        }
+        "database": db_status,
+        "statistics": {
+            "total_contacts": total_contacts,
+            "total_messages": total_messages
+        },
+        "twilio_configured": bool(os.getenv("TWILIO_API_KEY"))
     }
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
     Body: str = Form(...),
-    To: str = Form(None)
+    db: Session = Depends(get_db)
 ):
     try:
+        # ================= LOG EN CONSOLA =================
         print(f"\n{'='*60}")
         print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
         print(f"📱 De: {From}")
         print(f"👤 USUARIO: {Body}")
         print(f"{'-'*40}")
-        # ========================================================
         
-        # Generar respuesta inteligente
-        respuesta = generar_respuesta_inteligente(Body)
+        # ================= GESTIÓN DE CONTACTO =================
+        # Obtener o crear contacto
+        contact = get_or_create_contact(db, From)
         
-        # Enviar respuesta via Twilio
+        # Guardar mensaje entrante
+        save_message(db, contact.id, 'incoming', Body)
+        
+        # ================= OBTENER HISTORIAL =================
+        # (Para uso futuro en respuestas contextuales)
+        history = get_conversation_history(db, From, limit=5)
+        
+        # ================= GENERAR RESPUESTA =================
+        respuesta = generar_respuesta_inteligente(Body, contact, history)
+        
+        # ================= ENVIAR RESPUESTA =================
         resultado = enviar_respuesta_twilio(From, respuesta)
-
-        # ================= GUARDAR EN HISTORIAL =================
-        conversation_entry = {
-            "id": len(conversations) + 1,
-            "timestamp": datetime.now().isoformat(),
-            "user": {
-                "number": From,
-                "message": Body
-            },
-            "bot": {
-                "response": respuesta,
-                "status": "sent" if "✅" in resultado else "failed",
-                "sid": resultado.split("SID: ")[1] if "SID:" in resultado else None
-            }
-        }
-        conversations.append(conversation_entry)
         
-        # Mantener solo los últimos mensajes
-        if len(conversations) > MAX_CONVERSATIONS:
-            conversations.pop(0)
-        # =======================================================
+        # Extraer SID si está disponible
+        twilio_sid = None
+        if "SID:" in resultado:
+            twilio_sid = resultado.split("SID: ")[1].strip()
         
-        # ================= NUEVO: RESPUESTA DEL BOT =================
+        # ================= GUARDAR RESPUESTA =================
+        save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
+        
+        # ================= LOG DE RESPUESTA =================
         print(f"🤖 BOT: {respuesta}")
         print(f"📤 Estado: {resultado}")
+        print(f"👤 Estado contacto: {contact.status.value}")
+        print(f"📊 Total mensajes: {contact.total_messages}")
         print(f"{'='*60}\n")
-        # ========================================================
         
-        return {"status": "processed", "message": respuesta[:50] + "..."}
+        return {"status": "processed", "contact_id": contact.id}
     
     except Exception as e:
         print(f"❌ Error en webhook: {e}")
         return {"status": "error", "detail": str(e)}
 
-def generar_respuesta_inteligente(mensaje: str) -> str:
-    """Genera una respuesta basada en el mensaje recibido"""
+def generar_respuesta_inteligente(mensaje: str, contact, history):
+    """Genera respuesta basada en mensaje, contacto e historial"""
     mensaje = mensaje.lower().strip()
     
-    # Palabras clave y respuestas
+    # Si es un contacto con historial, personalizar respuesta
+    if contact.total_messages > 1:
+        if contact.status == ContactStatus.COMPETENCIA:
+            return "Gracias por tu interés nuevamente. Te invito a agendar una visita para conocer nuestras instalaciones personalmente: https://calendly.com/tu-colegio"
+        
+        if contact.status == ContactStatus.PROSPECTO_INFORMADO:
+            return "Ya te hemos proporcionado la información básica. ¿Te gustaría agendar una visita para conocer nuestras instalaciones?"
+    
+    # Respuestas basadas en palabras clave
     if any(palabra in mensaje for palabra in ["hola", "buenos días", "buenas tardes"]):
-        return "¡Hola! Soy el asistente virtual del Colegio. ¿En qué puedo ayudarte? Puedo informarte sobre horarios, ubicación, costos o agendar una visita."
+        if contact.total_messages == 1:
+            return "¡Hola! Soy el asistente virtual del Colegio. ¿Es tu primera vez en contacto con nosotros?"
+        else:
+            return f"¡Hola de nuevo! Veo que ya hemos conversado antes ({contact.total_messages} mensajes). ¿En qué más puedo ayudarte?"
     
     elif any(palabra in mensaje for palabra in ["horario", "horarios", "abierto", "cierran"]):
         return "Horarios: Lunes a Viernes de 7:00 am a 3:00 pm"
@@ -120,166 +256,207 @@ def generar_respuesta_inteligente(mensaje: str) -> str:
         return "💰 Costo de inscripción: $5,000 MXN. ¿Te gustaría agendar una cita para más detalles?"
     
     elif any(palabra in mensaje for palabra in ["cita", "visita", "agendar", "calendario"]):
-        return "📅 Puedes agendar una visita en: https://calendly.com/tu-colegio"
+        return "📅 Puedes agendar una visita en: https://calendray.com/tu-colegio"
     
     elif any(palabra in mensaje for palabra in ["servicios", "niveles", "grados", "primaria", "secundaria"]):
         return "🏫 Ofrecemos: Primaria y Secundaria. Educación de calidad con enfoque integral."
     
     # Respuesta por defecto
-    return "¡Hola! Soy el asistente del Colegio. Puedo ayudarte con:\n• Horarios\n• Ubicación\n• Costos\n• Agendar visitas\n\n¿En qué necesitas información? O si prefieres: https://calendly.com/tu-colegio"
+    return "¡Hola! Soy el asistente del Colegio. Puedo ayudarte con:\n• Horarios\n• Ubicación\n• Costos\n• Agendar visitas\n\n¿En qué necesitas información?"
 
 def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     """Envía mensaje de vuelta via Twilio API usando API Key"""
-    # Obtener variables de entorno
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     api_key = os.getenv("TWILIO_API_KEY")
     api_secret = os.getenv("TWILIO_API_SECRET")
     twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
     
-    # Debug en logs
-    print(f"🔍 Debug - Account SID: {'✅' if account_sid else '❌'}")
-    print(f"🔍 Debug - API Key: {'✅' if api_key else '❌'}")
-    print(f"🔍 Debug - API Secret: {'✅' if api_secret else '❌'}")
-    print(f"🔍 Debug - Twilio Number: {twilio_number if twilio_number else '❌ No configurado'}")
-    
-    # Validar credenciales
-    if not account_sid:
-        return "❌ Faltan credenciales Twilio: TWILIO_ACCOUNT_SID"
-    if not api_key:
-        return "❌ Faltan credenciales Twilio: TWILIO_API_KEY"
-    if not api_secret:
-        return "❌ Faltan credenciales Twilio: TWILIO_API_SECRET"
-    if not twilio_number:
-        return "❌ Faltan credenciales Twilio: TWILIO_WHATSAPP_NUMBER"
+    if not all([account_sid, api_key, api_secret, twilio_number]):
+        return "❌ Faltan credenciales Twilio"
     
     try:
-        # Crear cliente Twilio con API Key
         client = Client(api_key, api_secret, account_sid)
-        
-        # Enviar mensaje
         message = client.messages.create(
             body=mensaje,
             from_=twilio_number,
             to=to_number
         )
-        
-        return f"✅ Mensaje enviado exitosamente. SID: {message.sid}"
-        
+        return f"✅ Mensaje enviado. SID: {message.sid}"
     except Exception as e:
-        error_msg = f"❌ Error Twilio: {str(e)}"
-        print(error_msg)
-        return error_msg
+        return f"❌ Error Twilio: {str(e)}"
 
-@app.get("/test")
-async def test_endpoint():
-    """Endpoint de prueba"""
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    api_key = os.getenv("TWILIO_API_KEY")
-    api_secret = os.getenv("TWILIO_API_SECRET")
-    twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
+# ================= ENDPOINTS CRM =================
+@app.get("/contacts")
+async def list_contacts(
+    db: Session = Depends(get_db),
+    status: str = None,
+    limit: int = 50
+):
+    """Lista todos los contactos con filtros"""
+    query = db.query(Contact)
+    
+    if status:
+        query = query.filter(Contact.status == status)
+    
+    contacts = query.order_by(Contact.last_contact.desc()).limit(limit).all()
     
     return {
-        "status": "ok",
-        "message": "Bot funcionando",
-        "webhook_url": "https://fastapi-production-efb5.up.railway.app/webhook/whatsapp",
-        "credentials_status": {
-            "TWILIO_ACCOUNT_SID": "✅ Cargada" if account_sid else "❌ Faltante",
-            "TWILIO_API_KEY": "✅ Cargada" if api_key else "❌ Faltante",
-            "TWILIO_API_SECRET": "✅ Cargada" if api_secret else "❌ Faltante",
-            "TWILIO_WHATSAPP_NUMBER": "✅ Cargada" if twilio_number else "❌ Faltante"
-        },
-        "twilio_number": twilio_number or "No configurado",
-        "endpoints": {
-            "root": "/",
-            "webhook": "/webhook/whatsapp (POST)",
-            "test": "/test",
-            "health": "/health"
-        }
+        "total": len(contacts),
+        "contacts": [
+            {
+                "id": c.id,
+                "phone_number": c.phone_number,
+                "status": c.status.value,
+                "first_contact": c.first_contact,
+                "last_contact": c.last_contact,
+                "total_messages": c.total_messages,
+                "is_competitor": c.is_competitor
+            }
+            for c in contacts
+        ]
     }
 
-@app.get("/conversations")
-async def get_conversations(limit: int = 20):
-    """Obtener últimas conversaciones (JSON)"""
+@app.get("/conversations/{phone_number}")
+async def get_conversations_by_phone(
+    phone_number: str,
+    db: Session = Depends(get_db),
+    limit: int = 50
+):
+    """Obtiene todas las conversaciones de un contacto específico"""
+    contact = db.query(Contact).filter(Contact.phone_number == phone_number).first()
+    
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contacto no encontrado")
+    
+    messages = db.query(Message).filter(Message.contact_id == contact.id)\
+        .order_by(Message.timestamp.asc())\
+        .limit(limit)\
+        .all()
+    
     return {
-        "total": len(conversations),
-        "limit": limit,
-        "conversations": conversations[-limit:]  # Últimas N conversaciones
+        "contact": {
+            "id": contact.id,
+            "phone_number": contact.phone_number,
+            "status": contact.status.value,
+            "first_contact": contact.first_contact,
+            "last_contact": contact.last_contact,
+            "total_messages": contact.total_messages,
+            "notes": contact.notes
+        },
+        "conversation": [
+            {
+                "id": m.id,
+                "direction": m.direction,
+                "content": m.content,
+                "timestamp": m.timestamp,
+                "twilio_sid": m.twilio_sid
+            }
+            for m in messages
+        ]
     }
 
-@app.get("/conversations/html")
-async def get_conversations_html():
-    """Panel web con interfaz HTML"""
-    html_content = """
+@app.get("/panel")
+async def crm_panel(db: Session = Depends(get_db)):
+    """Panel web de CRM"""
+    # Obtener estadísticas
+    total_contacts = db.query(Contact).count()
+    by_status = db.query(Contact.status, func.count(Contact.id)).group_by(Contact.status).all()
+    
+    # Últimos contactos
+    recent_contacts = db.query(Contact).order_by(Contact.last_contact.desc()).limit(10).all()
+    
+    # Generar HTML
+    html = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>💬 WhatsApp Bot - Conversaciones</title>
+        <title>CRM WhatsApp Bot - Colegio</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-            .header { background: #25D366; color: white; padding: 20px; border-radius: 10px; }
-            .conversation { background: white; margin: 15px 0; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-            .user { background: #DCF8C6; padding: 10px; margin: 5px 0; border-radius: 10px; }
-            .bot { background: #E8E8E8; padding: 10px; margin: 5px 0; border-radius: 10px; }
-            .timestamp { color: #666; font-size: 0.9em; }
-            .status { display: inline-block; padding: 3px 8px; border-radius: 10px; font-size: 0.8em; }
-            .sent { background: #25D366; color: white; }
-            .failed { background: #FF3B30; color: white; }
+            body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+            .header {{ background: linear-gradient(135deg, #25D366, #128C7E); color: white; padding: 25px; border-radius: 15px; margin-bottom: 20px; }}
+            .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }}
+            .stat-card {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); }}
+            .contact-list {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); }}
+            .contact-item {{ padding: 12px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }}
+            .status-badge {{ padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: bold; }}
+            .status-prospecto {{ background: #FFEAA7; color: #E17055; }}
+            .status-alumno {{ background: #55EFC4; color: #00B894; }}
+            .status-competencia {{ background: #FD79A8; color: #E84393; }}
+            a {{ color: #128C7E; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
         </style>
     </head>
     <body>
         <div class="header">
-            <h1>💬 WhatsApp Bot - Conversaciones</h1>
-            <p>Total: """ + str(len(conversations)) + """ mensajes</p>
-            <p><a href="/conversations" style="color: white;">Ver JSON</a> | <a href="/" style="color: white;">Inicio</a></p>
+            <h1>📱 CRM WhatsApp Bot - Colegio</h1>
+            <p>Gestión de prospectos, alumnos y competencia vía WhatsApp</p>
+            <p>
+                <a href="/contacts" style="color: white; margin-right: 15px;">📋 Todos los contactos</a>
+                <a href="/health" style="color: white; margin-right: 15px;">🩺 Health Check</a>
+                <a href="/" style="color: white;">🏠 Inicio</a>
+            </p>
         </div>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <h3>👥 Total Contactos</h3>
+                <p style="font-size: 2em; font-weight: bold;">{total_contacts}</p>
+            </div>
     """
     
-    # Agregar cada conversación
-    for conv in reversed(conversations[-50:]):  # Últimas 50
-        html_content += f"""
-        <div class="conversation">
-            <div class="timestamp">ID: {conv['id']} | {conv['timestamp']}</div>
-            <div class="timestamp">De: {conv['user']['number']}</div>
-            <div class="user">👤 <strong>Usuario:</strong> {conv['user']['message']}</div>
-            <div class="bot">🤖 <strong>Bot:</strong> {conv['bot']['response']}</div>
-            <div>
-                <span class="status {'sent' if conv['bot']['status'] == 'sent' else 'failed'}">
-                    {conv['bot']['status']}
-                </span>
-                {f" | SID: {conv['bot']['sid']}" if conv['bot']['sid'] else ""}
+    # Agregar estadísticas por estado
+    for status, count in by_status:
+        color_class = "status-prospecto" if "prospecto" in status.value else "status-alumno" if "alumno" in status.value else "status-competencia"
+        html += f"""
+            <div class="stat-card">
+                <h3>📊 {status.value.replace('_', ' ').title()}</h3>
+                <p style="font-size: 2em; font-weight: bold;">{count}</p>
+                <span class="status-badge {color_class}">{status.value}</span>
             </div>
-        </div>
         """
     
-    html_content += """
-        <div style="margin-top: 20px; text-align: center; color: #666;">
-            <p>WhatsApp Bot - Desarrollado con FastAPI + Twilio</p>
-            <p><a href="/webhook/whatsapp" target="_blank">Webhook</a> | 
-               <a href="/health" target="_blank">Health Check</a> | 
-               <a href="/test" target="_blank">Test</a></p>
+    html += """
+        </div>
+        
+        <div class="contact-list">
+            <h2>🕐 Contactos Recientes</h2>
+    """
+    
+    for contact in recent_contacts:
+        status_class = "status-prospecto" if "prospecto" in contact.status.value else "status-alumno" if "alumno" in contact.status.value else "status-competencia"
+        html += f"""
+            <div class="contact-item">
+                <div>
+                    <strong>📞 {contact.phone_number}</strong><br>
+                    <small>Último contacto: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}</small>
+                </div>
+                <div>
+                    <span class="status-badge {status_class}">{contact.status.value}</span><br>
+                    <small>📨 {contact.total_messages} mensajes</small>
+                </div>
+                <div>
+                    <a href="/conversations/{contact.phone_number}">Ver conversación</a>
+                </div>
+            </div>
+        """
+    
+    html += """
+        </div>
+        
+        <div style="margin-top: 30px; text-align: center; color: #666; padding: 20px;">
+            <p>Sistema CRM desarrollado con FastAPI + Twilio + SQLite</p>
+            <p>📧 Contacto técnico: [TU EMAIL] | 📅 {fecha_actual}</p>
         </div>
     </body>
     </html>
-    """
+    """.replace("{fecha_actual}", datetime.now().strftime("%d/%m/%Y"))
     
     from fastapi.responses import HTMLResponse
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(content=html)
 
-@app.get("/conversations/{phone_number}")
-async def get_conversations_by_number(phone_number: str):
-    """Obtener conversaciones de un número específico"""
-    filtered = [
-        conv for conv in conversations 
-        if phone_number in conv['user']['number']
-    ]
-    return {
-        "number": phone_number,
-        "total_conversations": len(filtered),
-        "conversations": filtered[-20:]  # Últimas 20 de ese número
-    }
-
+# ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
