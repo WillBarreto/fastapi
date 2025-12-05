@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import os
 from twilio.rest import Client
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Enum, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Enum, Boolean, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
@@ -153,7 +153,9 @@ async def health_check(db: Session = Depends(get_db)):
     """Verifica salud de la aplicación y base de datos"""
     try:
         # Verificar conexión a BD
-        db.execute("SELECT 1")
+        from sqlalchemy import text
+
+        db.execute(text("SELECT 1")) # db.execute("SELECT 1")
         db_status = "✅ Conectada"
         
         # Estadísticas
