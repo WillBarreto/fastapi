@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Form
 import os
 from twilio.rest import Client
+from datetime import datetime
 
 app = FastAPI()
 
@@ -52,15 +53,24 @@ async def whatsapp_webhook(
     To: str = Form(None)
 ):
     try:
-        # Log del mensaje recibido
-        print(f"📨 Mensaje de {From}: {Body}")
+        print(f"\n{'='*60}")
+        print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
+        print(f"📱 De: {From}")
+        print(f"👤 USUARIO: {Body}")
+        print(f"{'-'*40}")
+        # ========================================================
         
         # Generar respuesta inteligente
         respuesta = generar_respuesta_inteligente(Body)
         
         # Enviar respuesta via Twilio
         resultado = enviar_respuesta_twilio(From, respuesta)
-        print(f"📤 {resultado}")
+        
+        # ================= NUEVO: RESPUESTA DEL BOT =================
+        print(f"🤖 BOT: {respuesta}")
+        print(f"📤 Estado: {resultado}")
+        print(f"{'='*60}\n")
+        # ========================================================
         
         return {"status": "processed", "message": respuesta[:50] + "..."}
     
