@@ -10,9 +10,18 @@ from sqlalchemy.sql import func
 import enum
 
 # ================= CONFIGURACIÓN DE BASE DE DATOS =================
-DATABASE_URL = "sqlite:///./whatsapp_bot.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./whatsapp_bot.db")
+
+# Si la URL es de PostgreSQL, reemplazamos el esquema para usar psycopg2
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    engine = create_engine(DATABASE_URL)
+else:
+    # SQLite local para desarrollo
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()
 
 # ================= MODELOS DE BASE DE DATOS =================
