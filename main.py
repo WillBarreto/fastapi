@@ -29,7 +29,7 @@ class Contact(Base):
     __tablename__ = "contacts"
     
     id = Column(Integer, primary_key=True, index=True)
-    phone_number = Column(String(20), unique=True, index=True, nullable=False)
+    phone_number = Column(String(50), unique=True, index=True, nullable=False)
     
     # ✅ ENUM CORREGIDO - con nombre y valores entre comillas
     status = Column(
@@ -78,6 +78,14 @@ class Message(Base):
 # Crear tablas (¡esta es la línea 67 que estaba fallando!)
 Base.metadata.create_all(bind=engine)
 
+# 🔥 AÑADE ESTO - Modificar columna si existe
+try:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE contacts ALTER COLUMN phone_number TYPE VARCHAR(50)"))
+        print("✅ Columna phone_number actualizada a VARCHAR(50)")
+except Exception as e:
+    print(f"⚠️  Nota: {e}")
+
 # ================= DEPENDENCIA DE BASE DE DATOS =================
 def get_db():
     db = SessionLocal()
@@ -104,12 +112,18 @@ Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar u
 # ================= FUNCIONES DE BASE DE DATOS =================
 def get_or_create_contact(db: Session, phone_number: str):
     """Obtiene o crea un contacto en la base de datos"""
-    contact = db.query(Contact).filter(Contact.phone_number == phone_number).first()
+    # Limpiar número: quitar prefijo "whatsapp:"
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+    
+    contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
     
     if not contact:
         # Es un nuevo contacto
         contact = Contact(
-            phone_number=phone_number,
+            phone_number=clean_number,  # Usar número limpio
             status="PROSPECTO_NUEVO",
             first_contact=datetime.now(),
             last_contact=datetime.now(),
