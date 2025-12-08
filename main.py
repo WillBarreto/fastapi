@@ -356,37 +356,49 @@ async def get_conversations_by_phone(
     db: Session = Depends(get_db),
     limit: int = 50
 ):
-    """Obtiene todas las conversaciones de un contacto específico"""
-    contact = db.query(Contact).filter(Contact.phone_number == phone_number).first()
+    """Obtiene todas las conversaciones de un contacto específico - VERSIÓN SIMPLIFICADA PARA PANEL"""
+    # Limpiar número si viene con prefijo
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+    
+    # Buscar contacto
+    contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
     
     if not contact:
         raise HTTPException(status_code=404, detail="Contacto no encontrado")
     
+    # Obtener mensajes ordenados cronológicamente
     messages = db.query(Message).filter(Message.contact_id == contact.id)\
         .order_by(Message.timestamp.asc())\
         .limit(limit)\
         .all()
     
+    # Formatear mensajes de manera SIMPLE para el panel
+    conversation_simple = []
+    for msg in messages:
+        # Determinar tipo de mensaje (usuario/bot)
+        if msg.direction == "incoming":
+            message_type = "usuario"
+        else:
+            message_type = "bot"
+        
+        conversation_simple.append({
+            "tipo": message_type,
+            "texto": msg.content,
+            "hora": msg.timestamp.strftime("%H:%M"),  # Solo hora:minutos
+            "fecha": msg.timestamp.strftime("%d/%m/%Y")  # Para agrupación visual
+        })
+    
     return {
-        "contact": {
-            "id": contact.id,
-            "phone_number": contact.phone_number,
-            "status": contact.status,
-            "first_contact": contact.first_contact,
-            "last_contact": contact.last_contact,
-            "total_messages": contact.total_messages,
-            "notes": contact.notes
+        "contacto": {
+            "telefono": contact.phone_number,
+            "estado": contact.status,
+            "total_mensajes": contact.total_messages,
+            "ultimo_contacto": contact.last_contact.strftime("%d/%m/%Y %H:%M")
         },
-        "conversation": [
-            {
-                "id": m.id,
-                "direction": m.direction,
-                "content": m.content,
-                "timestamp": m.timestamp,
-                "twilio_sid": m.twilio_sid
-            }
-            for m in messages
-        ]
+        "conversacion": conversation_simple
     }
 
 @app.get("/panel")
