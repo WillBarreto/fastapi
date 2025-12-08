@@ -602,12 +602,9 @@ async def crm_panel(db: Session = Depends(get_db)):
             """
         
         html += f"""
-                    </div>
                     <div style="margin-top: 15px; text-align: right;">
-                        <a href="/conversations/{contact.phone_number}" target="_blank">Ver conversación completa →</a>
+                        <a href="/panel/conversations/{contact.phone_number}" target="_blank">Ver conversación completa →</a>
                     </div>
-                </div>
-            </div>
         """
     
     html += """
@@ -667,6 +664,311 @@ async def crm_panel(db: Session = Depends(get_db)):
     
     from fastapi.responses import HTMLResponse
     return HTMLResponse(content=html)
+
+@app.get("/panel/conversations/{phone_number}")
+async def view_full_conversation(
+    phone_number: str,
+    db: Session = Depends(get_db)
+):
+    """Vista completa de conversación con diseño tipo WhatsApp"""
+    # Limpiar número
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+    
+    # Buscar contacto
+    contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
+    
+    if not contact:
+        return HTMLResponse(f"""
+            <html>
+                <body style="font-family: Arial; padding: 20px;">
+                    <h2>Contacto no encontrado</h2>
+                    <a href="/panel">← Volver al panel</a>
+                </body>
+            </html>
+        """)
+    
+    # Obtener TODOS los mensajes ordenados
+    messages = db.query(Message).filter(Message.contact_id == contact.id)\
+        .order_by(Message.timestamp.asc())\
+        .all()
+    
+    # Generar HTML con diseño tipo WhatsApp
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Conversación con {contact.phone_number}</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                background: #0d1418;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }}
+            
+            /* HEADER */
+            .header {{
+                background: #1f2c33;
+                color: white;
+                padding: 15px 20px;
+                display: flex;
+                align-items: center;
+                border-bottom: 1px solid #222e35;
+            }}
+            
+            .back-btn {{
+                background: none;
+                border: none;
+                color: white;
+                font-size: 24px;
+                margin-right: 15px;
+                cursor: pointer;
+            }}
+            
+            .contact-info {{
+                flex: 1;
+            }}
+            
+            .contact-name {{
+                font-weight: 500;
+                font-size: 1.1em;
+            }}
+            
+            .contact-meta {{
+                font-size: 0.85em;
+                color: #8696a0;
+                margin-top: 3px;
+            }}
+            
+            .status-badge {{
+                display: inline-block;
+                padding: 3px 10px;
+                border-radius: 12px;
+                font-size: 0.75em;
+                font-weight: bold;
+                margin-left: 10px;
+            }}
+            
+            .status-prospecto {{
+                background: #ffeaa7;
+                color: #e17055;
+            }}
+            
+            /* CONTENEDOR DE MENSAJES */
+            .messages-container {{
+                flex: 1;
+                overflow-y: auto;
+                padding: 20px;
+                background: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%2314212a' fill-opacity='0.4' fill-rule='evenodd'/%3E%3C/svg%3E");
+                background-color: #0d1418;
+            }}
+            
+            /* GRUPO POR DÍA */
+            .day-group {{
+                text-align: center;
+                margin: 20px 0;
+            }}
+            
+            .day-label {{
+                background: #1f2c33;
+                color: #8696a0;
+                display: inline-block;
+                padding: 5px 15px;
+                border-radius: 15px;
+                font-size: 0.85em;
+            }}
+            
+            /* MENSAJES */
+            .message {{
+                margin: 8px 0;
+                display: flex;
+                flex-direction: column;
+                max-width: 70%;
+            }}
+            
+            .message.usuario {{
+                align-items: flex-start;
+            }}
+            
+            .message.bot {{
+                align-items: flex-end;
+                margin-left: auto;
+            }}
+            
+            .message-content {{
+                padding: 8px 12px;
+                border-radius: 8px;
+                position: relative;
+                word-wrap: break-word;
+                line-height: 1.4;
+            }}
+            
+            .message.usuario .message-content {{
+                background: #1f2c33;
+                color: white;
+                border-top-left-radius: 2px;
+            }}
+            
+            .message.bot .message-content {{
+                background: #005c4b;
+                color: white;
+                border-top-right-radius: 2px;
+            }}
+            
+            .message-time {{
+                font-size: 0.7em;
+                color: #8696a0;
+                margin-top: 3px;
+                text-align: right;
+            }}
+            
+            .message.usuario .message-time {{
+                text-align: left;
+            }}
+            
+            .message-sender {{
+                font-size: 0.8em;
+                color: #8696a0;
+                margin-bottom: 3px;
+            }}
+            
+            .message.usuario .message-sender {{
+                color: #00a884;
+            }}
+            
+            .message.bot .message-sender {{
+                color: #53bdeb;
+            }}
+            
+            /* FOOTER */
+            .footer {{
+                background: #1f2c33;
+                padding: 15px 20px;
+                text-align: center;
+                border-top: 1px solid #222e35;
+            }}
+            
+            .back-link {{
+                color: #00a884;
+                text-decoration: none;
+                font-weight: 500;
+            }}
+            
+            .back-link:hover {{
+                text-decoration: underline;
+            }}
+            
+            /* SCROLLBAR */
+            ::-webkit-scrollbar {{
+                width: 6px;
+            }}
+            
+            ::-webkit-scrollbar-track {{
+                background: transparent;
+            }}
+            
+            ::-webkit-scrollbar-thumb {{
+                background: #374045;
+                border-radius: 3px;
+            }}
+            
+            ::-webkit-scrollbar-thumb:hover {{
+                background: #4a5a60;
+            }}
+            
+            /* RESPONSIVE */
+            @media (max-width: 768px) {{
+                .message {{
+                    max-width: 85%;
+                }}
+                
+                .messages-container {{
+                    padding: 15px;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <button class="back-btn" onclick="window.location.href='/panel'">←</button>
+            <div class="contact-info">
+                <div class="contact-name">📱 {contact.phone_number}</div>
+                <div class="contact-meta">
+                    {contact.total_messages} mensajes • Último: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}
+                    <span class="status-badge status-prospecto">{contact.status}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="messages-container" id="messagesContainer">
+    """
+    
+    # Agrupar mensajes por fecha
+    current_date = None
+    for msg in messages:
+        msg_date = msg.timestamp.strftime("%d/%m/%Y")
+        msg_time = msg.timestamp.strftime("%H:%M")
+        msg_type = "usuario" if msg.direction == "incoming" else "bot"
+        sender = "Usuario" if msg.direction == "incoming" else "Colegio Bot"
+        
+        # Agregar separador por día
+        if msg_date != current_date:
+            current_date = msg_date
+            fecha_bonita = "HOY" if msg_date == datetime.now().strftime("%d/%m/%Y") else msg_date
+            html += f"""
+                <div class="day-group">
+                    <span class="day-label">{fecha_bonita}</span>
+                </div>
+            """
+        
+        # Mostrar mensaje
+        html += f"""
+            <div class="message {msg_type}">
+                <div class="message-sender">{sender}</div>
+                <div class="message-content">
+                    {msg.content.replace('\n', '<br>')}
+                </div>
+                <div class="message-time">{msg_time}</div>
+            </div>
+        """
+    
+    html += """
+        </div>
+        
+        <div class="footer">
+            <a href="/panel" class="back-link">← Volver al Panel Principal</a>
+            <span style="color: #8696a0; margin: 0 10px;">•</span>
+            <a href="/contacts" class="back-link">Ver Todos los Contactos</a>
+        </div>
+        
+        <script>
+            // Auto-scroll al final de la conversación
+            document.addEventListener('DOMContentLoaded', function() {
+                const container = document.getElementById('messagesContainer');
+                container.scrollTop = container.scrollHeight;
+            });
+            
+            // Hotkey para volver (ESC)
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    window.location.href = '/panel';
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
+    
+    return HTMLResponse(content=html)
+    
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
