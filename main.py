@@ -403,15 +403,41 @@ async def get_conversations_by_phone(
 
 @app.get("/panel")
 async def crm_panel(db: Session = Depends(get_db)):
-    """Panel web de CRM"""
+    """Panel web de CRM con vista de conversaciones integrada"""
     # Obtener estadísticas
     total_contacts = db.query(Contact).count()
     by_status = db.query(Contact.status, func.count(Contact.id)).group_by(Contact.status).all()
     
-    # Últimos contactos
+    # Últimos contactos con sus últimos mensajes
     recent_contacts = db.query(Contact).order_by(Contact.last_contact.desc()).limit(10).all()
     
-    # Generar HTML
+    # Para cada contacto, obtener los últimos 5 mensajes
+    contacts_with_messages = []
+    for contact in recent_contacts:
+        # Obtener últimos mensajes
+        recent_messages = db.query(Message).filter(Message.contact_id == contact.id)\
+            .order_by(Message.timestamp.desc())\
+            .limit(5)\
+            .all()
+        
+        # Invertir para orden cronológico
+        recent_messages = recent_messages[::-1]
+        
+        # Formatear mensajes simplificados
+        mensajes_simples = []
+        for msg in recent_messages:
+            mensajes_simples.append({
+                "tipo": "usuario" if msg.direction == "incoming" else "bot",
+                "texto": msg.content[:100] + "..." if len(msg.content) > 100 else msg.content,
+                "hora": msg.timestamp.strftime("%H:%M")
+            })
+        
+        contacts_with_messages.append({
+            "contacto": contact,
+            "mensajes_recientes": mensajes_simples
+        })
+    
+    # Generar HTML con conversaciones integradas
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -424,14 +450,76 @@ async def crm_panel(db: Session = Depends(get_db)):
             .header {{ background: linear-gradient(135deg, #25D366, #128C7E); color: white; padding: 25px; border-radius: 15px; margin-bottom: 20px; }}
             .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }}
             .stat-card {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); }}
-            .contact-list {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); }}
-            .contact-item {{ padding: 12px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }}
+            
+            /* NUEVO: Estilos para contactos con conversaciones */
+            .contact-section {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }}
+            .contact-header {{ 
+                display: flex; 
+                justify-content: space-between; 
+                align-items: center; 
+                padding: 15px; 
+                background: #f8f9fa; 
+                border-radius: 8px; 
+                cursor: pointer;
+                border-left: 4px solid #25D366;
+            }}
+            .contact-header:hover {{ background: #e9ecef; }}
+            .contact-details {{ 
+                display: none; 
+                padding: 15px; 
+                background: #fafafa; 
+                border-radius: 0 0 8px 8px;
+                margin-top: -5px;
+            }}
+            .contact-details.active {{ display: block; }}
+            
             .status-badge {{ padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: bold; }}
             .status-prospecto {{ background: #FFEAA7; color: #E17055; }}
             .status-alumno {{ background: #55EFC4; color: #00B894; }}
             .status-competencia {{ background: #FD79A8; color: #E84393; }}
+            
+            /* Estilos para mensajes */
+            .message-container {{ margin-top: 15px; }}
+            .message {{ 
+                padding: 10px 15px; 
+                margin: 8px 0; 
+                border-radius: 15px; 
+                max-width: 70%; 
+                word-wrap: break-word;
+                position: relative;
+            }}
+            .message.usuario {{ 
+                background: #E3F2FD; 
+                margin-right: auto; 
+                border-bottom-left-radius: 5px;
+            }}
+            .message.bot {{ 
+                background: #DCF8C6; 
+                margin-left: auto; 
+                border-bottom-right-radius: 5px;
+            }}
+            .message .hora {{
+                font-size: 0.7em;
+                color: #666;
+                position: absolute;
+                bottom: 2px;
+                right: 10px;
+            }}
+            .message.usuario .hora {{ right: auto; left: 10px; }}
+            
             a {{ color: #128C7E; text-decoration: none; }}
             a:hover {{ text-decoration: underline; }}
+            
+            .toggle-btn {{ 
+                background: #25D366; 
+                color: white; 
+                border: none; 
+                padding: 5px 15px; 
+                border-radius: 15px; 
+                cursor: pointer;
+                font-size: 0.9em;
+            }}
+            .toggle-btn:hover {{ background: #128C7E; }}
         </style>
     </head>
     <body>
@@ -467,25 +555,57 @@ async def crm_panel(db: Session = Depends(get_db)):
     html += """
         </div>
         
-        <div class="contact-list">
-            <h2>🕐 Contactos Recientes</h2>
+        <div class="contact-section">
+            <h2>🕐 Contactos Recientes (click para ver conversación)</h2>
     """
     
-    for contact in recent_contacts:
+    # Agregar cada contacto con su conversación
+    for item in contacts_with_messages:
+        contact = item["contacto"]
+        mensajes = item["mensajes_recientes"]
+        
         status_value = contact.status.lower()
         status_class = "status-prospecto" if "prospecto" in status_value else "status-alumno" if "alumno" in status_value else "status-competencia"
+        
         html += f"""
             <div class="contact-item">
-                <div>
-                    <strong>📞 {contact.phone_number}</strong><br>
-                    <small>Último contacto: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}</small>
+                <div class="contact-header" onclick="toggleConversation('contact-{contact.id}')">
+                    <div>
+                        <strong>📞 {contact.phone_number}</strong><br>
+                        <small>Último contacto: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}</small>
+                    </div>
+                    <div>
+                        <span class="status-badge {status_class}">{contact.status}</span>
+                        <span style="margin-left: 10px;">📨 {contact.total_messages} mensajes</span>
+                    </div>
+                    <button class="toggle-btn" id="btn-{contact.id}">▼ Ver conversación</button>
                 </div>
-                <div>
-                    <span class="status-badge {status_class}">{contact.status}</span><br>
-                    <small>📨 {contact.total_messages} mensajes</small>
-                </div>
-                <div>
-                    <a href="/conversations/{contact.phone_number}">Ver conversación</a>
+                
+                <div class="contact-details" id="contact-{contact.id}">
+                    <div class="message-container">
+        """
+        
+        # Mostrar mensajes recientes
+        if mensajes:
+            for msg in mensajes:
+                html += f"""
+                        <div class="message {msg['tipo']}">
+                            <strong>{msg['tipo'].upper()}:</strong> {msg['texto']}
+                            <span class="hora">{msg['hora']}</span>
+                        </div>
+                """
+        else:
+            html += """
+                        <div style="text-align: center; color: #999; padding: 20px;">
+                            No hay mensajes registrados para este contacto.
+                        </div>
+            """
+        
+        html += f"""
+                    </div>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <a href="/conversations/{contact.phone_number}" target="_blank">Ver conversación completa →</a>
+                    </div>
                 </div>
             </div>
         """
@@ -493,9 +613,53 @@ async def crm_panel(db: Session = Depends(get_db)):
     html += """
         </div>
         
+        <script>
+            function toggleConversation(contactId) {{
+                var details = document.getElementById(contactId);
+                var btn = document.getElementById('btn-' + contactId.split('-')[1]);
+                
+                if (details.classList.contains('active')) {{
+                    details.classList.remove('active');
+                    btn.textContent = '▼ Ver conversación';
+                }} else {{
+                    // Cerrar otros abiertos
+                    document.querySelectorAll('.contact-details.active').forEach(function(el) {{
+                        el.classList.remove('active');
+                    }});
+                    document.querySelectorAll('.toggle-btn').forEach(function(el) {{
+                        el.textContent = '▼ Ver conversación';
+                    }});
+                    
+                    details.classList.add('active');
+                    btn.textContent = '▲ Ocultar';
+                }}
+            }}
+            
+            // Función para buscar contactos
+            function searchContacts() {{
+                var input = document.getElementById('searchInput').value.toLowerCase();
+                var contacts = document.querySelectorAll('.contact-item');
+                
+                contacts.forEach(function(contact) {{
+                    var phone = contact.querySelector('.contact-header strong').textContent.toLowerCase();
+                    if (phone.includes(input)) {{
+                        contact.style.display = 'block';
+                    }} else {{
+                        contact.style.display = 'none';
+                    }}
+                }});
+            }}
+        </script>
+        
         <div style="margin-top: 30px; text-align: center; color: #666; padding: 20px;">
             <p>Sistema WhatsApp CRM desarrollado por Will Barreto FastAPI + Twilio + PostgreSQL</p>
             <p>📧 Contacto técnico: contacto@willbarreto.com | 📅 {fecha_actual}</p>
+        </div>
+        
+        <div style="margin: 20px 0;">
+            <input type="text" id="searchInput" placeholder="🔍 Buscar por número de teléfono..." 
+                   onkeyup="searchContacts()" 
+                   style="padding: 10px; width: 100%; max-width: 400px; border-radius: 20px; border: 1px solid #ddd;">
         </div>
     </body>
     </html>
@@ -503,7 +667,6 @@ async def crm_panel(db: Session = Depends(get_db)):
     
     from fastapi.responses import HTMLResponse
     return HTMLResponse(content=html)
-
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
