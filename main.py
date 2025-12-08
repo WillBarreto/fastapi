@@ -30,17 +30,23 @@ class Contact(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     phone_number = Column(String(20), unique=True, index=True, nullable=False)
-    status = Column(Enum(
-        "PROSPECTO_NUEVO", 
-        "PROSPECTO_INFORMADO", 
-        "VISITA_AGENDADA", 
-        "INSCRIPCION_PENDIENTE", 
-        "ALUMNO_ACTIVO", 
-        "ALUMNO_INACTIVO", 
-        "COMPETENCIA", 
-        "EX_ALUMNO",
-        name="contactstatus"  # Nombre explícito para PostgreSQL
-    ), default="PROSPECTO_NUEVO")
+    
+    # ✅ ENUM CORREGIDO - con nombre y valores entre comillas
+    status = Column(
+        Enum(
+            "PROSPECTO_NUEVO", 
+            "PROSPECTO_INFORMADO", 
+            "VISITA_AGENDADA", 
+            "INSCRIPCION_PENDIENTE", 
+            "ALUMNO_ACTIVO", 
+            "ALUMNO_INACTIVO", 
+            "COMPETENCIA", 
+            "EX_ALUMNO",
+            name="contact_status_enum"  # Nombre único para el tipo ENUM en PostgreSQL
+        ), 
+        default="PROSPECTO_NUEVO"
+    )
+    
     first_contact = Column(DateTime, default=func.now())
     last_contact = Column(DateTime, default=func.now(), onupdate=func.now())
     total_messages = Column(Integer, default=0)
@@ -55,7 +61,13 @@ class Message(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     contact_id = Column(Integer, ForeignKey("contacts.id"))
-    direction = Column(Enum('incoming', 'outgoing'), nullable=False)
+    
+    # ✅ ENUM CORREGIDO - con nombre y valores entre comillas
+    direction = Column(
+        Enum('incoming', 'outgoing', name='message_direction_enum'),  # Nombre único
+        nullable=False
+    )
+    
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=func.now())
     twilio_sid = Column(String(50), nullable=True)
@@ -63,7 +75,7 @@ class Message(Base):
     # Relación con contacto
     contact = relationship("Contact", back_populates="messages")
 
-# Crear tablas
+# Crear tablas (¡esta es la línea 67 que estaba fallando!)
 Base.metadata.create_all(bind=engine)
 
 # ================= DEPENDENCIA DE BASE DE DATOS =================
