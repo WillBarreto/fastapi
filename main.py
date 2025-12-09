@@ -941,8 +941,8 @@ async def view_full_conversation(
                 meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
                          "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
     
-    dt = msg.timestamp
-    day_label = f"{dias_semana[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
+                dt = msg.timestamp
+                day_label = f"{dias_semana[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
             
             html_content += f"""
                 <div class="day-separator">
