@@ -9,6 +9,21 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
 
+def formatear_fecha_para_mensaje(dt: datetime) -> str:
+    """Formatea fecha para mostrar en mensajes"""
+    hoy = datetime.now().date()
+    ayer = hoy - timedelta(days=1)
+    fecha_msg = dt.date()
+    
+    if fecha_msg == hoy:
+        return f"Hoy {dt.strftime('%H:%M')}"
+    elif fecha_msg == ayer:
+        return f"Ayer {dt.strftime('%H:%M')}"
+    else:
+        meses = ["ene", "feb", "mar", "abr", "may", "jun", 
+                 "jul", "ago", "sep", "oct", "nov", "dic"]
+        return f"{dt.day} {meses[dt.month-1]} {dt.strftime('%H:%M')}"
+
 # ================= CONFIGURACIÓN DE BASE DE DATOS =================
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./whatsapp_bot.db")
 
@@ -905,7 +920,8 @@ async def view_full_conversation(
     for msg in messages:
         msg_date = msg.timestamp.strftime("%d/%m/%Y")
 #        msg_time = msg.timestamp.strftime("%H:%M")
-        msg_time = msg.timestamp.strftime("%d/%m/%Y %H:%M")  # Muestra: "08/12/2025 22:52"
+#        msg_time = msg.timestamp.strftime("%d/%m/%Y %H:%M")  # Muestra: "08/12/2025 22:52"
+        msg_time = formatear_fecha_para_mensaje(msg.timestamp)
         msg_type = "usuario" if msg.direction == "incoming" else "bot"
         sender = "Usuario" if msg.direction == "incoming" else "Colegio Bot"
         
@@ -920,7 +936,13 @@ async def view_full_conversation(
             elif msg_date == yesterday:
                 day_label = "AYER"
             else:
-                day_label = msg_date
+                # Formato: "Viernes 8 de diciembre"
+                dias_semana = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+                meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+                         "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    
+    dt = msg.timestamp
+    day_label = f"{dias_semana[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
             
             html_content += f"""
                 <div class="day-separator">
