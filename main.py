@@ -489,7 +489,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
         # Obtener últimos mensajes (solo 5 para vista previa)
         recent_messages = db.query(Message).filter(Message.contact_id == contact.id)\
             .order_by(Message.timestamp.desc())\
-            .limit(5)\
+            .limit(10)\
             .all()
         
         # Invertir para orden cronológico
