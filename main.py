@@ -904,7 +904,8 @@ async def view_full_conversation(
     current_date = None
     for msg in messages:
         msg_date = msg.timestamp.strftime("%d/%m/%Y")
-        msg_time = msg.timestamp.strftime("%H:%M")
+#        msg_time = msg.timestamp.strftime("%H:%M")
+        msg_time = msg.timestamp.strftime("%d/%m/%Y %H:%M")  # Muestra: "08/12/2025 22:52"
         msg_type = "usuario" if msg.direction == "incoming" else "bot"
         sender = "Usuario" if msg.direction == "incoming" else "Colegio Bot"
         
