@@ -889,7 +889,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
             
             html += f'''
                     </div>
-                    <a href="/panel/conversations/{contacto['phone_number']}" class="ver-completo-btn" target="_blank">
+                    <a href="/panel/conversations/{contacto['phone_number']}" class="ver-completo-btn">
                         📋 Ver conversación completa ({contacto['total_messages']} mensajes)
                     </a>
                 </div>
