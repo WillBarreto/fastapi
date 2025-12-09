@@ -525,241 +525,110 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
     <!DOCTYPE html>
     <html>
     <head>
-        <title>CRM WhatsApp Bot - Colegio</title>
+        <title>CRM WhaApp Cole - Colegio</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
-            .header {{ 
+                    <style>
+            /* HEADER COMPACTO PARA MÓVIL */
+            .header { 
                 background: linear-gradient(135deg, #25D366, #128C7E); 
                 color: white; 
-                padding: 25px; 
-                border-radius: 15px; 
-                margin-bottom: 20px; 
-            }}
-            
-            .stats {{ 
-                display: grid; 
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
-                gap: 15px; 
-                margin-bottom: 20px; 
-            }}
-            
-            .stat-card {{ 
-                background: white; 
-                padding: 20px; 
-                border-radius: 10px; 
-                box-shadow: 0 3px 10px rgba(0,0,0,0.1); 
-            }}
-            
-            /* CONTACTOS */
-            .contact-list {{ 
-                background: white; 
-                padding: 20px; 
-                border-radius: 10px; 
-                box-shadow: 0 3px 10px rgba(0,0,0,0.1); 
-                margin-bottom: 20px; 
-            }}
-            
-            .contact-item {{ 
-                margin-bottom: 15px; 
-                border: 1px solid #eee; 
-                border-radius: 8px; 
-                overflow: hidden; 
-            }}
-            
-            .contact-header {{ 
-                display: flex; 
-                justify-content: space-between; 
-                align-items: center; 
                 padding: 15px; 
-                background: #f8f9fa; 
-                cursor: pointer;
-                border-left: 4px solid #25D366;
-                transition: background 0.2s;
-            }}
+                border-radius: 10px; 
+                margin-bottom: 15px;
+                position: sticky;
+                top: 0;
+                z-index: 100;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
             
-            .contact-header:hover {{ background: #e9ecef; }}
+            .header h1 {
+                font-size: 1.2em;
+                margin: 0 0 5px 0;
+            }
             
-            .contact-info {{ flex: 1; }}
+            .header p {
+                font-size: 0.85em;
+                margin: 0 0 10px 0;
+                opacity: 0.9;
+            }
             
-            .contact-phone {{ 
-                font-weight: bold; 
-                font-size: 1.1em; 
-                color: #333; 
-            }}
+            .header-links {
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
             
-            .contact-meta {{ 
-                font-size: 0.85em; 
-                color: #666; 
-                margin-top: 5px; 
-            }}
-            
-            .contact-status {{ 
-                padding: 4px 12px; 
-                border-radius: 20px; 
-                font-size: 0.8em; 
-                font-weight: bold; 
-                margin-right: 10px;
-            }}
-            
-            .status-PROSPECTO_NUEVO {{ background: #FFEAA7; color: #E17055; }}
-            .status-PROSPECTO_INFORMADO {{ background: #A29BFE; color: #6C5CE7; }}
-            .status-VISITA_AGENDADA {{ background: #81ECEC; color: #00CEC9; }}
-            .status-ALUMNO_ACTIVO {{ background: #55EFC4; color: #00B894; }}
-            .status-COMPETENCIA {{ background: #FD79A8; color: #E84393; }}
-            
-            .toggle-btn {{ 
-                background: #25D366; 
-                color: white; 
-                border: none; 
-                padding: 8px 20px; 
-                border-radius: 20px; 
-                cursor: pointer;
-                font-size: 0.9em;
-                transition: background 0.2s;
-            }}
-            
-            .toggle-btn:hover {{ background: #128C7E; }}
-            
-            /* CONVERSACIÓN EXPANDIDA */
-            .conversation-preview {{ 
-                display: none; 
-                padding: 20px; 
-                background: #fafafa; 
-                border-top: 1px solid #eee;
-            }}
-            
-            .conversation-preview.active {{ display: block; }}
-            
-            .message-container {{ 
-                margin: 15px 0; 
-                max-height: 300px; 
-                overflow-y: auto; 
-                padding: 10px;
-                background: #fff;
-                border-radius: 8px;
-                border: 1px solid #eee;
-            }}
-            
-            .message {{ 
-                margin: 10px 0; 
-                padding: 10px 15px; 
-                border-radius: 15px; 
-                max-width: 80%; 
-                position: relative;
-                word-wrap: break-word;
-            }}
-            
-            .message.usuario {{ 
-                background: #E3F2FD; 
-                margin-right: auto; 
-                border-bottom-left-radius: 5px;
-            }}
-            
-            .message.bot {{ 
-                background: #DCF8C6; 
-                margin-left: auto; 
-                border-bottom-right-radius: 5px;
-            }}
-            
-            .message .hora {{
-                font-size: 0.7em;
-                color: #666;
-                position: absolute;
-                bottom: 5px;
-                right: 10px;
-            }}
-            
-            .message.usuario .hora {{ right: auto; left: 10px; }}
-            
-            .ver-completo-btn {{ 
-                display: block; 
-                width: 100%; 
-                text-align: center; 
-                background: #128C7E; 
-                color: white; 
-                padding: 10px; 
-                border-radius: 5px; 
+            .header-links a {
+                background: rgba(255,255,255,0.2);
+                color: white;
+                padding: 5px 12px;
+                border-radius: 15px;
                 text-decoration: none;
-                margin-top: 10px;
-                font-weight: bold;
-            }}
+                font-size: 0.8em;
+                transition: background 0.2s;
+            }
             
-            .ver-completo-btn:hover {{ background: #0c614f; }}
+            .header-links a:hover {
+                background: rgba(255,255,255,0.3);
+            }
             
-            /* PAGINACIÓN */
-            .pagination {{ 
-                display: flex; 
-                justify-content: center; 
+            /* ESTADÍSTICAS COMPACTAS */
+            .stats { 
+                display: grid; 
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
                 gap: 10px; 
-                margin: 20px 0; 
-            }}
+                margin-bottom: 15px; 
+            }
             
-            .page-btn {{ 
-                padding: 10px 20px; 
-                background: #25D366; 
-                color: white; 
-                border: none; 
-                border-radius: 5px; 
-                cursor: pointer;
-                text-decoration: none;
+            .stat-card { 
+                background: white; 
+                padding: 12px; 
+                border-radius: 8px; 
+                box-shadow: 0 2px 5px rgba(0,0,0,0.08); 
+                text-align: center;
+            }
+            
+            .stat-card h3 {
+                font-size: 0.85em;
+                margin: 0 0 5px 0;
+                color: #666;
+            }
+            
+            .stat-card p {
+                font-size: 1.5em;
+                font-weight: bold;
+                margin: 0;
+                color: #333;
+            }
+            
+            .contact-status {
+                font-size: 0.7em;
+                padding: 2px 8px;
+                border-radius: 10px;
                 display: inline-block;
-            }}
-            
-            .page-btn:hover {{ background: #128C7E; }}
-            
-            .page-btn.disabled {{ 
-                background: #ccc; 
-                cursor: not-allowed; 
-                opacity: 0.5;
-            }}
-            
-            /* BUSCADOR */
-            .search-box {{ 
-                margin: 20px 0; 
-                text-align: center; 
-            }}
-            
-            .search-input {{ 
-                padding: 12px 20px; 
-                width: 100%; 
-                max-width: 500px; 
-                border-radius: 25px; 
-                border: 2px solid #ddd; 
-                font-size: 1em;
-            }}
-            
-            .search-input:focus {{ 
-                outline: none; 
-                border-color: #25D366; 
-            }}
-            
-            .no-results {{ 
-                text-align: center; 
-                padding: 40px; 
-                color: #666; 
-                font-style: italic; 
-            }}
+                margin-top: 5px;
+            }
         </style>
     </head>
     <body>
         <div class="header">
             <h1>📱 CRM WhatsApp Bot - Colegio</h1>
-            <p>Gestión de prospectos, alumnos y competencia vía WhatsApp</p>
-            <p>
-                <a href="/panel?page=1" style="color: white; margin-right: 15px;">🏠 Panel</a>
-                <a href="/contacts" style="color: white; margin-right: 15px;">📋 Todos los contactos</a>
-                <a href="/health" style="color: white;">🩺 Health Check</a>
-            </p>
+            <p>Gestión de prospectos, alumnos y competencia</p>
+            <div class="header-links">
+                <a href="/panel?page=1">🏠 Panel</a>
+                <a href="/contacts">📋 Contactos</a>
+                <a href="/health">🩺 Health</a>
+            </div>
         </div>
         
         <div class="stats">
             <div class="stat-card">
                 <h3>👥 Total Contactos</h3>
-                <p style="font-size: 2em; font-weight: bold;">{total_contacts}</p>
+                <p>{total_contacts}</p>
             </div>
-    """
     
     # Agregar estadísticas por estado
     for status, count in by_status:
