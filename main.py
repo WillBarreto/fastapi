@@ -9,10 +9,6 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
 
-
-# Configura la zona horaria de México
-TIMEZONE_MEXICO = pytz.timezone('America/Mexico_City')
-
 def formatear_fecha_para_mensaje(dt: datetime) -> str:
     """Formatea fecha para mostrar en mensajes - USANDO ZONA HORARIA MÉXICO"""
     # Definir offset para México (UTC-6)
