@@ -972,7 +972,8 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
             <p>💡 <strong>Tip:</strong> Usa el buscador arriba para encontrar contactos específicos</p>
         </div>
         
-        <script>
+                <script>
+            // ========== FUNCIONES BÁSICAS ==========
             function toggleConversacion(contactId) {{
                 const preview = document.getElementById('conversacion-' + contactId);
                 const btn = document.getElementById('btn-' + contactId);
@@ -1036,7 +1037,120 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 }}
             }}
             
-            // Hotkeys
+            // ========== FUNCIONES PARA CONVERSACIÓN COMPLETA ==========
+            async function cargarConversacionCompleta(phoneNumber, contactId) {{
+                console.log('Cargando conversación para:', phoneNumber, 'ID:', contactId);
+                
+                const btn = document.getElementById('btn-' + contactId);
+                const preview = document.getElementById('conversacion-' + contactId);
+                const completaContainer = document.getElementById('conversacion-completa-' + contactId);
+                const mensajesContainer = document.getElementById('mensajes-completos-' + contactId);
+                
+                // Ocultar vista previa, mostrar contenedor completo
+                preview.style.display = 'none';
+                completaContainer.style.display = 'block';
+                
+                // Cambiar texto del botón
+                btn.textContent = '🔄 Cargando...';
+                btn.disabled = true;
+                btn.style.background = '#6c757d';
+                
+                try {{
+                    // URL del endpoint
+                    const encodedPhone = encodeURIComponent(phoneNumber);
+                    const url = '/panel/conversations/json/' + encodedPhone;
+                    console.log('Fetching URL:', url);
+                    
+                    const response = await fetch(url);
+                    
+                    if (!response.ok) {{
+                        throw new Error(`Error HTTP: ${{response.status}} - ${{response.statusText}}`);
+                    }}
+                    
+                    const data = await response.json();
+                    console.log('Datos recibidos:', data);
+                    
+                    // Mostrar mensajes
+                    mensajesContainer.innerHTML = '';
+                    
+                    let currentDate = null;
+                    data.conversacion.forEach(msg => {{
+                        // Agrupar por fecha
+                        const msgDate = msg.fecha;
+                        
+                        if (msgDate !== currentDate) {{
+                            currentDate = msgDate;
+                            const hoy = new Date().toLocaleDateString('es-MX');
+                            const ayer = new Date(Date.now() - 86400000).toLocaleDateString('es-MX');
+                            
+                            let fechaLabel = msgDate;
+                            if (msgDate === hoy) {{
+                                fechaLabel = 'HOY';
+                            }} else if (msgDate === ayer) {{
+                                fechaLabel = 'AYER';
+                            }}
+                            
+                            const separador = document.createElement('div');
+                            separador.className = 'fecha-separador';
+                            separador.textContent = '──── ' + fechaLabel + ' ────';
+                            mensajesContainer.appendChild(separador);
+                        }}
+                        
+                        // Crear elemento de mensaje
+                        const msgElement = document.createElement('div');
+                        msgElement.className = 'mensaje-completo ' + msg.tipo;
+                        msgElement.innerHTML = 
+                            '<strong>' + msg.tipo.toUpperCase() + ':</strong> ' + 
+                            msg.texto.replace(/\\n/g, '<br>') +
+                            '<span class="hora-completa">' + msg.hora + '</span>';
+                        mensajesContainer.appendChild(msgElement);
+                    }});
+                    
+                    // Restaurar botón
+                    btn.textContent = '▲ Ocultar';
+                    btn.disabled = false;
+                    btn.style.background = '#128C7E';
+                    
+                    // Auto-scroll al final
+                    setTimeout(() => {{
+                        mensajesContainer.scrollTop = mensajesContainer.scrollHeight;
+                    }}, 100);
+                    
+                }} catch (error) {{
+                    console.error('Error cargando conversación:', error);
+                    mensajesContainer.innerHTML = 
+                        '<div style="text-align: center; padding: 30px; color: #dc3545;">' +
+                        '<h5>❌ Error cargando conversación</h5>' +
+                        '<p>' + error.message + '</p>' +
+                        '<p style="font-size: 0.8em; margin-top: 10px;">Número: ' + phoneNumber + '</p>' +
+                        '<p style="font-size: 0.8em;">URL: /panel/conversations/json/' + encodeURIComponent(phoneNumber) + '</p>' +
+                        '<button onclick="cargarConversacionCompleta(\\'' + phoneNumber + '\\', ' + contactId + ')" ' +
+                        'style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; margin-top: 10px;">' +
+                        'Reintentar' +
+                        '</button>' +
+                        '</div>';
+                    
+                    btn.textContent = '▼ Ver conversación';
+                    btn.disabled = false;
+                    btn.style.background = '#25D366';
+                }}
+            }}
+            
+            function volverAVistaPrevia(contactId) {{
+                const btn = document.getElementById('btn-' + contactId);
+                const preview = document.getElementById('conversacion-' + contactId);
+                const completaContainer = document.getElementById('conversacion-completa-' + contactId);
+                
+                // Ocultar completa, mostrar preview
+                completaContainer.style.display = 'none';
+                preview.style.display = 'block';
+                
+                // Restaurar botón
+                btn.textContent = '▲ Ocultar';
+                btn.style.background = '#128C7E';
+            }}
+            
+            // ========== HOTKEYS Y EVENTOS ==========
             document.addEventListener('keydown', function(e) {{
                 if (e.key === 'Escape') {{
                     // Cerrar todas las conversaciones
@@ -1067,109 +1181,6 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                     searchInput.focus();
                 }}
             }};
-
-            // ========== FUNCIONES PARA CONVERSACIÓN COMPLETA ==========
-            async function cargarConversacionCompleta(phoneNumber, contactId) {{
-                const btn = document.getElementById('btn-' + contactId);
-                const preview = document.getElementById('conversacion-' + contactId);
-                const completaContainer = document.getElementById('conversacion-completa-' + contactId);
-                const mensajesContainer = document.getElementById('mensajes-completos-' + contactId);
-                
-                // Ocultar vista previa, mostrar contenedor completo
-                preview.style.display = 'none';
-                completaContainer.style.display = 'block';
-                
-                // Cambiar texto del botón
-                btn.textContent = '🔄 Cargando...';
-                btn.disabled = true;
-                btn.style.background = '#6c757d';
-                
-                try {{
-                    // CORRECCIÓN: Usar encodeURIComponent y llaves simples
-                    const encodedPhone = encodeURIComponent(phoneNumber);
-                    const response = await fetch('/panel/conversations/json/' + encodedPhone);
-                    
-                    if (!response.ok) {{
-                        throw new Error('Error HTTP: ' + response.status);
-                    }}
-                    
-                    const data = await response.json();
-                    
-                    // Mostrar mensajes
-                    mensajesContainer.innerHTML = '';
-                    
-                    let currentDate = null;
-                    data.conversacion.forEach(msg => {{
-                        // Agrupar por fecha
-                        const msgDate = msg.fecha;
-                        const hoy = new Date().toLocaleDateString('es-MX');
-                        const ayer = new Date(Date.now() - 86400000).toLocaleDateString('es-MX');
-                        
-                        if (msgDate !== currentDate) {{
-                            currentDate = msgDate;
-                            let fechaLabel = msgDate;
-                            if (msgDate === hoy) {{
-                                fechaLabel = 'HOY';
-                            }} else if (msgDate === ayer) {{
-                                fechaLabel = 'AYER';
-                            }}
-                            
-                            const separador = document.createElement('div');
-                            separador.className = 'fecha-separador';
-                            separador.textContent = '──── ' + fechaLabel + ' ────';
-                            mensajesContainer.appendChild(separador);
-                        }}
-                        
-                        // Crear elemento de mensaje
-                        const msgElement = document.createElement('div');
-                        msgElement.className = 'mensaje-completo ' + msg.tipo;
-                        msgElement.innerHTML = 
-                            '<strong>' + msg.tipo.toUpperCase() + ':</strong> ' + 
-                            msg.texto.replace(/\\n/g, '<br>') +
-                            '<span class="hora-completa">' + msg.hora + '</span>';
-                        mensajesContainer.appendChild(msgElement);
-                    }});
-                    
-                    // Restaurar botón
-                    btn.textContent = '▲ Ocultar';
-                    btn.disabled = false;
-                    btn.style.background = '#128C7E';
-                    
-                    // Auto-scroll al final
-                    mensajesContainer.scrollTop = mensajesContainer.scrollHeight;
-                    
-                }} catch (error) {{
-                    console.error('Error cargando conversación:', error);
-                    mensajesContainer.innerHTML = 
-                        '<div style="text-align: center; padding: 30px; color: #dc3545;">' +
-                        '<h5>❌ Error cargando conversación</h5>' +
-                        '<p>' + error.message + '</p>' +
-                        '<p style="font-size: 0.8em; margin-top: 10px;">Número: ' + phoneNumber + '</p>' +
-                        '<button onclick="cargarConversacionCompleta(\\'' + phoneNumber + '\\', ' + contactId + ')" ' +
-                        'style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; margin-top: 10px;">' +
-                        'Reintentar' +
-                        '</button>' +
-                        '</div>';
-                    
-                    btn.textContent = '▼ Ver conversación';
-                    btn.disabled = false;
-                    btn.style.background = '#25D366';
-                }}
-            }}
-            
-            function volverAVistaPrevia(contactId) {{
-                const btn = document.getElementById('btn-' + contactId);
-                const preview = document.getElementById('conversacion-' + contactId);
-                const completaContainer = document.getElementById('conversacion-completa-' + contactId);
-                
-                // Ocultar completa, mostrar preview
-                completaContainer.style.display = 'none';
-                preview.style.display = 'block';
-                
-                // Restaurar botón
-                btn.textContent = '▲ Ocultar';
-                btn.style.background = '#128C7E';
-            }}
         </script>
         
         <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px; border-top: 1px solid #ddd;">
