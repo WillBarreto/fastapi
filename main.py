@@ -1058,7 +1058,6 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 try {{
                     // URL del endpoint
                     const encodedPhone = encodeURIComponent(phoneNumber);
-#                    const url = '/panel/conversations/json/' + encodedPhone;
                     const url = '/conversations/json/' + encodedPhone;
                     console.log('Fetching URL:', url);
                     
@@ -1606,6 +1605,14 @@ async def get_conversation_json(
         },
         "conversacion": conversation_json
     }
+
+@app.get("/conversations/json/{phone_number}")
+async def get_conversation_json_for_ajax(
+    phone_number: str,
+    db: Session = Depends(get_db)
+):
+    """Endpoint alternativo para AJAX - misma funcionalidad que /panel/conversations/json/"""
+    return await get_conversation_json(phone_number, db)
 
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
