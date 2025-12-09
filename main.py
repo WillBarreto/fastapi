@@ -2,28 +2,77 @@ from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from pydantic import BaseModel
 import os
 from twilio.rest import Client
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Enum, Boolean, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
 
+
+# Configura la zona horaria de México
+TIMEZONE_MEXICO = pytz.timezone('America/Mexico_City')
+
 def formatear_fecha_para_mensaje(dt: datetime) -> str:
-    """Formatea fecha para mostrar en mensajes"""
-    hoy = datetime.now().date()
-    ayer = hoy - timedelta(days=1)
-    fecha_msg = dt.date()
+    """Formatea fecha para mostrar en mensajes - USANDO ZONA HORARIA MÉXICO"""
+    # Definir offset para México (UTC-6)
+    # IMPORTANTE: Esto no considera horario de verano automáticamente
+    # Para CDMX: UTC-6 en invierno, UTC-5 en verano
     
-    if fecha_msg == hoy:
-        return f"Hoy {dt.strftime('%H:%M')}"
-    elif fecha_msg == ayer:
-        return f"Ayer {dt.strftime('%H:%M')}"
+    # Determinar si estamos en horario de verano (aproximado)
+    # En México: primer domingo de abril a último domingo de octubre
+    hoy = datetime.now()
+    es_horario_verano = False
+    
+    # Simple aproximación (no es 100% exacta pero funciona para la mayoría de los casos)
+    if 4 <= hoy.month <= 10:
+        es_horario_verano = True
+    elif hoy.month == 4 and hoy.day >= 7:  # Después del primer domingo de abril
+        es_horario_verano = True
+    elif hoy.month == 10 and hoy.day <= 28:  # Antes del último domingo de octubre
+        es_horario_verano = True
+    
+    # Ajustar offset
+    offset_horas = -5 if es_horario_verano else -6
+    
+    # Aplicar offset
+    dt_local = dt + timedelta(hours=offset_horas)
+    
+    # Fechas de referencia
+    hoy_local = datetime.now() + timedelta(hours=offset_horas)
+    fecha_hoy = hoy_local.date()
+    fecha_ayer = fecha_hoy - timedelta(days=1)
+    fecha_msg = dt_local.date()
+    
+    # Formatear hora en formato 12h (7:00 PM)
+    hora = dt_local.hour
+    minutos = dt_local.minute
+    
+    # Determinar AM/PM
+    if hora < 12:
+        periodo = "a.m."
+    else:
+        periodo = "p.m."
+    
+    # Convertir a formato 12h
+    if hora == 0:
+        hora_12 = 12
+    elif hora > 12:
+        hora_12 = hora - 12
+    else:
+        hora_12 = hora
+    
+    hora_str = f"{hora_12}:{minutos:02d} {periodo}"
+    
+    if fecha_msg == fecha_hoy:
+        return f"Hoy {hora_str}"
+    elif fecha_msg == fecha_ayer:
+        return f"Ayer {hora_str}"
     else:
         meses = ["ene", "feb", "mar", "abr", "may", "jun", 
                  "jul", "ago", "sep", "oct", "nov", "dic"]
-        return f"{dt.day} {meses[dt.month-1]} {dt.strftime('%H:%M')}"
-
+        return f"{dt_local.day} {meses[dt_local.month-1]} {hora_str}"
+        
 # ================= CONFIGURACIÓN DE BASE DE DATOS =================
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./whatsapp_bot.db")
 
@@ -153,11 +202,14 @@ def get_or_create_contact(db: Session, phone_number: str):
 
 def save_message(db: Session, contact_id: int, direction: str, content: str, twilio_sid: str = None):
     """Guarda un mensaje en la base de datos"""
+    # Usar datetime estándar (la BD guardará en UTC)
+    timestamp = datetime.now()
+    
     message = Message(
         contact_id=contact_id,
         direction=direction,
         content=content,
-        timestamp=datetime.now(),
+        timestamp=timestamp,
         twilio_sid=twilio_sid
     )
     db.add(message)
@@ -418,19 +470,27 @@ async def get_conversations_by_phone(
     }
 
 @app.get("/panel")
-async def crm_panel(db: Session = Depends(get_db)):
-    """Panel web de CRM con vista de conversaciones integrada"""
+async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 10):
+    """Panel web de CRM con vista de conversaciones integrada y paginación"""
+    
     # Obtener estadísticas
     total_contacts = db.query(Contact).count()
     by_status = db.query(Contact.status, func.count(Contact.id)).group_by(Contact.status).all()
     
-    # Últimos contactos con sus últimos mensajes
-    recent_contacts = db.query(Contact).order_by(Contact.last_contact.desc()).limit(10).all()
+    # Calcular offset para paginación
+    offset = (page - 1) * limit
+    
+    # Últimos contactos con paginación
+    recent_contacts = db.query(Contact)\
+        .order_by(Contact.last_contact.desc())\
+        .offset(offset)\
+        .limit(limit)\
+        .all()
     
     # Para cada contacto, obtener los últimos 5 mensajes
     contacts_with_messages = []
     for contact in recent_contacts:
-        # Obtener últimos mensajes
+        # Obtener últimos mensajes (solo 5 para vista previa)
         recent_messages = db.query(Message).filter(Message.contact_id == contact.id)\
             .order_by(Message.timestamp.desc())\
             .limit(5)\
@@ -445,13 +505,24 @@ async def crm_panel(db: Session = Depends(get_db)):
             mensajes_simples.append({
                 "tipo": "usuario" if msg.direction == "incoming" else "bot",
                 "texto": msg.content[:100] + "..." if len(msg.content) > 100 else msg.content,
-                "hora": msg.timestamp.strftime("%H:%M")
+                "hora": formatear_fecha_para_mensaje(msg.timestamp),
+                "completo": msg.content  # Guardamos el mensaje completo
             })
         
         contacts_with_messages.append({
-            "contacto": contact,
+            "contacto": {
+                "id": contact.id,
+                "phone_number": contact.phone_number,
+                "status": contact.status,
+                "last_contact": contact.last_contact.strftime('%d/%m/%Y %H:%M'),
+                "total_messages": contact.total_messages
+            },
             "mensajes_recientes": mensajes_simples
         })
+    
+    # Calcular si hay más páginas
+    has_next = (offset + limit) < total_contacts
+    has_prev = page > 1
     
     # Generar HTML con conversaciones integradas
     html = f"""
@@ -463,79 +534,217 @@ async def crm_panel(db: Session = Depends(get_db)):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
-            .header {{ background: linear-gradient(135deg, #25D366, #128C7E); color: white; padding: 25px; border-radius: 15px; margin-bottom: 20px; }}
-            .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }}
-            .stat-card {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); }}
+            .header {{ 
+                background: linear-gradient(135deg, #25D366, #128C7E); 
+                color: white; 
+                padding: 25px; 
+                border-radius: 15px; 
+                margin-bottom: 20px; 
+            }}
             
-            /* NUEVO: Estilos para contactos con conversaciones */
-            .contact-section {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }}
+            .stats {{ 
+                display: grid; 
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+                gap: 15px; 
+                margin-bottom: 20px; 
+            }}
+            
+            .stat-card {{ 
+                background: white; 
+                padding: 20px; 
+                border-radius: 10px; 
+                box-shadow: 0 3px 10px rgba(0,0,0,0.1); 
+            }}
+            
+            /* CONTACTOS */
+            .contact-list {{ 
+                background: white; 
+                padding: 20px; 
+                border-radius: 10px; 
+                box-shadow: 0 3px 10px rgba(0,0,0,0.1); 
+                margin-bottom: 20px; 
+            }}
+            
+            .contact-item {{ 
+                margin-bottom: 15px; 
+                border: 1px solid #eee; 
+                border-radius: 8px; 
+                overflow: hidden; 
+            }}
+            
             .contact-header {{ 
                 display: flex; 
                 justify-content: space-between; 
                 align-items: center; 
                 padding: 15px; 
                 background: #f8f9fa; 
-                border-radius: 8px; 
                 cursor: pointer;
                 border-left: 4px solid #25D366;
+                transition: background 0.2s;
             }}
+            
             .contact-header:hover {{ background: #e9ecef; }}
-            .contact-details {{ 
-                display: none; 
-                padding: 15px; 
-                background: #fafafa; 
-                border-radius: 0 0 8px 8px;
-                margin-top: -5px;
-            }}
-            .contact-details.active {{ display: block; }}
             
-            .status-badge {{ padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: bold; }}
-            .status-prospecto {{ background: #FFEAA7; color: #E17055; }}
-            .status-alumno {{ background: #55EFC4; color: #00B894; }}
-            .status-competencia {{ background: #FD79A8; color: #E84393; }}
+            .contact-info {{ flex: 1; }}
             
-            /* Estilos para mensajes */
-            .message-container {{ margin-top: 15px; }}
-            .message {{ 
-                padding: 10px 15px; 
-                margin: 8px 0; 
-                border-radius: 15px; 
-                max-width: 70%; 
-                word-wrap: break-word;
-                position: relative;
+            .contact-phone {{ 
+                font-weight: bold; 
+                font-size: 1.1em; 
+                color: #333; 
             }}
-            .message.usuario {{ 
-                background: #E3F2FD; 
-                margin-right: auto; 
-                border-bottom-left-radius: 5px;
-            }}
-            .message.bot {{ 
-                background: #DCF8C6; 
-                margin-left: auto; 
-                border-bottom-right-radius: 5px;
-            }}
-            .message .hora {{
-                font-size: 0.7em;
-                color: #666;
-                position: absolute;
-                bottom: 2px;
-                right: 10px;
-            }}
-            .message.usuario .hora {{ right: auto; left: 10px; }}
             
-            a {{ color: #128C7E; text-decoration: none; }}
-            a:hover {{ text-decoration: underline; }}
+            .contact-meta {{ 
+                font-size: 0.85em; 
+                color: #666; 
+                margin-top: 5px; 
+            }}
+            
+            .contact-status {{ 
+                padding: 4px 12px; 
+                border-radius: 20px; 
+                font-size: 0.8em; 
+                font-weight: bold; 
+                margin-right: 10px;
+            }}
+            
+            .status-PROSPECTO_NUEVO {{ background: #FFEAA7; color: #E17055; }}
+            .status-PROSPECTO_INFORMADO {{ background: #A29BFE; color: #6C5CE7; }}
+            .status-VISITA_AGENDADA {{ background: #81ECEC; color: #00CEC9; }}
+            .status-ALUMNO_ACTIVO {{ background: #55EFC4; color: #00B894; }}
+            .status-COMPETENCIA {{ background: #FD79A8; color: #E84393; }}
             
             .toggle-btn {{ 
                 background: #25D366; 
                 color: white; 
                 border: none; 
-                padding: 5px 15px; 
-                border-radius: 15px; 
+                padding: 8px 20px; 
+                border-radius: 20px; 
                 cursor: pointer;
                 font-size: 0.9em;
+                transition: background 0.2s;
             }}
+            
             .toggle-btn:hover {{ background: #128C7E; }}
+            
+            /* CONVERSACIÓN EXPANDIDA */
+            .conversation-preview {{ 
+                display: none; 
+                padding: 20px; 
+                background: #fafafa; 
+                border-top: 1px solid #eee;
+            }}
+            
+            .conversation-preview.active {{ display: block; }}
+            
+            .message-container {{ 
+                margin: 15px 0; 
+                max-height: 300px; 
+                overflow-y: auto; 
+                padding: 10px;
+                background: #fff;
+                border-radius: 8px;
+                border: 1px solid #eee;
+            }}
+            
+            .message {{ 
+                margin: 10px 0; 
+                padding: 10px 15px; 
+                border-radius: 15px; 
+                max-width: 80%; 
+                position: relative;
+                word-wrap: break-word;
+            }}
+            
+            .message.usuario {{ 
+                background: #E3F2FD; 
+                margin-right: auto; 
+                border-bottom-left-radius: 5px;
+            }}
+            
+            .message.bot {{ 
+                background: #DCF8C6; 
+                margin-left: auto; 
+                border-bottom-right-radius: 5px;
+            }}
+            
+            .message .hora {{
+                font-size: 0.7em;
+                color: #666;
+                position: absolute;
+                bottom: 5px;
+                right: 10px;
+            }}
+            
+            .message.usuario .hora {{ right: auto; left: 10px; }}
+            
+            .ver-completo-btn {{ 
+                display: block; 
+                width: 100%; 
+                text-align: center; 
+                background: #128C7E; 
+                color: white; 
+                padding: 10px; 
+                border-radius: 5px; 
+                text-decoration: none;
+                margin-top: 10px;
+                font-weight: bold;
+            }}
+            
+            .ver-completo-btn:hover {{ background: #0c614f; }}
+            
+            /* PAGINACIÓN */
+            .pagination {{ 
+                display: flex; 
+                justify-content: center; 
+                gap: 10px; 
+                margin: 20px 0; 
+            }}
+            
+            .page-btn {{ 
+                padding: 10px 20px; 
+                background: #25D366; 
+                color: white; 
+                border: none; 
+                border-radius: 5px; 
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+            }}
+            
+            .page-btn:hover {{ background: #128C7E; }}
+            
+            .page-btn.disabled {{ 
+                background: #ccc; 
+                cursor: not-allowed; 
+                opacity: 0.5;
+            }}
+            
+            /* BUSCADOR */
+            .search-box {{ 
+                margin: 20px 0; 
+                text-align: center; 
+            }}
+            
+            .search-input {{ 
+                padding: 12px 20px; 
+                width: 100%; 
+                max-width: 500px; 
+                border-radius: 25px; 
+                border: 2px solid #ddd; 
+                font-size: 1em;
+            }}
+            
+            .search-input:focus {{ 
+                outline: none; 
+                border-color: #25D366; 
+            }}
+            
+            .no-results {{ 
+                text-align: center; 
+                padding: 40px; 
+                color: #666; 
+                font-style: italic; 
+            }}
         </style>
     </head>
     <body>
@@ -543,9 +752,9 @@ async def crm_panel(db: Session = Depends(get_db)):
             <h1>📱 CRM WhatsApp Bot - Colegio</h1>
             <p>Gestión de prospectos, alumnos y competencia vía WhatsApp</p>
             <p>
+                <a href="/panel?page=1" style="color: white; margin-right: 15px;">🏠 Panel</a>
                 <a href="/contacts" style="color: white; margin-right: 15px;">📋 Todos los contactos</a>
-                <a href="/health" style="color: white; margin-right: 15px;">🩺 Health Check</a>
-                <a href="/" style="color: white;">🏠 Inicio</a>
+                <a href="/health" style="color: white;">🩺 Health Check</a>
             </p>
         </div>
         
@@ -558,129 +767,221 @@ async def crm_panel(db: Session = Depends(get_db)):
     
     # Agregar estadísticas por estado
     for status, count in by_status:
-        status_value = status.lower()
-        color_class = "status-prospecto" if "prospecto" in status_value else "status-alumno" if "alumno" in status_value else "status-competencia"
         html += f"""
             <div class="stat-card">
                 <h3>📊 {status.replace('_', ' ').title()}</h3>
                 <p style="font-size: 2em; font-weight: bold;">{count}</p>
-                <span class="status-badge {color_class}">{status}</span>
+                <span class="contact-status status-{status}">{status}</span>
             </div>
         """
     
     html += """
         </div>
         
-        <div class="contact-section">
-            <h2>🕐 Contactos Recientes (click para ver conversación)</h2>
+        <div class="search-box">
+            <input type="text" 
+                   class="search-input" 
+                   placeholder="🔍 Buscar contacto por número telefónico..." 
+                   id="searchInput"
+                   onkeyup="filtrarContactos()">
+        </div>
+        
+        <div class="contact-list">
+            <h2>🕐 Contactos Recientes</h2>
+            <p style="color: #666; margin-bottom: 20px;">Click en cada contacto para ver conversación reciente</p>
     """
     
-    # Agregar cada contacto con su conversación
-    for item in contacts_with_messages:
-        contact = item["contacto"]
-        mensajes = item["mensajes_recientes"]
-        
-        status_value = contact.status.lower()
-        status_class = "status-prospecto" if "prospecto" in status_value else "status-alumno" if "alumno" in status_value else "status-competencia"
-        
-        html += f"""
-            <div class="contact-item">
-                <div class="contact-header" onclick="toggleConversation('contact-{contact.id}')">
-                    <div>
-                        <strong>📞 {contact.phone_number}</strong><br>
-                        <small>Último contacto: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}</small>
+    if contacts_with_messages:
+        for item in contacts_with_messages:
+            contacto = item["contacto"]
+            mensajes = item["mensajes_recientes"]
+            
+            html += f"""
+            <div class="contact-item" id="contact-{contacto['id']}" data-phone="{contacto['phone_number']}">
+                <div class="contact-header" onclick="toggleConversacion({contacto['id']})">
+                    <div class="contact-info">
+                        <div class="contact-phone">📞 {contacto['phone_number']}</div>
+                        <div class="contact-meta">
+                            <span class="contact-status status-{contacto['status']}">{contacto['status']}</span>
+                            <span>📅 {contacto['last_contact']} • 📨 {contacto['total_messages']} mensajes</span>
+                        </div>
                     </div>
-                    <div>
-                        <span class="status-badge {status_class}">{contact.status}</span>
-                        <span style="margin-left: 10px;">📨 {contact.total_messages} mensajes</span>
-                    </div>
-                    <button class="toggle-btn" id="btn-{contact.id}">▼ Ver conversación</button>
+                    <button class="toggle-btn" id="btn-{contacto['id']}">▼ Ver conversación</button>
                 </div>
                 
-                <div class="contact-details" id="contact-{contact.id}">
+                <div class="conversation-preview" id="conversacion-{contacto['id']}">
+                    <h4>📝 Últimos mensajes:</h4>
                     <div class="message-container">
-        """
-        
-        # Mostrar mensajes recientes
-        if mensajes:
-            for msg in mensajes:
-                html += f"""
+            """
+            
+            if mensajes:
+                for msg in mensajes:
+                    html += f"""
                         <div class="message {msg['tipo']}">
                             <strong>{msg['tipo'].upper()}:</strong> {msg['texto']}
                             <span class="hora">{msg['hora']}</span>
                         </div>
-                """
-        else:
-            html += """
+                    """
+            else:
+                html += """
                         <div style="text-align: center; color: #999; padding: 20px;">
                             No hay mensajes registrados para este contacto.
                         </div>
-            """
-        
-        html += f"""
-                    <div style="margin-top: 15px; text-align: right;">
-                        <a href="/panel/conversations/{contact.phone_number}" target="_blank">Ver conversación completa →</a>
+                """
+            
+            html += f"""
                     </div>
+                    <a href="/panel/conversations/{contacto['phone_number']}" class="ver-completo-btn" target="_blank">
+                        📋 Ver conversación completa ({contacto['total_messages']} mensajes)
+                    </a>
+                </div>
+            </div>
+            """
+    else:
+        html += """
+            <div class="no-results">
+                <h3>📭 No hay contactos registrados aún</h3>
+                <p>Los contactos aparecerán aquí cuando interactúen con el bot de WhatsApp.</p>
+            </div>
         """
     
     html += """
         </div>
         
+        <!-- PAGINACIÓN -->
+        <div class="pagination">
+    """
+    
+    # Botón anterior
+    if has_prev:
+        html += f'<a href="/panel?page={page-1}&limit={limit}" class="page-btn">← Anterior</a>'
+    else:
+        html += '<span class="page-btn disabled">← Anterior</span>'
+    
+    # Indicador de página
+    html += f'<span style="padding: 10px 20px; color: #666;">Página {page}</span>'
+    
+    # Botón siguiente
+    if has_next:
+        html += f'<a href="/panel?page={page+1}&limit={limit}" class="page-btn">Siguiente →</a>'
+    else:
+        html += '<span class="page-btn disabled">Siguiente →</span>'
+    
+    html += f"""
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px; color: #666; padding: 20px; font-size: 0.9em;">
+            <p>Mostrando {len(contacts_with_messages)} de {total_contacts} contactos • Página {page}</p>
+            <p>💡 <strong>Tip:</strong> Usa el buscador arriba para encontrar contactos específicos</p>
+        </div>
+        
         <script>
-            function toggleConversation(contactId) {{
-                var details = document.getElementById(contactId);
-                var btn = document.getElementById('btn-' + contactId.split('-')[1]);
+            function toggleConversacion(contactId) {{
+                const preview = document.getElementById('conversacion-' + contactId);
+                const btn = document.getElementById('btn-' + contactId);
                 
-                if (details.classList.contains('active')) {{
-                    details.classList.remove('active');
+                if (preview.classList.contains('active')) {{
+                    // Cerrar esta conversación
+                    preview.classList.remove('active');
                     btn.textContent = '▼ Ver conversación';
+                    btn.style.background = '#25D366';
                 }} else {{
-                    // Cerrar otros abiertos
-                    document.querySelectorAll('.contact-details.active').forEach(function(el) {{
+                    // Cerrar todas las demás conversaciones abiertas
+                    document.querySelectorAll('.conversation-preview.active').forEach(el => {{
                         el.classList.remove('active');
                     }});
-                    document.querySelectorAll('.toggle-btn').forEach(function(el) {{
+                    document.querySelectorAll('.toggle-btn').forEach(el => {{
                         el.textContent = '▼ Ver conversación';
+                        el.style.background = '#25D366';
                     }});
                     
-                    details.classList.add('active');
+                    // Abrir esta conversación
+                    preview.classList.add('active');
                     btn.textContent = '▲ Ocultar';
+                    btn.style.background = '#128C7E';
+                    
+                    // Auto-scroll dentro del contenedor de mensajes
+                    const messageContainer = preview.querySelector('.message-container');
+                    if (messageContainer) {{
+                        messageContainer.scrollTop = messageContainer.scrollHeight;
+                    }}
                 }}
             }}
             
-            // Función para buscar contactos
-            function searchContacts() {{
-                var input = document.getElementById('searchInput').value.toLowerCase();
-                var contacts = document.querySelectorAll('.contact-item');
+            function filtrarContactos() {{
+                const input = document.getElementById('searchInput').value.toLowerCase();
+                const contactos = document.querySelectorAll('.contact-item');
+                let visibleCount = 0;
                 
-                contacts.forEach(function(contact) {{
-                    var phone = contact.querySelector('.contact-header strong').textContent.toLowerCase();
+                contactos.forEach(contacto => {{
+                    const phone = contacto.getAttribute('data-phone').toLowerCase();
                     if (phone.includes(input)) {{
-                        contact.style.display = 'block';
+                        contacto.style.display = 'block';
+                        visibleCount++;
                     }} else {{
-                        contact.style.display = 'none';
+                        contacto.style.display = 'none';
                     }}
                 }});
+                
+                // Mostrar mensaje si no hay resultados
+                const noResults = document.querySelector('.no-results') || document.createElement('div');
+                if (visibleCount === 0 && input !== '') {{
+                    if (!document.querySelector('.no-results')) {{
+                        noResults.className = 'no-results';
+                        noResults.innerHTML = '<h3>🔍 No se encontraron contactos</h3><p>Intenta con otro número telefónico</p>';
+                        document.querySelector('.contact-list').appendChild(noResults);
+                    }}
+                }} else {{
+                    const existingNoResults = document.querySelector('.no-results');
+                    if (existingNoResults) {{
+                        existingNoResults.remove();
+                    }}
+                }}
             }}
+            
+            // Hotkeys
+            document.addEventListener('keydown', function(e) {{
+                if (e.key === 'Escape') {{
+                    // Cerrar todas las conversaciones
+                    document.querySelectorAll('.conversation-preview.active').forEach(el => {{
+                        el.classList.remove('active');
+                    }});
+                    document.querySelectorAll('.toggle-btn').forEach(el => {{
+                        el.textContent = '▼ Ver conversación';
+                        el.style.background = '#25D366';
+                    }});
+                }}
+                
+                // Navegación con flechas
+                if (e.key === 'ArrowDown' && e.altKey) {{
+                    const nextBtn = document.querySelector('.page-btn:not(.disabled)[href*="page={page+1}"]');
+                    if (nextBtn) nextBtn.click();
+                }}
+                if (e.key === 'ArrowUp' && e.altKey) {{
+                    const prevBtn = document.querySelector('.page-btn:not(.disabled)[href*="page={page-1}"]');
+                    if (prevBtn) prevBtn.click();
+                }}
+            }});
+            
+            // Auto-focus en buscador
+            window.onload = function() {{
+                const searchInput = document.getElementById('searchInput');
+                if (searchInput) {{
+                    searchInput.focus();
+                }}
+            }};
         </script>
         
-        <div style="margin-top: 30px; text-align: center; color: #666; padding: 20px;">
-            <p>Sistema WhatsApp CRM desarrollado por Will Barreto FastAPI + Twilio + PostgreSQL</p>
-            <p>📧 Contacto técnico: contacto@willbarreto.com | 📅 {fecha_actual}</p>
-        </div>
-        
-        <div style="margin: 20px 0;">
-            <input type="text" id="searchInput" placeholder="🔍 Buscar por número de teléfono..." 
-                   onkeyup="searchContacts()" 
-                   style="padding: 10px; width: 100%; max-width: 400px; border-radius: 20px; border: 1px solid #ddd;">
-        </div>
+        <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px; border-top: 1px solid #ddd;">
+            <p>CRM WhatsApp Bot • Colegio • Desarrollado con FastAPI + PostgreSQL</p>
+            <p>📧 contacto@willbarreto.com • 🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+        </footer>
     </body>
     </html>
-    """.replace("{fecha_actual}", datetime.now().strftime("%d/%m/%Y"))
+    """
     
-    from fastapi.responses import HTMLResponse
     return HTMLResponse(content=html)
-
+    
 @app.get("/panel/conversations/{phone_number}")
 async def view_full_conversation(
     phone_number: str,
@@ -993,7 +1294,57 @@ async def view_full_conversation(
     """
     
     return HTMLResponse(content=html_content)
+
+@app.get("/panel/search")
+async def search_contacts(
+    query: str,
+    db: Session = Depends(get_db),
+    limit: int = 20
+):
+    """Buscar contactos por número telefónico"""
+    contacts = db.query(Contact).filter(
+        Contact.phone_number.contains(query)
+    ).order_by(Contact.last_contact.desc()).limit(limit).all()
     
+    # Similar estructura al panel pero filtrada
+    return {"results": [
+        {
+            "id": c.id,
+            "phone_number": c.phone_number,
+            "status": c.status,
+            "last_contact": c.last_contact,
+            "total_messages": c.total_messages
+        }
+        for c in contacts
+    ]}
+
+@app.get("/debug/time")
+async def debug_time():
+    """Endpoint para depurar problemas de zona horaria"""
+    from datetime import datetime
+    
+    now_utc = datetime.utcnow()
+    now_local = datetime.now()
+    
+    # Ejemplo con una hora específica (01:00 UTC)
+    ejemplo_utc = datetime(2025, 12, 9, 1, 0, 0)  # 01:00 UTC
+    ejemplo_local = ejemplo_utc
+    
+    # Aplicar offset manual para México
+    es_horario_verano = 4 <= now_local.month <= 10
+    offset_horas = -5 if es_horario_verano else -6
+    ejemplo_mexico = ejemplo_utc + timedelta(hours=offset_horas)
+    
+    return {
+        "utc_now": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
+        "local_now": now_local.strftime("%Y-%m-%d %H:%M:%S"),
+        "ejemplo_01_utc": ejemplo_utc.strftime("%H:%M"),
+        "ejemplo_01_mexico": ejemplo_mexico.strftime("%H:%M %p"),
+        "offset_actual_horas": offset_horas,
+        "es_horario_verano": es_horario_verano,
+        "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
+    }
+
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
