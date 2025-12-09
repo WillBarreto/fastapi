@@ -8,32 +8,61 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
-import pytz
-
-# Configura la zona horaria de México
-TIMEZONE_MEXICO = pytz.timezone('America/Mexico_City')
 
 def formatear_fecha_para_mensaje(dt: datetime) -> str:
-    """Formatea fecha para mostrar en mensajes - CORREGIDO PARA ZONA HORARIA MEXICO"""
-    # Asegurar que el datetime tiene zona horaria
-    if dt.tzinfo is None:
-        # Si no tiene zona horaria, asumimos que es UTC y convertimos a México
-        dt_utc = pytz.utc.localize(dt)
-        dt_local = dt_utc.astimezone(TIMEZONE_MEXICO)
-    else:
-        # Si ya tiene zona horaria, solo convertir a México
-        dt_local = dt.astimezone(TIMEZONE_MEXICO)
+    """Formatea fecha para mostrar en mensajes - USANDO ZONA HORARIA MÉXICO"""
+    # Definir offset para México (UTC-6)
+    # IMPORTANTE: Esto no considera horario de verano automáticamente
+    # Para CDMX: UTC-6 en invierno, UTC-5 en verano
     
-    hoy = datetime.now(TIMEZONE_MEXICO).date()
-    ayer = hoy - timedelta(days=1)
+    # Determinar si estamos en horario de verano (aproximado)
+    # En México: primer domingo de abril a último domingo de octubre
+    hoy = datetime.now()
+    es_horario_verano = False
+    
+    # Simple aproximación (no es 100% exacta pero funciona para la mayoría de los casos)
+    if 4 <= hoy.month <= 10:
+        es_horario_verano = True
+    elif hoy.month == 4 and hoy.day >= 7:  # Después del primer domingo de abril
+        es_horario_verano = True
+    elif hoy.month == 10 and hoy.day <= 28:  # Antes del último domingo de octubre
+        es_horario_verano = True
+    
+    # Ajustar offset
+    offset_horas = -5 if es_horario_verano else -6
+    
+    # Aplicar offset
+    dt_local = dt + timedelta(hours=offset_horas)
+    
+    # Fechas de referencia
+    hoy_local = datetime.now() + timedelta(hours=offset_horas)
+    fecha_hoy = hoy_local.date()
+    fecha_ayer = fecha_hoy - timedelta(days=1)
     fecha_msg = dt_local.date()
     
     # Formatear hora en formato 12h (7:00 PM)
-    hora_str = dt_local.strftime("%-I:%M %p").lower()
+    hora = dt_local.hour
+    minutos = dt_local.minute
     
-    if fecha_msg == hoy:
+    # Determinar AM/PM
+    if hora < 12:
+        periodo = "a.m."
+    else:
+        periodo = "p.m."
+    
+    # Convertir a formato 12h
+    if hora == 0:
+        hora_12 = 12
+    elif hora > 12:
+        hora_12 = hora - 12
+    else:
+        hora_12 = hora
+    
+    hora_str = f"{hora_12}:{minutos:02d} {periodo}"
+    
+    if fecha_msg == fecha_hoy:
         return f"Hoy {hora_str}"
-    elif fecha_msg == ayer:
+    elif fecha_msg == fecha_ayer:
         return f"Ayer {hora_str}"
     else:
         meses = ["ene", "feb", "mar", "abr", "may", "jun", 
@@ -169,14 +198,14 @@ def get_or_create_contact(db: Session, phone_number: str):
 
 def save_message(db: Session, contact_id: int, direction: str, content: str, twilio_sid: str = None):
     """Guarda un mensaje en la base de datos"""
-    # Usar datetime con zona horaria
-    timestamp = datetime.now(TIMEZONE_MEXICO) if 'TIMEZONE_MEXICO' in locals() else datetime.now()
+    # Usar datetime estándar (la BD guardará en UTC)
+    timestamp = datetime.now()
     
     message = Message(
         contact_id=contact_id,
         direction=direction,
         content=content,
-        timestamp=timestamp,  # <-- Esto ya tendrá la zona horaria correcta
+        timestamp=timestamp,
         twilio_sid=twilio_sid
     )
     db.add(message)
@@ -1288,23 +1317,28 @@ async def search_contacts(
 @app.get("/debug/time")
 async def debug_time():
     """Endpoint para depurar problemas de zona horaria"""
-    import pytz
     from datetime import datetime
     
-    mexico_tz = pytz.timezone('America/Mexico_City')
     now_utc = datetime.utcnow()
-    now_mexico = datetime.now(mexico_tz)
+    now_local = datetime.now()
     
     # Ejemplo con una hora específica (01:00 UTC)
     ejemplo_utc = datetime(2025, 12, 9, 1, 0, 0)  # 01:00 UTC
-    ejemplo_mexico = pytz.utc.localize(ejemplo_utc).astimezone(mexico_tz)
+    ejemplo_local = ejemplo_utc
+    
+    # Aplicar offset manual para México
+    es_horario_verano = 4 <= now_local.month <= 10
+    offset_horas = -5 if es_horario_verano else -6
+    ejemplo_mexico = ejemplo_utc + timedelta(hours=offset_horas)
     
     return {
         "utc_now": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
-        "mexico_now": now_mexico.strftime("%Y-%m-%d %H:%M:%S"),
+        "local_now": now_local.strftime("%Y-%m-%d %H:%M:%S"),
         "ejemplo_01_utc": ejemplo_utc.strftime("%H:%M"),
         "ejemplo_01_mexico": ejemplo_mexico.strftime("%H:%M %p"),
-        "diferencia_horas": f"{-(mexico_tz.utcoffset(now_mexico).total_seconds()/3600)} horas"
+        "offset_actual_horas": offset_horas,
+        "es_horario_verano": es_horario_verano,
+        "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
     }
 
 # ================= INICIALIZACIÓN =================
