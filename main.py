@@ -1074,19 +1074,26 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 const preview = document.getElementById(`conversacion-${{contactId}}`);
                 const completaContainer = document.getElementById(`conversacion-completa-${{contactId}}`);
                 const mensajesContainer = document.getElementById(`mensajes-completos-${{contactId}}`);
-                
+    
                 // Ocultar vista previa, mostrar contenedor completo
                 preview.style.display = 'none';
                 completaContainer.style.display = 'block';
-                
+    
                 // Cambiar texto del botón
                 btn.textContent = '🔄 Cargando...';
                 btn.disabled = true;
                 btn.style.background = '#6c757d';
                 
                 try {{
-                    // Hacer petición para obtener conversación completa
-                    const response = await fetch(`/panel/conversations/json/${{phoneNumber}}`);
+                    // CORRECCIÓN: Usar comillas simples en la template string
+                    // y asegurar que el número sea encodeado para URL
+                    const encodedPhone = encodeURIComponent(phoneNumber);
+                    const response = await fetch(`/panel/conversations/json/${{encodedPhone}}`);
+                    
+                    if (!response.ok) {{
+                        throw new Error(`Error HTTP: ${{response.status}}`);
+                    }}
+                    
                     const data = await response.json();
                     
                     // Mostrar mensajes
@@ -1138,8 +1145,9 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                         <div style="text-align: center; padding: 30px; color: #dc3545;">
                             <h5>❌ Error cargando conversación</h5>
                             <p>${{error.message}}</p>
+                            <p style="font-size: 0.8em; margin-top: 10px;">Número: ${{phoneNumber}}</p>
                             <button onclick="cargarConversacionCompleta('${{phoneNumber}}', ${{contactId}})" 
-                                    style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">
+                                    style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; margin-top: 10px;">
                                 Reintentar
                             </button>
                         </div>
@@ -1151,6 +1159,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 }}
             }}
 
+            #----
             function volverAVistaPrevia(contactId) {{
                 const btn = document.getElementById(`btn-${{contactId}}`);
                 const preview = document.getElementById(`conversacion-${{contactId}}`);
@@ -1550,6 +1559,10 @@ async def get_conversation_json(
         clean_number = phone_number.replace("whatsapp:", "")
     else:
         clean_number = phone_number
+    
+    # Decodificar si viene encodeado
+    import urllib.parse
+    clean_number = urllib.parse.unquote(clean_number)
     
     # Buscar contacto
     contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
