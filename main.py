@@ -2,27 +2,43 @@ from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from pydantic import BaseModel
 import os
 from twilio.rest import Client
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Enum, Boolean, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
+import pytz
+
+# Configura la zona horaria de México
+TIMEZONE_MEXICO = pytz.timezone('America/Mexico_City')
 
 def formatear_fecha_para_mensaje(dt: datetime) -> str:
-    """Formatea fecha para mostrar en mensajes"""
-    hoy = datetime.now().date()
+    """Formatea fecha para mostrar en mensajes - CORREGIDO PARA ZONA HORARIA MEXICO"""
+    # Asegurar que el datetime tiene zona horaria
+    if dt.tzinfo is None:
+        # Si no tiene zona horaria, asumimos que es UTC y convertimos a México
+        dt_utc = pytz.utc.localize(dt)
+        dt_local = dt_utc.astimezone(TIMEZONE_MEXICO)
+    else:
+        # Si ya tiene zona horaria, solo convertir a México
+        dt_local = dt.astimezone(TIMEZONE_MEXICO)
+    
+    hoy = datetime.now(TIMEZONE_MEXICO).date()
     ayer = hoy - timedelta(days=1)
-    fecha_msg = dt.date()
+    fecha_msg = dt_local.date()
+    
+    # Formatear hora en formato 12h (7:00 PM)
+    hora_str = dt_local.strftime("%-I:%M %p").lower()
     
     if fecha_msg == hoy:
-        return f"Hoy {dt.strftime('%H:%M')}"
+        return f"Hoy {hora_str}"
     elif fecha_msg == ayer:
-        return f"Ayer {dt.strftime('%H:%M')}"
+        return f"Ayer {hora_str}"
     else:
         meses = ["ene", "feb", "mar", "abr", "may", "jun", 
                  "jul", "ago", "sep", "oct", "nov", "dic"]
-        return f"{dt.day} {meses[dt.month-1]} {dt.strftime('%H:%M')}"
+        return f"{dt_local.day} {meses[dt_local.month-1]} {hora_str}"
 
 # ================= CONFIGURACIÓN DE BASE DE DATOS =================
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./whatsapp_bot.db")
@@ -153,11 +169,14 @@ def get_or_create_contact(db: Session, phone_number: str):
 
 def save_message(db: Session, contact_id: int, direction: str, content: str, twilio_sid: str = None):
     """Guarda un mensaje en la base de datos"""
+    # Usar datetime con zona horaria
+    timestamp = datetime.now(TIMEZONE_MEXICO) if 'TIMEZONE_MEXICO' in locals() else datetime.now()
+    
     message = Message(
         contact_id=contact_id,
         direction=direction,
         content=content,
-        timestamp=datetime.now(),
+        timestamp=timestamp,  # <-- Esto ya tendrá la zona horaria correcta
         twilio_sid=twilio_sid
     )
     db.add(message)
@@ -1265,7 +1284,29 @@ async def search_contacts(
         }
         for c in contacts
     ]}
+
+@app.get("/debug/time")
+async def debug_time():
+    """Endpoint para depurar problemas de zona horaria"""
+    import pytz
+    from datetime import datetime
     
+    mexico_tz = pytz.timezone('America/Mexico_City')
+    now_utc = datetime.utcnow()
+    now_mexico = datetime.now(mexico_tz)
+    
+    # Ejemplo con una hora específica (01:00 UTC)
+    ejemplo_utc = datetime(2025, 12, 9, 1, 0, 0)  # 01:00 UTC
+    ejemplo_mexico = pytz.utc.localize(ejemplo_utc).astimezone(mexico_tz)
+    
+    return {
+        "utc_now": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
+        "mexico_now": now_mexico.strftime("%Y-%m-%d %H:%M:%S"),
+        "ejemplo_01_utc": ejemplo_utc.strftime("%H:%M"),
+        "ejemplo_01_mexico": ejemplo_mexico.strftime("%H:%M %p"),
+        "diferencia_horas": f"{-(mexico_tz.utcoffset(now_mexico).total_seconds()/3600)} horas"
+    }
+
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
