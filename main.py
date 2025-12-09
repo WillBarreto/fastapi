@@ -1058,7 +1058,8 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 try {{
                     // URL del endpoint
                     const encodedPhone = encodeURIComponent(phoneNumber);
-                    const url = '/panel/conversations/json/' + encodedPhone;
+#                    const url = '/panel/conversations/json/' + encodedPhone;
+                    const url = '/conversations/json/' + encodedPhone;
                     console.log('Fetching URL:', url);
                     
                     const response = await fetch(url);
