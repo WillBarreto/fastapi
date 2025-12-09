@@ -489,7 +489,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
         # Obtener últimos mensajes (solo 5 para vista previa)
         recent_messages = db.query(Message).filter(Message.contact_id == contact.id)\
             .order_by(Message.timestamp.desc())\
-            .limit(5)\
+            .limit(10)\
             .all()
         
         # Invertir para orden cronológico
@@ -741,6 +741,91 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 color: #666; 
                 font-style: italic; 
             }}
+
+            /* ========== ESTILOS PARA CONVERSACIÓN COMPLETA ========== */
+            .conversacion-completa {{
+                margin-top: 20px;
+                border: 2px solid #25D366;
+                border-radius: 10px;
+                padding: 15px;
+                background: white;
+                display: none;
+            }}
+
+            .conversacion-completa-header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 15px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #eee;
+            }}
+
+            .btn-volver-preview {{
+                background: #6c757d;
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 0.9em;
+            }}
+
+            .btn-volver-preview:hover {{
+                background: #5a6268;
+            }}
+
+            .conversacion-completa-mensajes {{
+                max-height: 500px;
+                overflow-y: auto;
+                padding: 10px;
+                background: #f8f9fa;
+                border-radius: 8px;
+            }}
+
+            .mensaje-completo {{
+                margin: 10px 0;
+                padding: 12px 15px;
+                border-radius: 15px;
+                max-width: 80%;
+                position: relative;
+                word-wrap: break-word;
+            }}
+
+            .mensaje-completo.usuario {{
+                background: #E3F2FD;
+                margin-right: auto;
+                border-bottom-left-radius: 5px;
+            }}
+
+            .mensaje-completo.bot {{
+                background: #DCF8C6;
+                margin-left: auto;
+                border-bottom-right-radius: 5px;
+            }}
+
+            .mensaje-completo .hora-completa {{
+                font-size: 0.75em;
+                color: #666;
+                position: absolute;
+                bottom: 5px;
+                right: 10px;
+            }}
+
+            .mensaje-completo.usuario .hora-completa {{
+                right: auto;
+                left: 10px;
+            }}
+
+            .fecha-separador {{
+                text-align: center;
+                margin: 15px 0;
+                color: #666;
+                font-size: 0.8em;
+                font-weight: bold;
+                border-bottom: 1px solid #ddd;
+                padding-bottom: 5px;
+            }}
         </style>
     </head>
     <body>
@@ -827,9 +912,25 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
             
             html += f"""
                     </div>
-                    <a href="/panel/conversations/{contacto['phone_number']}" class="ver-completo-btn" target="_blank">
+                    <button class="ver-completo-btn" onclick="cargarConversacionCompleta('{contacto['phone_number']}', {contacto['id']})">
                         📋 Ver conversación completa ({contacto['total_messages']} mensajes)
-                    </a>
+                    </button>
+
+                    <!-- Contenedor para conversación completa (oculto inicialmente) -->
+                    <div class="conversacion-completa" id="conversacion-completa-{contacto['id']}" style="display: none;">
+                        <div class="conversacion-completa-header">
+                            <h4>📋 Conversación completa ({contacto['phone_number']})</h4>
+                            <button class="btn-volver-preview" onclick="volverAVistaPrevia({contacto['id']})">
+                                ← Volver a vista previa
+                            </button>
+                        </div>
+                        <div class="conversacion-completa-mensajes" id="mensajes-completos-{contacto['id']}">
+                            <!-- Los mensajes se cargarán aquí dinámicamente -->
+                            <div style="text-align: center; padding: 20px; color: #666;">
+                                Cargando conversación completa...
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             """
@@ -966,6 +1067,103 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                     searchInput.focus();
                 }}
             }};
+
+                        // ========== FUNCIONES PARA CONVERSACIÓN COMPLETA ==========
+            async function cargarConversacionCompleta(phoneNumber, contactId) {{
+                const btn = document.getElementById(`btn-${{contactId}}`);
+                const preview = document.getElementById(`conversacion-${{contactId}}`);
+                const completaContainer = document.getElementById(`conversacion-completa-${{contactId}}`);
+                const mensajesContainer = document.getElementById(`mensajes-completos-${{contactId}}`);
+                
+                // Ocultar vista previa, mostrar contenedor completo
+                preview.style.display = 'none';
+                completaContainer.style.display = 'block';
+                
+                // Cambiar texto del botón
+                btn.textContent = '🔄 Cargando...';
+                btn.disabled = true;
+                btn.style.background = '#6c757d';
+                
+                try {{
+                    // Hacer petición para obtener conversación completa
+                    const response = await fetch(`/panel/conversations/json/${{phoneNumber}}`);
+                    const data = await response.json();
+                    
+                    // Mostrar mensajes
+                    mensajesContainer.innerHTML = '';
+                    
+                    let currentDate = null;
+                    data.conversacion.forEach(msg => {{
+                        // Agrupar por fecha
+                        const msgDate = msg.fecha;
+                        const hoy = new Date().toLocaleDateString('es-MX');
+                        const ayer = new Date(Date.now() - 86400000).toLocaleDateString('es-MX');
+                        
+                        if (msgDate !== currentDate) {{
+                            currentDate = msgDate;
+                            let fechaLabel = msgDate;
+                            if (msgDate === hoy) {{
+                                fechaLabel = 'HOY';
+                            }} else if (msgDate === ayer) {{
+                                fechaLabel = 'AYER';
+                            }}
+                            
+                            const separador = document.createElement('div');
+                            separador.className = 'fecha-separador';
+                            separador.textContent = `──── ${{fechaLabel}} ────`;
+                            mensajesContainer.appendChild(separador);
+                        }}
+                        
+                        // Crear elemento de mensaje
+                        const msgElement = document.createElement('div');
+                        msgElement.className = `mensaje-completo ${{msg.tipo}}`;
+                        msgElement.innerHTML = `
+                            <strong>${{msg.tipo.toUpperCase()}}:</strong> ${{msg.texto.replace(/\\n/g, '<br>')}}
+                            <span class="hora-completa">${{msg.hora}}</span>
+                        `;
+                        mensajesContainer.appendChild(msgElement);
+                    }});
+                    
+                    // Restaurar botón
+                    btn.textContent = '▲ Ocultar';
+                    btn.disabled = false;
+                    btn.style.background = '#128C7E';
+                    
+                    // Auto-scroll al final
+                    mensajesContainer.scrollTop = mensajesContainer.scrollHeight;
+                    
+                }} catch (error) {{
+                    console.error('Error cargando conversación:', error);
+                    mensajesContainer.innerHTML = `
+                        <div style="text-align: center; padding: 30px; color: #dc3545;">
+                            <h5>❌ Error cargando conversación</h5>
+                            <p>${{error.message}}</p>
+                            <button onclick="cargarConversacionCompleta('${{phoneNumber}}', ${{contactId}})" 
+                                    style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">
+                                Reintentar
+                            </button>
+                        </div>
+                    `;
+                    
+                    btn.textContent = '▼ Ver conversación';
+                    btn.disabled = false;
+                    btn.style.background = '#25D366';
+                }}
+            }}
+
+            function volverAVistaPrevia(contactId) {{
+                const btn = document.getElementById(`btn-${{contactId}}`);
+                const preview = document.getElementById(`conversacion-${{contactId}}`);
+                const completaContainer = document.getElementById(`conversacion-completa-${{contactId}}`);
+                
+                // Ocultar completa, mostrar preview
+                completaContainer.style.display = 'none';
+                preview.style.display = 'block';
+                
+                // Restaurar botón
+                btn.textContent = '▲ Ocultar';
+                btn.style.background = '#128C7E';
+            }}
         </script>
         
         <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px; border-top: 1px solid #ddd;">
@@ -1339,6 +1537,54 @@ async def debug_time():
         "offset_actual_horas": offset_horas,
         "es_horario_verano": es_horario_verano,
         "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
+    }
+
+@app.get("/panel/conversations/json/{phone_number}")
+async def get_conversation_json(
+    phone_number: str,
+    db: Session = Depends(get_db)
+):
+    """Devuelve conversación completa en formato JSON para AJAX"""
+    # Limpiar número
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+    
+    # Buscar contacto
+    contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
+    
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contacto no encontrado")
+    
+    # Obtener TODOS los mensajes ordenados
+    messages = db.query(Message).filter(Message.contact_id == contact.id)\
+        .order_by(Message.timestamp.asc())\
+        .all()
+    
+    # Formatear mensajes para JSON
+    conversation_json = []
+    for msg in messages:
+        # Usar tu función formatear_fecha_para_mensaje para la hora
+        hora_formateada = formatear_fecha_para_mensaje(msg.timestamp)
+        # Extraer solo la parte de la hora (sin "Hoy" o "Ayer")
+        hora_parte = hora_formateada.split(' ')[-1] if ' ' in hora_formateada else hora_formateada
+        
+        conversation_json.append({
+            "tipo": "usuario" if msg.direction == "incoming" else "bot",
+            "texto": msg.content,
+            "hora": hora_parte,  # Solo la hora (ej: "7:00 p.m.")
+            "fecha": msg.timestamp.strftime("%d/%m/%Y")  # Fecha formateada
+        })
+    
+    return {
+        "contacto": {
+            "telefono": contact.phone_number,
+            "estado": contact.status,
+            "total_mensajes": contact.total_messages,
+            "ultimo_contacto": contact.last_contact.strftime("%d/%m/%Y %H:%M")
+        },
+        "conversacion": conversation_json
     }
 
 # ================= INICIALIZACIÓN =================
