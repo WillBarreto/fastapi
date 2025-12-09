@@ -1038,7 +1038,8 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
             }}
             
             // ========== FUNCIONES PARA CONVERSACIÓN COMPLETA ==========
-            async function cargarConversacionCompleta(phoneNumber, contactId) {{
+                        // ========== FUNCIONES PARA CONVERSACIÓN COMPLETA ==========
+            async function cargarConversacionCompleta(phoneNumber, contactId) {
                 console.log('Cargando conversación para:', phoneNumber, 'ID:', contactId);
                 
                 const btn = document.getElementById('btn-' + contactId);
@@ -1055,7 +1056,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 btn.disabled = true;
                 btn.style.background = '#6c757d';
                 
-                try {{
+                try {
                     // URL del endpoint
                     const encodedPhone = encodeURIComponent(phoneNumber);
                     const url = '/conversations/json/' + encodedPhone;
@@ -1063,9 +1064,9 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                     
                     const response = await fetch(url);
                     
-                    if (!response.ok) {{
-                        throw new Error(`Error HTTP: ${{response.status}} - ${{response.statusText}}`);
-                    }}
+                    if (!response.ok) {
+                        throw new Error('Error HTTP: ' + response.status + ' - ' + response.statusText);
+                    }
                     
                     const data = await response.json();
                     console.log('Datos recibidos:', data);
@@ -1074,37 +1075,37 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                     mensajesContainer.innerHTML = '';
                     
                     let currentDate = null;
-                    data.conversacion.forEach(msg => {{
+                    data.conversacion.forEach(msg => {
                         // Agrupar por fecha
                         const msgDate = msg.fecha;
                         
-                        if (msgDate !== currentDate) {{
+                        if (msgDate !== currentDate) {
                             currentDate = msgDate;
                             const hoy = new Date().toLocaleDateString('es-MX');
                             const ayer = new Date(Date.now() - 86400000).toLocaleDateString('es-MX');
                             
                             let fechaLabel = msgDate;
-                            if (msgDate === hoy) {{
+                            if (msgDate === hoy) {
                                 fechaLabel = 'HOY';
-                            }} else if (msgDate === ayer) {{
+                            } else if (msgDate === ayer) {
                                 fechaLabel = 'AYER';
-                            }}
+                            }
                             
                             const separador = document.createElement('div');
                             separador.className = 'fecha-separador';
                             separador.textContent = '──── ' + fechaLabel + ' ────';
                             mensajesContainer.appendChild(separador);
-                        }}
+                        }
                         
                         // Crear elemento de mensaje
                         const msgElement = document.createElement('div');
                         msgElement.className = 'mensaje-completo ' + msg.tipo;
                         msgElement.innerHTML = 
                             '<strong>' + msg.tipo.toUpperCase() + ':</strong> ' + 
-                            msg.texto.replace(/\\n/g, '<br>') +
+                            msg.texto.replace(/\n/g, '<br>') +
                             '<span class="hora-completa">' + msg.hora + '</span>';
                         mensajesContainer.appendChild(msgElement);
-                    }});
+                    });
                     
                     // Restaurar botón
                     btn.textContent = '▲ Ocultar';
@@ -1112,19 +1113,19 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                     btn.style.background = '#128C7E';
                     
                     // Auto-scroll al final
-                    setTimeout(() => {{
+                    setTimeout(() => {
                         mensajesContainer.scrollTop = mensajesContainer.scrollHeight;
-                    }}, 100);
+                    }, 100);
                     
-                }} catch (error) {{
+                } catch (error) {
                     console.error('Error cargando conversación:', error);
                     mensajesContainer.innerHTML = 
                         '<div style="text-align: center; padding: 30px; color: #dc3545;">' +
                         '<h5>❌ Error cargando conversación</h5>' +
                         '<p>' + error.message + '</p>' +
                         '<p style="font-size: 0.8em; margin-top: 10px;">Número: ' + phoneNumber + '</p>' +
-                        '<p style="font-size: 0.8em;">URL: /panel/conversations/json/' + encodeURIComponent(phoneNumber) + '</p>' +
-                        '<button onclick="cargarConversacionCompleta(\\'' + phoneNumber + '\\', ' + contactId + ')" ' +
+                        '<p style="font-size: 0.8em;">URL: /conversations/json/' + encodeURIComponent(phoneNumber) + '</p>' +
+                        '<button onclick="cargarConversacionCompleta(\'' + phoneNumber + '\', ' + contactId + ')" ' +
                         'style="background: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; margin-top: 10px;">' +
                         'Reintentar' +
                         '</button>' +
@@ -1133,8 +1134,8 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                     btn.textContent = '▼ Ver conversación';
                     btn.disabled = false;
                     btn.style.background = '#25D366';
-                }}
-            }}
+                }
+            }
             
             function volverAVistaPrevia(contactId) {{
                 const btn = document.getElementById('btn-' + contactId);
