@@ -2,6 +2,14 @@ import os
 import requests
 import json
 
+
+import sys
+
+# Forzar output inmediato
+print("=" * 60, file=sys.stderr)
+print("🎯 TEST OPENROUTER - INICIANDO", file=sys.stderr)
+print("=" * 60, file=sys.stderr, flush=True)
+
 # ======= CONFIGURACIÓN ========
 OPENROUTER_API_KEY = "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"  # REEMPLAZA con tu API Key completa
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
