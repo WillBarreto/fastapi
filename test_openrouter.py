@@ -11,7 +11,7 @@ print("🎯 TEST OPENROUTER - INICIANDO", file=sys.stderr)
 print("=" * 60, file=sys.stderr, flush=True)
 
 # ======= CONFIGURACIÓN ========
-OPENROUTER_API_KEY = "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"  # REEMPLAZA con tu API Key completa
+OPENROUTER_API_KEY = "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"  # REEMPLAZA con tu API Key completa
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 def test_openrouter():
