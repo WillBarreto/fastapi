@@ -8,6 +8,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
+import requests
+import json
 
 def formatear_fecha_para_mensaje(dt: datetime) -> str:
     """Formatea fecha para mostrar en mensajes - USANDO ZONA HORARIA MÉXICO"""
