@@ -172,6 +172,11 @@ Información clave:
 Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar una cita.'
 """
 
+# Configuración de OpenRouter
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-7b-it:free")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
 # ================= FUNCIONES DE BASE DE DATOS =================
 def get_or_create_contact(db: Session, phone_number: str):
     """Obtiene o crea un contacto en la base de datos"""
@@ -265,16 +270,21 @@ async def health_check(db: Session = Depends(get_db)):
         total_contacts = 0
         total_messages = 0
     
+    # Verificar OpenRouter
+    openrouter_status = "✅ Configurado" if OPENROUTER_API_KEY else "❌ No configurado"
+    
     return {
         "status": "healthy",
         "database": db_status,
+        "openrouter": openrouter_status,
+        "openrouter_model": OPENROUTER_MODEL if OPENROUTER_API_KEY else "No configurado",
         "statistics": {
             "total_contacts": total_contacts,
             "total_messages": total_messages
         },
         "twilio_configured": bool(os.getenv("TWILIO_API_KEY"))
     }
-
+    
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
@@ -297,10 +307,11 @@ async def whatsapp_webhook(
         save_message(db, contact.id, 'incoming', Body)
         
         # ================= OBTENER HISTORIAL =================
-        # (Para uso futuro en respuestas contextuales)
         history = get_conversation_history(db, From, limit=5)
         
-        # ================= GENERAR RESPUESTA =================
+        # ================= GENERAR RESPUESTA CON OPENROUTER =================
+        print(f"🧠 Usando OpenRouter: {bool(OPENROUTER_API_KEY)}")
+        print(f"📊 Historial disponible: {len(history)} mensajes")
         respuesta = generar_respuesta_inteligente(Body, contact, history)
         
         # ================= ENVIAR RESPUESTA =================
@@ -316,6 +327,7 @@ async def whatsapp_webhook(
         
         # ================= LOG DE RESPUESTA =================
         print(f"🤖 BOT: {respuesta}")
+        print(f"🤖 Motor: {'OpenRouter' if OPENROUTER_API_KEY else 'Predeterminado'}")
         print(f"📤 Estado: {resultado}")
         print(f"👤 Estado contacto: {contact.status}")
         print(f"📊 Total mensajes: {contact.total_messages}")
@@ -327,8 +339,96 @@ async def whatsapp_webhook(
         print(f"❌ Error en webhook: {e}")
         return {"status": "error", "detail": str(e)}
 
-def generar_respuesta_inteligente(mensaje: str, contact, history):
-    """Genera respuesta basada en mensaje, contacto e historial"""
+
+def generar_respuesta_openrouter(mensaje_usuario: str, contact, history) -> str:
+    """Genera respuesta usando OpenRouter API"""
+    
+    if not OPENROUTER_API_KEY:
+        print("⚠️  OpenRouter API Key no configurada, usando respuestas predeterminadas")
+        return generar_respuesta_predeterminada(mensaje_usuario, contact)
+    
+    # Construir el contexto del historial
+    historial_contexto = ""
+    if history:
+        historial_contexto = "Historial reciente:\n"
+        for msg in history[-5:]:  # Últimos 5 mensajes como contexto
+            if msg.direction == "incoming":
+                historial_contexto += f"Usuario: {msg.content}\n"
+            else:
+                historial_contexto += f"Asistente: {msg.content}\n"
+    
+    # Construir el prompt
+    prompt = f"""
+Eres el asistente virtual del Colegio. Tu nombre es "Colegio Bot".
+
+INFORMACIÓN DEL COLEGIO (NO INVENTES NADA MÁS):
+- Horarios: Lunes a Viernes 7:00 am a 3:00 pm
+- Ubicación: [DIRECCIÓN COMPLETA AQUÍ]
+- Servicios: Primaria y Secundaria
+- Costo inscripción: $5,000 MXN
+- Agendar visita: https://calendly.com/tu-colegio
+
+CONTEXTO DEL CONTACTO:
+- Estado: {contact.status}
+- Total mensajes previos: {contact.total_messages}
+
+{historial_contexto}
+
+Mensaje actual del usuario: "{mensaje_usuario}"
+
+INSTRUCCIONES:
+1. Responde solo con la información del colegio proporcionada
+2. Mantén un tono amable y profesional
+3. Sé conciso (máximo 2 oraciones)
+4. Si el usuario pregunta algo fuera de la información proporcionada, invítale a agendar una cita
+5. NO inventes información sobre horarios, precios o servicios no mencionados
+6. Si es un saludo inicial, preséntate brevemente
+
+Respuesta:
+"""
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://colegio-whatsapp.railway.app",  # Cambia esto por tu URL
+            "X-Title": "Colegio WhatsApp Bot"
+        }
+        
+        payload = {
+            "model": OPENROUTER_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Eres un asistente virtual especializado en atención a prospectos de un colegio. Proporciona información precisa y amable basada únicamente en los datos proporcionados."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "max_tokens": 150,
+            "temperature": 0.7
+        }
+        
+        response = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            respuesta = data["choices"][0]["message"]["content"].strip()
+            print(f"🤖 OpenRouter respuesta: {respuesta[:100]}...")
+            return respuesta
+        else:
+            print(f"❌ Error OpenRouter API: {response.status_code} - {response.text}")
+            return generar_respuesta_predeterminada(mensaje_usuario, contact)
+            
+    except Exception as e:
+        print(f"❌ Excepción en OpenRouter: {e}")
+        return generar_respuesta_predeterminada(mensaje_usuario, contact)
+
+
+def generar_respuesta_predeterminada(mensaje: str, contact) -> str:
+    """Respuestas predeterminadas como fallback"""
     mensaje = mensaje.lower().strip()
     
     # Si es un contacto con historial, personalizar respuesta
@@ -364,6 +464,11 @@ def generar_respuesta_inteligente(mensaje: str, contact, history):
     # Respuesta por defecto
     return "¡Hola! Soy el asistente del Colegio. Puedo ayudarte con:\n• Horarios\n• Ubicación\n• Costos\n• Agendar visitas\n\n¿En qué necesitas información?"
 
+
+def generar_respuesta_inteligente(mensaje: str, contact, history):
+    """Función principal que decide qué motor de respuesta usar"""
+    # Siempre usar OpenRouter si está configurado
+    return generar_respuesta_openrouter(mensaje, contact, history)
 def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     """Envía mensaje de vuelta via Twilio API usando API Key"""
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
@@ -1404,6 +1509,31 @@ async def debug_time():
         "offset_actual_horas": offset_horas,
         "es_horario_verano": es_horario_verano,
         "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
+    }
+
+@app.get("/test-openrouter")
+async def test_openrouter(message: str = "Hola, ¿cuáles son los horarios?"):
+    """Endpoint para probar OpenRouter sin usar WhatsApp"""
+    
+    if not OPENROUTER_API_KEY:
+        return {"error": "OpenRouter API Key no configurada"}
+    
+    # Crear un contacto de prueba
+    class ContactoPrueba:
+        def __init__(self):
+            self.status = "PROSPECTO_NUEVO"
+            self.total_messages = 1
+    
+    contacto_prueba = ContactoPrueba()
+    historial_prueba = []
+    
+    respuesta = generar_respuesta_openrouter(message, contacto_prueba, historial_prueba)
+    
+    return {
+        "mensaje_usuario": message,
+        "respuesta_openrouter": respuesta,
+        "modelo": OPENROUTER_MODEL,
+        "api_key_configurada": bool(OPENROUTER_API_KEY)
     }
 
 # ================= INICIALIZACIÓN =================
