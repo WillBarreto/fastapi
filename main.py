@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from pydantic import BaseModel
 import os
+import google.generativeai as genai
 from twilio.rest import Client
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Enum, Boolean, ForeignKey, text
@@ -172,10 +173,12 @@ Información clave:
 Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar una cita.'
 """
 
-# Configuración de OpenRouter
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-7b-it:free")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Configuración de Gemini
+GEMINI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+# Configurar la API de Gemini
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # ================= FUNCIONES DE BASE DE DATOS =================
 def get_or_create_contact(db: Session, phone_number: str):
