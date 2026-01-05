@@ -354,11 +354,11 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
     historial_contexto = ""
     if history:
         historial_contexto = "Historial reciente:\n"
-        for msg in history[-5:]:  # Últimos 5 mensajes como contexto
-            if msg.direction == "incoming":
-                historial_contexto += f"Usuario: {msg.content}\n"
-            else:
-                historial_contexto += f"Asistente: {msg.content}\n"
+        # Usar slicing en lugar de copiar la lista
+        start_idx = max(0, len(history) - 5)
+        for msg in history[start_idx:]:
+            prefix = "Usuario" if msg.direction == "incoming" else "Asistente"
+            historial_contexto += f"{prefix}: {msg.content[:200]}...\n" if len(msg.content) > 200 else f"{prefix}: {msg.content}\n"
     
     # Construir el prompt (mismo que antes, solo cambia el motor)
     prompt = f"""
@@ -1472,7 +1472,6 @@ async def search_contacts(
 @app.get("/debug/time")
 async def debug_time():
     """Endpoint para depurar problemas de zona horaria"""
-    from datetime import datetime
     
     now_utc = datetime.utcnow()
     now_local = datetime.now()
