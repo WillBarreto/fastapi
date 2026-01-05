@@ -20,5 +20,6 @@ COPY . .
 # Puerto que usará la aplicación
 EXPOSE 8080
 
-# Comando para ejecutar la aplicación (CORREGIDO)
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+# Comando para ejecutar la aplicación - FORMA CORRECTA PARA RAILWAY
+# Usamos sh -c para expandir la variable de entorno
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
