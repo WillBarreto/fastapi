@@ -273,14 +273,14 @@ async def health_check(db: Session = Depends(get_db)):
         total_contacts = 0
         total_messages = 0
     
-    # Verificar OpenRouter
-    openrouter_status = "✅ Configurado" if OPENROUTER_API_KEY else "❌ No configurado"
+    # Verificar Gemini
+    gemini_status = "✅ Configurado" if GEMINI_API_KEY else "❌ No configurado"
     
     return {
         "status": "healthy",
         "database": db_status,
-        "openrouter": openrouter_status,
-        "openrouter_model": OPENROUTER_MODEL if OPENROUTER_API_KEY else "No configurado",
+        "gemini": gemini_status,
+        "gemini_model": GEMINI_MODEL if GEMINI_API_KEY else "No configurado",
         "statistics": {
             "total_contacts": total_contacts,
             "total_messages": total_messages
@@ -1496,12 +1496,12 @@ async def debug_time():
         "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
     }
 
-@app.get("/test-openrouter")
-async def test_openrouter(message: str = "Hola, ¿cuáles son los horarios?"):
-    """Endpoint para probar OpenRouter sin usar WhatsApp"""
+@app.get("/test-gemini")
+async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
+    """Endpoint para probar Gemini sin usar WhatsApp"""
     
-    if not OPENROUTER_API_KEY:
-        return {"error": "OpenRouter API Key no configurada"}
+    if not GEMINI_API_KEY:
+        return {"error": "Gemini API Key no configurada"}
     
     # Crear un contacto de prueba
     class ContactoPrueba:
@@ -1512,13 +1512,13 @@ async def test_openrouter(message: str = "Hola, ¿cuáles son los horarios?"):
     contacto_prueba = ContactoPrueba()
     historial_prueba = []
     
-    respuesta = generar_respuesta_openrouter(message, contacto_prueba, historial_prueba)
+    respuesta = generar_respuesta_gemini(message, contacto_prueba, historial_prueba)
     
     return {
         "mensaje_usuario": message,
-        "respuesta_openrouter": respuesta,
-        "modelo": OPENROUTER_MODEL,
-        "api_key_configurada": bool(OPENROUTER_API_KEY)
+        "respuesta_gemini": respuesta,
+        "modelo": GEMINI_MODEL,
+        "api_key_configurada": bool(GEMINI_API_KEY)
     }
 
 # ================= INICIALIZACIÓN =================
