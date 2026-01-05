@@ -312,8 +312,8 @@ async def whatsapp_webhook(
         # ================= OBTENER HISTORIAL =================
         history = get_conversation_history(db, From, limit=5)
         
-        # ================= GENERAR RESPUESTA CON OPENROUTER =================
-        print(f"🧠 Usando OpenRouter: {bool(OPENROUTER_API_KEY)}")
+        # ================= GENERAR RESPUESTA CON GEMINI =================
+        print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
         print(f"📊 Historial disponible: {len(history)} mensajes")
         respuesta = generar_respuesta_inteligente(Body, contact, history)
         
@@ -330,7 +330,7 @@ async def whatsapp_webhook(
         
         # ================= LOG DE RESPUESTA =================
         print(f"🤖 BOT: {respuesta}")
-        print(f"🤖 Motor: {'OpenRouter' if OPENROUTER_API_KEY else 'Predeterminado'}")
+        print(f"🤖 Motor: {'Gemini' if GEMINI_API_KEY else 'Predeterminado'}")
         print(f"📤 Estado: {resultado}")
         print(f"👤 Estado contacto: {contact.status}")
         print(f"📊 Total mensajes: {contact.total_messages}")
@@ -451,8 +451,9 @@ def generar_respuesta_predeterminada(mensaje: str, contact) -> str:
 
 def generar_respuesta_inteligente(mensaje: str, contact, history):
     """Función principal que decide qué motor de respuesta usar"""
-    # Siempre usar OpenRouter si está configurado
-    return generar_respuesta_openrouter(mensaje, contact, history)
+    # Usar Gemini si está configurado, sino usar respuestas predeterminadas
+    return generar_respuesta_gemini(mensaje, contact, history)
+    
 def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     """Envía mensaje de vuelta via Twilio API usando API Key"""
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
