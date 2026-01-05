@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements primero para cache
+# Copiar requirements primero para cache de dependencias
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar el resto de la aplicación
 COPY . .
 
-# Puerto
+# Puerto que usará la aplicación
 EXPOSE 8080
 
-# Comando para ejecutar
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Comando para ejecutar la aplicación (CORREGIDO)
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
