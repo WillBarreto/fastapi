@@ -343,11 +343,11 @@ async def whatsapp_webhook(
         return {"status": "error", "detail": str(e)}
 
 
-def generar_respuesta_openrouter(mensaje_usuario: str, contact, history) -> str:
-    """Genera respuesta usando OpenRouter API"""
+def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
+    """Genera respuesta usando Gemini API"""
     
-    if not OPENROUTER_API_KEY:
-        print("⚠️  OpenRouter API Key no configurada, usando respuestas predeterminadas")
+    if not GEMINI_API_KEY:
+        print("⚠️  Gemini API Key no configurada, usando respuestas predeterminadas")
         return generar_respuesta_predeterminada(mensaje_usuario, contact)
     
     # Construir el contexto del historial
@@ -360,7 +360,7 @@ def generar_respuesta_openrouter(mensaje_usuario: str, contact, history) -> str:
             else:
                 historial_contexto += f"Asistente: {msg.content}\n"
     
-    # Construir el prompt
+    # Construir el prompt (mismo que antes, solo cambia el motor)
     prompt = f"""
 Eres el asistente virtual del Colegio. Tu nombre es "Colegio Bot".
 
@@ -391,44 +391,25 @@ Respuesta:
 """
     
     try:
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://colegio-whatsapp.railway.app",  # Cambia esto por tu URL
-            "X-Title": "Colegio WhatsApp Bot"
-        }
+        # Inicializar el modelo de Gemini
+        model = genai.GenerativeModel(GEMINI_MODEL)
         
-        payload = {
-            "model": OPENROUTER_MODEL,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Eres un asistente virtual especializado en atención a prospectos de un colegio. Proporciona información precisa y amable basada únicamente en los datos proporcionados."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "max_tokens": 150,
-            "temperature": 0.7
-        }
+        # Generar respuesta
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=150,
+                temperature=0.7
+            )
+        )
         
-        response = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=10)
+        respuesta = response.text.strip()
+        print(f"🤖 Gemini respuesta: {respuesta[:100]}...")
+        return respuesta
         
-        if response.status_code == 200:
-            data = response.json()
-            respuesta = data["choices"][0]["message"]["content"].strip()
-            print(f"🤖 OpenRouter respuesta: {respuesta[:100]}...")
-            return respuesta
-        else:
-            print(f"❌ Error OpenRouter API: {response.status_code} - {response.text}")
-            return generar_respuesta_predeterminada(mensaje_usuario, contact)
-            
     except Exception as e:
-        print(f"❌ Excepción en OpenRouter: {e}")
+        print(f"❌ Excepción en Gemini: {e}")
         return generar_respuesta_predeterminada(mensaje_usuario, contact)
-
 
 def generar_respuesta_predeterminada(mensaje: str, contact) -> str:
     """Respuestas predeterminadas como fallback"""
