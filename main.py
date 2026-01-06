@@ -801,4 +801,393 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
     return HTMLResponse(content=html)
 
 @app.get("/panel/conversations/{phone_number}")
-async def view_full_convers
+async def view_full_conversation(
+    phone_number: str,
+    db: Session = Depends(get_db)
+):
+    """Vista completa de conversación con diseño tipo WhatsApp"""
+    from fastapi.responses import HTMLResponse  # Import local por si acaso
+    
+    # Limpiar número
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+    
+    # Buscar contacto
+    contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
+    
+    if not contact:
+        return HTMLResponse(f"""
+            <html>
+                <body style="font-family: Arial; padding: 20px;">
+                    <h2>Contacto no encontrado</h2>
+                    <a href="/panel">← Volver al panel</a>
+                </body>
+            </html>
+        """, status_code=404)
+    
+    # Obtener TODOS los mensajes ordenados
+    messages = db.query(Message).filter(Message.contact_id == contact.id)\
+        .order_by(Message.timestamp.asc())\
+        .all()
+    
+    # Generar HTML
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Conversación con {contact.phone_number}</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: #f0f2f5;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }}
+            
+            /* HEADER SIMPLE */
+            .header {{
+                background: #25D366;
+                color: white;
+                padding: 15px 20px;
+                display: flex;
+                align-items: center;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            }}
+            
+            .back-btn {{
+                background: rgba(255,255,255,0.2);
+                border: none;
+                color: white;
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                font-size: 20px;
+                margin-right: 15px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            
+            .back-btn:hover {{
+                background: rgba(255,255,255,0.3);
+            }}
+            
+            .contact-info {{
+                flex: 1;
+            }}
+            
+            .contact-name {{
+                font-weight: 600;
+                font-size: 1.2em;
+            }}
+            
+            .contact-meta {{
+                font-size: 0.9em;
+                opacity: 0.9;
+                margin-top: 3px;
+            }}
+            
+            /* CONTENEDOR DE MENSAJES */
+            .messages-container {{
+                flex: 1;
+                overflow-y: auto;
+                padding: 20px;
+                background: #efeae2;
+                background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%239C9286' fill-opacity='0.1' fill-rule='evenodd'/%3E%3C/svg%3E");
+            }}
+            
+            /* MENSAJES */
+            .message {{
+                margin: 10px 0;
+                display: flex;
+                flex-direction: column;
+                max-width: 70%;
+            }}
+            
+            .message.usuario {{
+                align-items: flex-start;
+            }}
+            
+            .message.bot {{
+                align-items: flex-end;
+                margin-left: auto;
+            }}
+            
+            .message-content {{
+                padding: 10px 15px;
+                border-radius: 18px;
+                position: relative;
+                word-wrap: break-word;
+                line-height: 1.4;
+                font-size: 0.95em;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            }}
+            
+            .message.usuario .message-content {{
+                background: white;
+                color: #333;
+                border-bottom-left-radius: 5px;
+            }}
+            
+            .message.bot .message-content {{
+                background: #DCF8C6;
+                color: #333;
+                border-bottom-right-radius: 5px;
+            }}
+            
+            .message-time {{
+                font-size: 0.75em;
+                color: #666;
+                margin-top: 5px;
+                padding: 0 5px;
+            }}
+            
+            .message-sender {{
+                font-size: 0.8em;
+                font-weight: 600;
+                margin-bottom: 4px;
+                padding: 0 5px;
+            }}
+            
+            .message.usuario .message-sender {{
+                color: #25D366;
+            }}
+            
+            .message.bot .message-sender {{
+                color: #128C7E;
+            }}
+            
+            /* DÍA SEPARADOR */
+            .day-separator {{
+                text-align: center;
+                margin: 20px 0;
+            }}
+            
+            .day-label {{
+                background: rgba(0,0,0,0.1);
+                color: #666;
+                display: inline-block;
+                padding: 5px 15px;
+                border-radius: 15px;
+                font-size: 0.8em;
+            }}
+            
+            /* FOOTER */
+            .footer {{
+                background: white;
+                padding: 15px 20px;
+                text-align: center;
+                border-top: 1px solid #ddd;
+                box-shadow: 0 -2px 5px rgba(0,0,0,0.05);
+            }}
+            
+            .footer-link {{
+                color: #25D366;
+                text-decoration: none;
+                font-weight: 500;
+                margin: 0 10px;
+            }}
+            
+            .footer-link:hover {{
+                text-decoration: underline;
+            }}
+            
+            /* SCROLLBAR */
+            ::-webkit-scrollbar {{
+                width: 8px;
+            }}
+            
+            ::-webkit-scrollbar-track {{
+                background: transparent;
+            }}
+            
+            ::-webkit-scrollbar-thumb {{
+                background: #ccc;
+                border-radius: 4px;
+            }}
+            
+            ::-webkit-scrollbar-thumb:hover {{
+                background: #aaa;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <button class="back-btn" onclick="window.location.href='/panel'">←</button>
+            <div class="contact-info">
+                <div class="contact-name">📱 {contact.phone_number}</div>
+                <div class="contact-meta">
+                    {contact.total_messages} mensajes • Último contacto: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}
+                    <span style="background: #FFEAA7; color: #E17055; padding: 2px 10px; border-radius: 10px; font-size: 0.8em; margin-left: 10px;">{contact.status}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="messages-container" id="messagesContainer">
+    """
+    
+    # Agrupar mensajes por fecha
+    current_date = None
+    for msg in messages:
+        msg_date = msg.timestamp.strftime("%d/%m/%Y")
+        msg_time = formatear_fecha_para_mensaje(msg.timestamp)
+        msg_type = "usuario" if msg.direction == "incoming" else "bot"
+        sender = "Usuario" if msg.direction == "incoming" else "Colegio Bot"
+        
+        # Agregar separador por día
+        if msg_date != current_date:
+            current_date = msg_date
+            today = datetime.now().strftime("%d/%m/%Y")
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+            
+            if msg_date == today:
+                day_label = "HOY"
+            elif msg_date == yesterday:
+                day_label = "AYER"
+            else:
+                # Formato: "Viernes 8 de diciembre"
+                dias_semana = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+                meses = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+                         "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    
+                dt = msg.timestamp
+                day_label = f"{dias_semana[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
+            
+            html_content += f"""
+                <div class="day-separator">
+                    <span class="day-label">{day_label}</span>
+                </div>
+            """
+        
+        # Mostrar mensaje
+        html_content += f"""
+            <div class="message {msg_type}">
+                <div class="message-sender">{sender}</div>
+                <div class="message-content">
+                    {msg.content.replace('\n', '<br>')}
+                </div>
+                <div class="message-time">{msg_time}</div>
+            </div>
+        """
+    
+    html_content += """
+        </div>
+        
+        <div class="footer">
+            <a href="/panel" class="footer-link">← Volver al Panel</a>
+            <span style="color: #ccc;">•</span>
+            <a href="/contacts" class="footer-link">Ver Todos los Contactos</a>
+            <span style="color: #ccc;">•</span>
+            <a href="/" class="footer-link">Inicio</a>
+        </div>
+        
+        <script>
+            // Auto-scroll al final
+            window.onload = function() {
+                const container = document.getElementById('messagesContainer');
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            };
+            
+            // Hotkey ESC para volver
+            document.onkeydown = function(e) {
+                if (e.key === 'Escape') {
+                    window.location.href = '/panel';
+                }
+            };
+        </script>
+    </body>
+    </html>
+    """
+    
+    return HTMLResponse(content=html_content)
+
+# ================= ENDPOINTS ADICIONALES =================
+@app.get("/panel/search")
+async def search_contacts(
+    query: str,
+    db: Session = Depends(get_db),
+    limit: int = 20
+):
+    """Buscar contactos por número telefónico"""
+    contacts = db.query(Contact).filter(
+        Contact.phone_number.contains(query)
+    ).order_by(Contact.last_contact.desc()).limit(limit).all()
+    
+    return {"results": [
+        {
+            "id": c.id,
+            "phone_number": c.phone_number,
+            "status": c.status,
+            "last_contact": c.last_contact.strftime('%d/%m/%Y %H:%M'),
+            "total_messages": c.total_messages
+        }
+        for c in contacts
+    ]}
+
+@app.get("/debug/time")
+async def debug_time():
+    """Endpoint para depurar problemas de zona horaria"""
+    now_utc = datetime.utcnow()
+    now_local = datetime.now()
+    
+    # Ejemplo con una hora específica (01:00 UTC)
+    ejemplo_utc = datetime(2025, 12, 9, 1, 0, 0)  # 01:00 UTC
+    ejemplo_local = ejemplo_utc
+    
+    # Aplicar offset manual para México
+    es_horario_verano = 4 <= now_local.month <= 10
+    offset_horas = -5 if es_horario_verano else -6
+    ejemplo_mexico = ejemplo_utc + timedelta(hours=offset_horas)
+    
+    return {
+        "utc_now": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
+        "local_now": now_local.strftime("%Y-%m-%d %H:%M:%S"),
+        "ejemplo_01_utc": ejemplo_utc.strftime("%H:%M"),
+        "ejemplo_01_mexico": ejemplo_mexico.strftime("%H:%M %p"),
+        "offset_actual_horas": offset_horas,
+        "es_horario_verano": es_horario_verano,
+        "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
+    }
+
+@app.get("/test-gemini")
+async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
+    """Endpoint para probar Gemini sin usar WhatsApp"""
+    if not GEMINI_API_KEY:
+        return {"error": "Gemini API Key no configurada"}
+    
+    # Crear un contacto de prueba
+    class ContactoPrueba:
+        def __init__(self):
+            self.status = "PROSPECTO_NUEVO"
+            self.total_messages = 1
+    
+    contacto_prueba = ContactoPrueba()
+    historial_prueba = []
+    
+    respuesta = generar_respuesta_gemini(message, contacto_prueba, historial_prueba)
+    
+    return {
+        "mensaje_usuario": message,
+        "respuesta_gemini": respuesta,
+        "modelo": GEMINI_MODEL,
+        "api_key_configurada": bool(GEMINI_API_KEY)
+    }
+
+# ================= INICIALIZACIÓN =================
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    
+    # Obtener puerto de variable de entorno o usar 8080 por defecto
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
