@@ -726,33 +726,38 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 <p>Los contactos aparecerán aquí cuando interactúen con el bot de WhatsApp.</p>
             </div>
         '''
-    
-    html += '''
-        </div>
         
-        <!-- PAGINACIÓN - Versión segura sin problemas de escape -->
-    '''
-    
-    # Botón anterior - versión segura
-    if has_prev:
-        prev_page = page - 1
-        html += f'<a href="/panel?page={prev_page}&limit={limit}" class="page-btn">← Anterior</a>'
-    else:
-        html += '<span class="page-btn disabled">← Anterior</span>'
-    
-    # Indicador de página
-    html += f'<span style="padding: 10px 20px; color: #666;">Página {page}</span>'
-    
-    # Botón siguiente - versión segura
-    if has_next:
-        next_page = page + 1
-        html += f'<a href="/panel?page={next_page}&limit={limit}" class="page-btn">Siguiente →</a>'
-    else:
-        html += '<span class="page-btn disabled">Siguiente →</span>'
-    
-    html += f'''
-        </div>
+            html += '''
+            </div>
+            
+            <!-- PAGINACIÓN - Versión completamente segura -->
+        '''
         
+        # PAGINACIÓN - Versión completamente segura
+        pagination_html = '<div style="text-align: center; margin: 20px 0;">'
+        
+        # Botón anterior
+        if has_prev:
+            prev_page = page - 1
+            pagination_html += f'<a href="/panel?page={prev_page}&limit={limit}" class="page-btn">← Anterior</a>'
+        else:
+            pagination_html += '<span class="page-btn disabled">← Anterior</span>'
+        
+        # Indicador de página
+        pagination_html += f'<span style="padding: 10px 20px; color: #666;">Página {page}</span>'
+        
+        # Botón siguiente (SIN flecha problemática)
+        if has_next:
+            next_page = page + 1
+            pagination_html += f'<a href="/panel?page={next_page}&limit={limit}" class="page-btn">Siguiente</a>'
+        else:
+            pagination_html += '<span class="page-btn disabled">Siguiente</span>'
+        
+        pagination_html += '</div>'
+        html += pagination_html
+        
+        html += f'''
+            </div>        
         <div style="text-align: center; margin-top: 30px; color: #666; padding: 20px; font-size: 0.9em;">
             <p>Mostrando {len(contacts_with_messages)} de {total_contacts} contactos • Página {page}</p>
             <p>💡 <strong>Tip:</strong> Usa el buscador arriba para encontrar contactos específicos</p>
