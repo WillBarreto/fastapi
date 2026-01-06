@@ -594,7 +594,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 "tipo": "usuario" if msg.direction == "incoming" else "bot",
                 "texto": msg.content[:100] + "..." if len(msg.content) > 100 else msg.content,
                 "hora": formatear_fecha_para_mensaje(msg.timestamp),
-                "completo": msg.content  # Guardamos el mensaje completo
+                "completo": msg.content
             })
         
         contacts_with_messages.append({
@@ -612,7 +612,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
     has_next = (offset + limit) < total_contacts
     has_prev = page > 1
     
-    # Generar HTML con conversaciones integradas - VERSIÓN SIMPLIFICADA
+    # Generar HTML - VERSIÓN CORREGIDA Y SIMPLIFICADA
     html = f'''
     <!DOCTYPE html>
     <html>
@@ -621,17 +621,27 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            /* Tu CSS aquí (sin cambios) */
+            body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }}
+            .header {{ background: #25D366; color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
+            .stats {{ display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; }}
+            .stat-card {{ background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); flex: 1; min-width: 200px; }}
+            .contact-list {{ background: white; padding: 20px; border-radius: 8px; }}
+            .contact-item {{ border: 1px solid #ddd; margin-bottom: 15px; padding: 15px; border-radius: 8px; }}
+            .message {{ padding: 10px; margin: 5px 0; border-radius: 5px; }}
+            .usuario {{ background: #e3f2fd; text-align: left; }}
+            .bot {{ background: #e8f5e9; text-align: right; }}
+            .page-btn {{ padding: 10px 20px; margin: 0 10px; background: #25D366; color: white; border: none; border-radius: 5px; text-decoration: none; }}
+            .page-btn.disabled {{ background: #ccc; }}
         </style>
     </head>
     <body>
         <div class="header">
             <h1>📱 CRM WhatsApp Cole - Colegio</h1>
             <p>Gestión de prospectos, alumnos y competencia</p>
-            <div class="header-links">
-                <a href="/panel?page=1">🏠 Panel</a>
-                <a href="/contacts">📋 Contactos</a>
-                <a href="/health">🩺 Health</a>
+            <div style="margin-top: 10px;">
+                <a href="/panel?page=1" style="color: white; margin-right: 15px;">🏠 Panel</a>
+                <a href="/contacts" style="color: white; margin-right: 15px;">📋 Contactos</a>
+                <a href="/health" style="color: white;">🩺 Health</a>
             </div>
         </div>
         
@@ -642,224 +652,75 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
             </div>
     '''
     
-    # Agregar estadísticas por estado (sin f-strings problemáticas)
     for status, count in by_status:
         status_display = status.replace("_", " ").title()
         html += f'''
             <div class="stat-card">
                 <h3>📊 {status_display}</h3>
                 <p>{count}</p>
-                <span class="contact-status status-{status}">{status}</span>
             </div>
         '''
     
     html += '''
         </div>
         
-        <div class="search-box">
-            <input type="text" 
-                   class="search-input" 
-                   placeholder="🔍 Buscar contacto..." 
-                   id="searchInput"
-                   onkeyup="filtrarContactos()">
-        </div>
-        
         <div class="contact-list">
             <h2>🕐 Contactos Recientes</h2>
-            <p style="color: #666; margin-bottom: 20px;">Click en cada contacto para ver conversación reciente</p>
+            <p style="color: #666; margin-bottom: 20px;">Página ''' + str(page) + ''' de ''' + str((total_contacts + limit - 1) // limit) + '''</p>
     '''
     
     if contacts_with_messages:
         for item in contacts_with_messages:
             contacto = item["contacto"]
-            mensajes = item["mensajes_recientes"]
-            phone_safe = contacto['phone_number'].replace('"', '&quot;')
-            
             html += f'''
-            <div class="contact-item" id="contact-{contacto['id']}" data-phone="{phone_safe}">
-                <div class="contact-header" onclick="toggleConversacion({contacto['id']})">
-                    <div class="contact-info">
-                        <div class="contact-phone">📞 {contacto['phone_number']}</div>
-                        <div class="contact-meta">
-                            <span class="contact-status status-{contacto['status']}">{contacto['status']}</span>
-                            <span>📅 {contacto['last_contact']} • 📨 {contacto['total_messages']} mensajes</span>
-                        </div>
-                    </div>
-                    <button class="toggle-btn" id="btn-{contacto['id']}">▼ Ver conversación</button>
+            <div class="contact-item">
+                <div style="font-weight: bold; font-size: 1.2em;">📞 {contacto['phone_number']}</div>
+                <div style="color: #666; margin: 10px 0;">
+                    <span>Estado: {contacto['status']}</span> • 
+                    <span>Último: {contacto['last_contact']}</span> • 
+                    <span>Mensajes: {contacto['total_messages']}</span>
                 </div>
-                
-                <div class="conversation-preview" id="conversacion-{contacto['id']}">
-                    <h4>📝 Últimos mensajes:</h4>
-                    <div class="message-container">
-            '''
-            
-            if mensajes:
-                for msg in mensajes:
-                    texto_safe = msg['texto'].replace('"', '&quot;').replace("'", "&#39;")
-                    html += f'''
-                        <div class="message {msg['tipo']}">
-                            <strong>{msg['tipo'].upper()}:</strong> {texto_safe}
-                            <span class="hora">{msg['hora']}</span>
-                        </div>
-                    '''
-            else:
-                html += '''
-                        <div style="text-align: center; color: #999; padding: 20px;">
-                            No hay mensajes registrados para este contacto.
-                        </div>
-                '''
-            
-            # IMPORTANTE: Aquí está el cambio crítico - sin backslashes en la URL
-            phone_url = contacto['phone_number'].replace('+', '%2B')
-            html += f'''
-                    </div>
-                    <a href="/panel/conversations/{phone_url}" class="ver-completo-btn">
-                        📋 Ver conversación completa ({contacto['total_messages']} mensajes)
+                <div style="margin-top: 10px;">
+                    <a href="/panel/conversations/{contacto['phone_number'].replace('+', '%2B')}" style="color: #25D366; text-decoration: none;">
+                        📋 Ver conversación completa
                     </a>
                 </div>
             </div>
             '''
     else:
         html += '''
-            <div class="no-results">
+            <div style="text-align: center; padding: 40px; color: #999;">
                 <h3>📭 No hay contactos registrados aún</h3>
                 <p>Los contactos aparecerán aquí cuando interactúen con el bot de WhatsApp.</p>
             </div>
         '''
-        
-            html += '''
-            </div>
-            
-            <!-- PAGINACIÓN - Versión completamente segura -->
-        '''
-        
-        # PAGINACIÓN - Versión completamente segura
-        pagination_html = '<div style="text-align: center; margin: 20px 0;">'
-        
-        # Botón anterior
-        if has_prev:
-            prev_page = page - 1
-            pagination_html += f'<a href="/panel?page={prev_page}&limit={limit}" class="page-btn">← Anterior</a>'
-        else:
-            pagination_html += '<span class="page-btn disabled">← Anterior</span>'
-        
-        # Indicador de página
-        pagination_html += f'<span style="padding: 10px 20px; color: #666;">Página {page}</span>'
-        
-        # Botón siguiente (SIN flecha problemática)
-        if has_next:
-            next_page = page + 1
-            pagination_html += f'<a href="/panel?page={next_page}&limit={limit}" class="page-btn">Siguiente</a>'
-        else:
-            pagination_html += '<span class="page-btn disabled">Siguiente</span>'
-        
-        pagination_html += '</div>'
-        html += pagination_html
-        
-        html += f'''
-            </div>        
-        <div style="text-align: center; margin-top: 30px; color: #666; padding: 20px; font-size: 0.9em;">
-            <p>Mostrando {len(contacts_with_messages)} de {total_contacts} contactos • Página {page}</p>
-            <p>💡 <strong>Tip:</strong> Usa el buscador arriba para encontrar contactos específicos</p>
+    
+    # PAGINACIÓN SIMPLE Y SEGURA
+    html += '''
         </div>
         
-        <script>
-            function toggleConversacion(contactId) {{
-                const preview = document.getElementById('conversacion-' + contactId);
-                const btn = document.getElementById('btn-' + contactId);
-                
-                if (preview.classList.contains('active')) {{
-                    // Cerrar esta conversación
-                    preview.classList.remove('active');
-                    btn.textContent = '▼ Ver conversación';
-                    btn.style.background = '#25D366';
-                }} else {{
-                    // Cerrar todas las demás conversaciones abiertas
-                    document.querySelectorAll('.conversation-preview.active').forEach(el => {{
-                        el.classList.remove('active');
-                    }});
-                    document.querySelectorAll('.toggle-btn').forEach(el => {{
-                        el.textContent = '▼ Ver conversación';
-                        el.style.background = '#25D366';
-                    }});
-                    
-                    // Abrir esta conversación
-                    preview.classList.add('active');
-                    btn.textContent = '▲ Ocultar';
-                    btn.style.background = '#128C7E';
-                    
-                    // Auto-scroll dentro del contenedor de mensajes
-                    const messageContainer = preview.querySelector('.message-container');
-                    if (messageContainer) {{
-                        messageContainer.scrollTop = messageContainer.scrollHeight;
-                    }}
-                }}
-            }}
-            
-            function filtrarContactos() {{
-                const input = document.getElementById('searchInput').value.toLowerCase();
-                const contactos = document.querySelectorAll('.contact-item');
-                let visibleCount = 0;
-                
-                contactos.forEach(contacto => {{
-                    const phone = contacto.getAttribute('data-phone').toLowerCase();
-                    if (phone.includes(input)) {{
-                        contacto.style.display = 'block';
-                        visibleCount++;
-                    }} else {{
-                        contacto.style.display = 'none';
-                    }}
-                }});
-                
-                // Mostrar mensaje si no hay resultados
-                const noResults = document.querySelector('.no-results') || document.createElement('div');
-                if (visibleCount === 0 && input !== '') {{
-                    if (!document.querySelector('.no-results')) {{
-                        noResults.className = 'no-results';
-                        noResults.innerHTML = '<h3>🔍 No se encontraron contactos</h3><p>Intenta con otro número telefónico</p>';
-                        document.querySelector('.contact-list').appendChild(noResults);
-                    }}
-                }} else {{
-                    const existingNoResults = document.querySelector('.no-results');
-                    if (existingNoResults) {{
-                        existingNoResults.remove();
-                    }}
-                }}
-            }}
-            
-            // Hotkeys - versión simplificada
-            document.addEventListener('keydown', function(e) {{
-                if (e.key === 'Escape') {{
-                    // Cerrar todas las conversaciones
-                    document.querySelectorAll('.conversation-preview.active').forEach(el => {{
-                        el.classList.remove('active');
-                    }});
-                    document.querySelectorAll('.toggle-btn').forEach(el => {{
-                        el.textContent = '▼ Ver conversación';
-                        el.style.background = '#25D366';
-                    }});
-                }}
-            }});
-            
-            // Auto-focus en buscador
-            window.onload = function() {{
-                const searchInput = document.getElementById('searchInput');
-                if (searchInput) {{
-                    searchInput.focus();
-                }}
-            }};
-        </script>
+        <div style="text-align: center; margin: 30px 0;">
+    '''
+    
+    if has_prev:
+        html += f'<a href="/panel?page={page-1}&limit={limit}" class="page-btn">← Anterior</a> '
+    
+    html += f'<span style="padding: 10px 20px;">Página {page}</span>'
+    
+    if has_next:
+        html += f' <a href="/panel?page={page+1}&limit={limit}" class="page-btn">Siguiente</a>'
+    
+    html += f'''
+        </div>
         
-        <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px; border-top: 1px solid #ddd;">
-            <p>CRM WhatsApp Cole • Colegio • Desarrollado con FastAPI + PostgreSQL</p>
-            <p>📧 contacto@willbarreto.com • 🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+        <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px;">
+            <p>CRM WhatsApp Cole • Colegio • {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
         </footer>
     </body>
     </html>
     '''
     
     return HTMLResponse(content=html)
-
 @app.get("/panel/conversations/{phone_number}")
 async def view_full_conversation(
     phone_number: str,
