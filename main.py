@@ -411,7 +411,9 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
         start_idx = max(0, len(history) - 5)
         for msg in history[start_idx:]:
             prefix = "Usuario" if msg.direction == "incoming" else "Asistente"
-            historial_contexto += f"{prefix}: {msg.content[:200]}...\n" if len(msg.content) > 200 else f"{prefix}: {msg.content}\n"
+            # CORREGIDO: Usar slicing seguro
+            contenido_truncado = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+            historial_contexto += f"{prefix}: {contenido_truncado}\n"
     
     # Construir el prompt (mismo que antes, solo cambia el motor)
     prompt = f"""
@@ -665,8 +667,11 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
     has_next = (offset + limit) < total_contacts
     has_prev = page > 1
     
-    # Generar HTML
-    html = f'''
+    # Construir HTML de manera segura - SIN F-STRINGS COMPLEJAS
+    html_parts = []
+    
+    # Header
+    html_parts.append('''
     <!DOCTYPE html>
     <html>
     <head>
@@ -674,18 +679,18 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }}
-            .header {{ background: #25D366; color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
-            .stats {{ display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; }}
-            .stat-card {{ background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); flex: 1; min-width: 200px; }}
-            .contact-list {{ background: white; padding: 20px; border-radius: 8px; }}
-            .contact-item {{ border: 1px solid #ddd; margin-bottom: 15px; padding: 15px; border-radius: 8px; }}
-            .page-btn {{ padding: 10px 20px; margin: 0 10px; background: #25D366; color: white; border: none; border-radius: 5px; text-decoration: none; display: inline-block; }}
-            .page-btn:hover {{ background: #128C7E; }}
-            .page-btn.disabled {{ background: #ccc; cursor: not-allowed; }}
-            .message-preview {{ background: #f9f9f9; padding: 10px; margin-top: 10px; border-radius: 5px; border-left: 3px solid #25D366; }}
-            .user-message {{ color: #666; font-style: italic; }}
-            .bot-message {{ color: #25D366; font-weight: bold; }}
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+            .header { background: #25D366; color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+            .stats { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; }
+            .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); flex: 1; min-width: 200px; }
+            .contact-list { background: white; padding: 20px; border-radius: 8px; }
+            .contact-item { border: 1px solid #ddd; margin-bottom: 15px; padding: 15px; border-radius: 8px; }
+            .page-btn { padding: 10px 20px; margin: 0 10px; background: #25D366; color: white; border: none; border-radius: 5px; text-decoration: none; display: inline-block; }
+            .page-btn:hover { background: #128C7E; }
+            .page-btn.disabled { background: #ccc; cursor: not-allowed; }
+            .message-preview { background: #f9f9f9; padding: 10px; margin-top: 10px; border-radius: 5px; border-left: 3px solid #25D366; }
+            .user-message { color: #666; font-style: italic; }
+            .bot-message { color: #25D366; font-weight: bold; }
         </style>
     </head>
     <body>
@@ -702,33 +707,44 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
         <div class="stats">
             <div class="stat-card">
                 <h3>👥 Total Contactos</h3>
-                <p style="font-size: 24px; font-weight: bold;">{total_contacts}</p>
-            </div>
-    '''
+                <p style="font-size: 24px; font-weight: bold;">''')
     
+    html_parts.append(str(total_contacts))
+    
+    html_parts.append('''</p>
+            </div>''')
+    
+    # Stats por estado
     for status, count in by_status:
         status_display = status.replace("_", " ").title()
-        html += f'''
+        html_parts.append(f'''
             <div class="stat-card">
                 <h3>📊 {status_display}</h3>
                 <p style="font-size: 20px; font-weight: bold;">{count}</p>
             </div>
-        '''
+        ''')
     
-    html += '''
+    html_parts.append('''
         </div>
         
         <div class="contact-list">
             <h2>🕐 Contactos Recientes</h2>
-            <p style="color: #666; margin-bottom: 20px;">Página ''' + str(page) + ''' de ''' + str((total_contacts + limit - 1) // limit) + '''</p>
-    '''
+            <p style="color: #666; margin-bottom: 20px;">Página ''')
+    
+    html_parts.append(str(page))
+    html_parts.append(' de ')
+    html_parts.append(str((total_contacts + limit - 1) // limit))
+    html_parts.append('''</p>''')
     
     if contacts_with_messages:
         for item in contacts_with_messages:
             contacto = item["contacto"]
             mensajes = item["mensajes_recientes"]
             
-            html += f'''
+            # Pre-procesar el número para URL (sin backslash en f-string)
+            telefono_url = contacto['phone_number'].replace('+', '%2B')
+            
+            html_parts.append(f'''
             <div class="contact-item">
                 <div style="font-weight: bold; font-size: 1.2em;">📞 {contacto['phone_number']}</div>
                 <div style="color: #666; margin: 10px 0;">
@@ -739,66 +755,69 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 
                 <div class="message-preview">
                     <strong>Últimos mensajes:</strong>
-            '''
+            ''')
             
             for msg in mensajes[-3:]:  # Mostrar solo los últimos 3 mensajes
                 tipo_clase = "user-message" if msg["tipo"] == "usuario" else "bot-message"
                 icono = "👤" if msg["tipo"] == "usuario" else "🤖"
-                html += f'''
+                # Pre-procesar el texto para evitar backslashes en f-string
+                texto_seguro = msg["texto"]
+                html_parts.append(f'''
                     <div class="{tipo_clase}">
-                        {icono} {msg["hora"]}: {msg["texto"]}
+                        {icono} {msg["hora"]}: {texto_seguro}
                     </div>
-                '''
+                ''')
             
-            html += f'''
+            html_parts.append(f'''
                 </div>
                 
                 <div style="margin-top: 10px;">
-                    <a href="/panel/conversations/{contacto['phone_number'].replace('+', '%2B')}" style="color: #25D366; text-decoration: none; font-weight: bold;">
+                    <a href="/panel/conversations/{telefono_url}" style="color: #25D366; text-decoration: none; font-weight: bold;">
                         📋 Ver conversación completa
                     </a>
                 </div>
             </div>
-            '''
+            ''')
     else:
-        html += '''
+        html_parts.append('''
             <div style="text-align: center; padding: 40px; color: #999;">
                 <h3>📭 No hay contactos registrados aún</h3>
                 <p>Los contactos aparecerán aquí cuando interactúen con el bot de WhatsApp.</p>
             </div>
-        '''
+        ''')
     
     # PAGINACIÓN
-    html += '''
+    html_parts.append('''
         </div>
         
         <div style="text-align: center; margin: 30px 0;">
-    '''
+    ''')
     
     if has_prev:
-        html += f'<a href="/panel?page={page-1}&limit={limit}" class="page-btn">← Anterior</a> '
+        html_parts.append(f'<a href="/panel?page={page-1}&limit={limit}" class="page-btn">← Anterior</a> ')
     else:
-        html += '<span class="page-btn disabled">← Anterior</span> '
+        html_parts.append('<span class="page-btn disabled">← Anterior</span> ')
     
-    html += f'<span style="padding: 10px 20px; background: white; border-radius: 5px; margin: 0 10px;">Página {page}</span>'
+    html_parts.append(f'<span style="padding: 10px 20px; background: white; border-radius: 5px; margin: 0 10px;">Página {page}</span>')
     
     if has_next:
-        html += f' <a href="/panel?page={page+1}&limit={limit}" class="page-btn">Siguiente →</a>'
+        html_parts.append(f' <a href="/panel?page={page+1}&limit={limit}" class="page-btn">Siguiente →</a>')
     else:
-        html += ' <span class="page-btn disabled">Siguiente →</span>'
+        html_parts.append(' <span class="page-btn disabled">Siguiente →</span>')
     
-    html += f'''
+    # Footer
+    html_parts.append(f'''
         </div>
         
         <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px; border-top: 1px solid #ddd;">
-            <p>CRM WhatsApp Cole • Colegio • {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+            <p>CRM WhatsApp Cole • Colegio • {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
             <p style="font-size: 0.9em; margin-top: 10px;">Total contactos: {total_contacts} | Total páginas: {(total_contacts + limit - 1) // limit}</p>
         </footer>
     </body>
     </html>
-    '''
+    ''')
     
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=''.join(html_parts))
 
 @app.get("/panel/conversations/{phone_number}")
 async def view_full_conversation(
@@ -806,7 +825,7 @@ async def view_full_conversation(
     db: Session = Depends(get_db)
 ):
     """Vista completa de conversación con diseño tipo WhatsApp"""
-    from fastapi.responses import HTMLResponse  # Import local por si acaso
+    from fastapi.responses import HTMLResponse
     
     # Limpiar número
     if phone_number.startswith("whatsapp:"):
@@ -832,36 +851,42 @@ async def view_full_conversation(
         .order_by(Message.timestamp.asc())\
         .all()
     
-    # Generar HTML
-    html_content = """
-    <!DOCTYPE html>
+    # Construir HTML en partes para evitar problemas de f-string
+    html_parts = []
+    
+    # Header del HTML
+    html_parts.append("""<!DOCTYPE html>
     <html>
     <head>
-        <title>Conversación con {contact.phone_number}</title>
+        <title>Conversación con """)
+    
+    html_parts.append(contact.phone_number)
+    
+    html_parts.append("""</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            * { margin: 0; padding: 0; box-sizing: border-box; }
             
-            body {{
+            body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 background: #f0f2f5;
                 height: 100vh;
                 display: flex;
                 flex-direction: column;
-            }}
+            }
             
             /* HEADER SIMPLE */
-            .header {{
+            .header {
                 background: #25D366;
                 color: white;
                 padding: 15px 20px;
                 display: flex;
                 align-items: center;
                 box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            }}
+            }
             
-            .back-btn {{
+            .back-btn {
                 background: rgba(255,255,255,0.2);
                 border: none;
                 color: white;
@@ -874,54 +899,54 @@ async def view_full_conversation(
                 display: flex;
                 align-items: center;
                 justify-content: center;
-            }}
+            }
             
-            .back-btn:hover {{
+            .back-btn:hover {
                 background: rgba(255,255,255,0.3);
-            }}
+            }
             
-            .contact-info {{
+            .contact-info {
                 flex: 1;
-            }}
+            }
             
-            .contact-name {{
+            .contact-name {
                 font-weight: 600;
                 font-size: 1.2em;
-            }}
+            }
             
-            .contact-meta {{
+            .contact-meta {
                 font-size: 0.9em;
                 opacity: 0.9;
                 margin-top: 3px;
-            }}
+            }
             
             /* CONTENEDOR DE MENSAJES */
-            .messages-container {{
+            .messages-container {
                 flex: 1;
                 overflow-y: auto;
                 padding: 20px;
                 background: #efeae2;
                 background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%239C9286' fill-opacity='0.1' fill-rule='evenodd'/%3E%3C/svg%3E");
-            }}
+            }
             
             /* MENSAJES */
-            .message {{
+            .message {
                 margin: 10px 0;
                 display: flex;
                 flex-direction: column;
                 max-width: 70%;
-            }}
+            }
             
-            .message.usuario {{
+            .message.usuario {
                 align-items: flex-start;
-            }}
+            }
             
-            .message.bot {{
+            .message.bot {
                 align-items: flex-end;
                 margin-left: auto;
-            }}
+            }
             
-            .message-content {{
+            .message-content {
                 padding: 10px 15px;
                 border-radius: 18px;
                 position: relative;
@@ -929,110 +954,125 @@ async def view_full_conversation(
                 line-height: 1.4;
                 font-size: 0.95em;
                 box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-            }}
+            }
             
-            .message.usuario .message-content {{
+            .message.usuario .message-content {
                 background: white;
                 color: #333;
                 border-bottom-left-radius: 5px;
-            }}
+            }
             
-            .message.bot .message-content {{
+            .message.bot .message-content {
                 background: #DCF8C6;
                 color: #333;
                 border-bottom-right-radius: 5px;
-            }}
+            }
             
-            .message-time {{
+            .message-time {
                 font-size: 0.75em;
                 color: #666;
                 margin-top: 5px;
                 padding: 0 5px;
-            }}
+            }
             
-            .message-sender {{
+            .message-sender {
                 font-size: 0.8em;
                 font-weight: 600;
                 margin-bottom: 4px;
                 padding: 0 5px;
-            }}
+            }
             
-            .message.usuario .message-sender {{
+            .message.usuario .message-sender {
                 color: #25D366;
-            }}
+            }
             
-            .message.bot .message-sender {{
+            .message.bot .message-sender {
                 color: #128C7E;
-            }}
+            }
             
             /* DÍA SEPARADOR */
-            .day-separator {{
+            .day-separator {
                 text-align: center;
                 margin: 20px 0;
-            }}
+            }
             
-            .day-label {{
+            .day-label {
                 background: rgba(0,0,0,0.1);
                 color: #666;
                 display: inline-block;
                 padding: 5px 15px;
                 border-radius: 15px;
                 font-size: 0.8em;
-            }}
+            }
             
             /* FOOTER */
-            .footer {{
+            .footer {
                 background: white;
                 padding: 15px 20px;
                 text-align: center;
                 border-top: 1px solid #ddd;
                 box-shadow: 0 -2px 5px rgba(0,0,0,0.05);
-            }}
+            }
             
-            .footer-link {{
+            .footer-link {
                 color: #25D366;
                 text-decoration: none;
                 font-weight: 500;
                 margin: 0 10px;
-            }}
+            }
             
-            .footer-link:hover {{
+            .footer-link:hover {
                 text-decoration: underline;
-            }}
+            }
             
             /* SCROLLBAR */
-            ::-webkit-scrollbar {{
+            ::-webkit-scrollbar {
                 width: 8px;
-            }}
+            }
             
-            ::-webkit-scrollbar-track {{
+            ::-webkit-scrollbar-track {
                 background: transparent;
-            }}
+            }
             
-            ::-webkit-scrollbar-thumb {{
+            ::-webkit-scrollbar-thumb {
                 background: #ccc;
                 border-radius: 4px;
-            }}
+            }
             
-            ::-webkit-scrollbar-thumb:hover {{
+            ::-webkit-scrollbar-thumb:hover {
                 background: #aaa;
-            }}
+            }
         </style>
     </head>
     <body>
         <div class="header">
             <button class="back-btn" onclick="window.location.href='/panel'">←</button>
             <div class="contact-info">
-                <div class="contact-name">📱 {contact.phone_number}</div>
+                <div class="contact-name">📱 """)
+    
+    html_parts.append(contact.phone_number)
+    
+    html_parts.append("""</div>
                 <div class="contact-meta">
-                    {contact.total_messages} mensajes • Último contacto: {contact.last_contact.strftime('%d/%m/%Y %H:%M')}
-                    <span style="background: #FFEAA7; color: #E17055; padding: 2px 10px; border-radius: 10px; font-size: 0.8em; margin-left: 10px;">{contact.status}</span>
+                    """)
+    
+    html_parts.append(str(contact.total_messages))
+    
+    html_parts.append(""" mensajes • Último contacto: """)
+    
+    html_parts.append(contact.last_contact.strftime('%d/%m/%Y %H:%M'))
+    
+    html_parts.append("""
+                    <span style="background: #FFEAA7; color: #E17055; padding: 2px 10px; border-radius: 10px; font-size: 0.8em; margin-left: 10px;">""")
+    
+    html_parts.append(contact.status)
+    
+    html_parts.append("""</span>
                 </div>
             </div>
         </div>
         
-        <div class="messages-container" id="messagesContainer">
-    """
+        <div class="messages-container" id="messagesContainer">""")
     
     # Agrupar mensajes por fecha
     current_date = None
@@ -1061,24 +1101,28 @@ async def view_full_conversation(
                 dt = msg.timestamp
                 day_label = f"{dias_semana[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
             
-            html_content += f"""
+            html_parts.append(f"""
                 <div class="day-separator">
                     <span class="day-label">{day_label}</span>
                 </div>
-            """
+            """)
+        
+        # Pre-procesar el contenido para evitar backslashes en f-string
+        # CORRECCIÓN CRÍTICA: Usar replace con caracteres, no strings con backslash
+        contenido_procesado = msg.content.replace(chr(10), '<br>')
         
         # Mostrar mensaje
-        html_content += f"""
+        html_parts.append(f"""
             <div class="message {msg_type}">
                 <div class="message-sender">{sender}</div>
                 <div class="message-content">
-                    {msg.content.replace('\n', '<br>')}
+                    {contenido_procesado}
                 </div>
                 <div class="message-time">{msg_time}</div>
             </div>
-        """
+        """)
     
-    html_content += """
+    html_parts.append("""
         </div>
         
         <div class="footer">
@@ -1107,9 +1151,9 @@ async def view_full_conversation(
         </script>
     </body>
     </html>
-    """
+    """)
     
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(content=''.join(html_parts))
 
 # ================= ENDPOINTS ADICIONALES =================
 @app.get("/panel/search")
