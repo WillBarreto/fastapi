@@ -1523,4 +1523,8 @@ async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    import os
+    
+    # Obtener puerto de variable de entorno o usar 8080 por defecto
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
