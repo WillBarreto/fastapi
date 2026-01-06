@@ -888,7 +888,7 @@ async def view_full_conversation(
         .all()
     
     # Generar HTML
-    html_content = f"""
+    html_content = """
     <!DOCTYPE html>
     <html>
     <head>
