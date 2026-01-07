@@ -498,7 +498,7 @@ RESPUESTA FINAL (mostrar al usuario):
         )
         
         respuesta = response.text.strip()
-        print(f"🤖 Gemini respuesta: {respuesta[:100]}...")
+        print(f"🤖 Gemini respuesta COMPLETA: {repr(respuesta)}")
         return respuesta
         
     except Exception as e:
