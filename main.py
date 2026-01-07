@@ -228,7 +228,7 @@ Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar u
 
 # Configuración de Gemini
 GEMINI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
-GEMINI_MODEL = "gemini-1.5-flash-001"
+GEMINI_MODEL = "gemini-2.5-flash"
 # Configurar la API de Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -380,6 +380,10 @@ async def whatsapp_webhook(
         
         # ================= GUARDAR RESPUESTA =================
         save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
+
+        # ================= ANÁLISIS DE INTENCIÓN =================
+        nuevo_estado = actualizar_estado_segun_intencion(Body, respuesta, contact, db)
+        print(f"🎯 Análisis de intención: {nuevo_estado}")
         
         # ================= LOG DE RESPUESTA =================
         print(f"🤖 BOT: {respuesta}")
@@ -415,34 +419,61 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
             contenido_truncado = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
             historial_contexto += f"{prefix}: {contenido_truncado}\n"
     
-    # Construir el prompt (mismo que antes, solo cambia el motor)
+    # Construir el prompt MEJORADO para Gemini 2.5
     prompt = f"""
-Eres el asistente virtual del Colegio. Tu nombre es "Colegio Bot".
+INSTRUCCIÓN PRINCIPAL: Eres "Colegio Bot", el asistente virtual oficial del Colegio. 
+NUNCA digas que eres una inteligencia artificial general. Eres específicamente el bot del Colegio.
 
-INFORMACIÓN DEL COLEGIO (NO INVENTES NADA MÁS):
+INFORMACIÓN EXCLUSIVA DEL COLEGIO (SOLO USA ESTA):
+- Nombre: Colegio [TU NOMBRE AQUÍ]
 - Horarios: Lunes a Viernes 7:00 am a 3:00 pm
 - Ubicación: [DIRECCIÓN COMPLETA AQUÍ]
 - Servicios: Primaria y Secundaria
-- Costo inscripción: $5,000 MXN
+- Costo inscripción: $5,000 MXN (único pago)
+- Colegiatura mensual: $3,500 MXN
 - Agendar visita: https://calendly.com/tu-colegio
+- Teléfono: [TU TELÉFONO AQUÍ]
 
 CONTEXTO DEL CONTACTO:
-- Estado: {contact.status}
-- Total mensajes previos: {contact.total_messages}
+- Estado actual: {contact.status}
+- Mensajes previos: {contact.total_messages}
+- Es contacto recurrente: {"Sí" if contact.total_messages > 3 else "No"}
 
-{historial_contexto}
+HISTORIAL RECIENTE:
+{historial_contexto if history else "Primer contacto"}
 
-Mensaje actual del usuario: "{mensaje_usuario}"
+MENSAJE ACTUAL DEL USUARIO: "{mensaje_usuario}"
 
-INSTRUCCIONES:
-1. Responde solo con la información del colegio proporcionada
-2. Mantén un tono amable y profesional
-3. Sé conciso (máximo 2 oraciones)
-4. Si el usuario pregunta algo fuera de la información proporcionada, invítale a agendar una cita
-5. NO inventes información sobre horarios, precios o servicios no mencionados
-6. Si es un saludo inicial, preséntate brevemente
+ANÁLISIS DE INTENCIÓN (INTERNO - NO MOSTRAR AL USUARIO):
+1. ¿El usuario menciona o compara con otros colegios? 
+2. ¿Está pidiendo información para competencia o para inscripción real?
+3. ¿Muestra señales de ser de otro colegio (competencia)?
+4. ¿Su tono es de comparación o de interés genuino?
 
-Respuesta:
+SI ES COMPETENCIA O COMPARACIÓN:
+- Responde brevemente con información básica
+- Invita a agendar visita para "conocer diferenciadores"
+- No des muchos detalles de precios
+- Tono profesional pero reservado
+
+SI ES INTERÉS GENUINO:
+- Proporciona información completa y cálida
+- Ofrece agendar visita personalizada
+- Menciona beneficios exclusivos
+- Tono cálido y acogedor
+
+SI ES PREGUNTA FUERA DEL TEMA:
+- Educadamente redirige al tema del colegio
+- Ofrece información relevante
+- Invita a agendar visita para más detalles
+
+FORMATO DE RESPUESTA:
+- Identifícate como "Colegio Bot"
+- Responde en máximo 4 líneas
+- Incluye llamado a acción (agendar visita)
+- Tono profesional según análisis anterior
+
+RESPUESTA FINAL (mostrar al usuario):
 """
     
     try:
@@ -511,6 +542,41 @@ def generar_respuesta_predeterminada(mensaje: str, contact) -> str:
     # Respuesta por defecto
     return "¡Hola! Soy el asistente del Colegio. Puedo ayudarte con:\n• Horarios\n• Ubicación\n• Costos\n• Agendar visitas\n\n¿En qué necesitas información?"
 
+def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
+    """Analiza la intención y actualiza el estado del contacto"""
+    mensaje_lower = mensaje_usuario.lower()
+    
+    # Detectar señales de competencia (Gemini 2.5 mejorará esto)
+    señales_competencia = [
+        "otro colegio", "competencia", "comparar precios", "vs ",
+        "versus", "más barato", "mejor precio", "diferencia con",
+        "qué tal ", "me recomiendan", "estoy viendo", "otras opciones"
+    ]
+    
+    # Detectar interés genuino
+    señales_interes = [
+        "inscribir", "matricular", "proceso", "requisitos",
+        "documentos", "vacantes", "agendar visita", "quiero conocer",
+        "cuándo empiezan", "horarios de", "puedo visitar"
+    ]
+    
+    # Análisis básico (Gemini 2.5 hará análisis más sofisticado)
+    es_competencia = any(señal in mensaje_lower for señal in señales_competencia)
+    es_interes = any(señal in mensaje_lower for señal in señales_interes)
+    
+    if es_competencia and not es_interes:
+        if contact.status != "COMPETENCIA":
+            contact.status = "COMPETENCIA"
+            contact.is_competitor = True
+            print(f"🎯 Estado actualizado: COMPETENCIA (señales detectadas)")
+    
+    elif es_interes:
+        if contact.status == "PROSPECTO_NUEVO":
+            contact.status = "PROSPECTO_INFORMADO"
+            print(f"🎯 Estado actualizado: PROSPECTO_INFORMADO")
+    
+    db.commit()
+    return contact.status
 
 def generar_respuesta_inteligente(mensaje: str, contact, history):
     """Función principal que decide qué motor de respuesta usar"""
