@@ -228,7 +228,7 @@ Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar u
 
 # Configuración de Gemini
 GEMINI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = "gemini-1.5-flash-001"
 # Configurar la API de Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -446,6 +446,14 @@ Respuesta:
 """
     
     try:
+    
+        # ============ NUEVO: PRUEBA DE CONEXIÓN ============
+        print(f"🔍 PROBANDO CONEXIÓN CON MODELO: {GEMINI_MODEL}")
+        test_model = genai.GenerativeModel(GEMINI_MODEL)
+        test_response = test_model.generate_content("Responde únicamente con 'GEMINI_CONECTADO_OK'")
+        print(f"✅ Prueba Gemini: {test_response.text}")
+        # ===================================================
+        
         # Inicializar el modelo de Gemini
         model = genai.GenerativeModel(GEMINI_MODEL)
         
