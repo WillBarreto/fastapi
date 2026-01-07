@@ -420,6 +420,8 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
             historial_contexto += f"{prefix}: {contenido_truncado}\n"
     
     # Construir el prompt MEJORADO para Gemini 2.5
+# MODIFICA EL PROMPT SIMPLE POR ESTE:
+
     prompt = f"""Eres Colegio Bot, el asistente virtual oficial del Colegio.
     
 Información del colegio:
@@ -429,9 +431,15 @@ Información del colegio:
 - Costo inscripción: $5,000 MXN
 - Para agendar visita: https://calendly.com/tu-colegio
 
-Usuario pregunta: "{mensaje_usuario}"
+El usuario pregunta: "{mensaje_usuario}"
 
-Responde de manera amable y útil en máximo 3 líneas."""
+INSTRUCCIONES ESPECÍFICAS:
+1. Si pregunta sobre horarios, fechas, o tiempo, refiere a los horarios del colegio
+2. Si pregunta algo no relacionado al colegio, redirige amablemente al tema del colegio
+3. NUNCA digas que no puedes responder
+4. SIEMPRE ofrece información relevante del colegio o invita a agendar visita
+
+RESPONDE DE MANERA ÚTIL Y AMABLE (máximo 3 líneas):"""
     
     try:
     
