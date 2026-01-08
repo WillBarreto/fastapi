@@ -457,7 +457,7 @@ RESPONDE DE MANERA ÚTIL Y AMABLE (máximo 3 líneas):"""
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=150,
+                max_output_tokens=4000,
                 temperature=0.7
             )
         )
