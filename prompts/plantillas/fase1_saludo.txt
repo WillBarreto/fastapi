@@ -1,0 +1,7 @@
+[CONTEXTO_NEGOCIO]
+
+Hola {nombre_usuario}! Soy el asistente virtual del Colegio Valle de Filadelfia Campus Santa Cruz. 
+
+{tono_saludo}
+
+{tono_pregunta_referencia}
