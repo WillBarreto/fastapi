@@ -1,0 +1,57 @@
+{
+  "fases": {
+    "FASE1_SALUDO": {
+      "id": 1,
+      "nombre": "Saludo inicial y presentación",
+      "objetivo": "Identificar si es primer contacto y establecer tono",
+      "archivo_plantilla": "fase1_saludo.txt",
+      "pregunta_clave": "¿ya tiene alguna referencia de Colegio Valle de Filadelfia Campus Santa Cruz?"
+    },
+    "FASE2_REFERENCIA": {
+      "id": 2,
+      "nombre": "Verificación de referencia",
+      "objetivo": "Determinar cómo llegó el prospecto al colegio",
+      "archivo_plantilla": "fase2_referencia.txt",
+      "pregunta_clave": "¿En qué zona vive usted?"
+    },
+    "FASE3_UBICACION": {
+      "id": 3,
+      "nombre": "Confirmación de ubicación",
+      "objetivo": "Verificar proximidad y evitar confusión con Metepec",
+      "archivo_plantilla": "fase3_ubicacion.txt",
+      "pregunta_clave": "¿Ha escuchado hablar del 'Método Filadelfia'?"
+    },
+    "FASE4_METODOLOGIA": {
+      "id": 4,
+      "nombre": "Explicación metodología",
+      "objetivo": "Destacar diferenciadores del colegio",
+      "archivo_plantilla": "fase4_metodologia.txt",
+      "pregunta_clave": "¿Qué área le parece más interesante fortalecer en su hijo(a)?"
+    },
+    "FASE5_PREGUNTA_AREA": {
+      "id": 5,
+      "nombre": "Profundización en área de interés",
+      "objetivo": "Personalizar según interés específico",
+      "archivo_plantilla": "fase5_pregunta_area.txt",
+      "respuestas_especificas": [
+        "actividad_fisica.txt",
+        "logico_matematico.txt",
+        "artistico_musical.txt",
+        "lectura.txt",
+        "inteligencia_emocional.txt",
+        "pantallas_ipad.txt"
+      ]
+    },
+    "FASE6_CITA_COSTOS": {
+      "id": 6,
+      "nombre": "Cierre hacia cita o costos",
+      "objetivo": "Convertir interés en cita presencial",
+      "archivo_plantilla": "fase6_cita_costos.txt",
+      "variantes": [
+        "insistencia_costos",
+        "agendar_cita",
+        "pendiente_confirmar"
+      ]
+    }
+  }
+}
