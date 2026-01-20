@@ -1,0 +1,32 @@
+{
+  "ALTO": {
+    "descripcion": "Lenguaje formal, estructurado, técnico - Para profesionales/educadores",
+    "caracteristicas": [
+      "Uso de usted",
+      "Términos técnicos (pedagogía, metodología, cognitivo)",
+      "Estructura formal",
+      "Referencias académicas"
+    ],
+    "palabras_clave": ["metodología", "pedagogía", "cognitivo", "desarrollo", "académico"]
+  },
+  "MEDIO": {
+    "descripcion": "Lenguaje balanceado - Para mayoría de padres de familia",
+    "caracteristicas": [
+      "Uso de usted",
+      "Lenguaje claro pero no demasiado técnico",
+      "Explicaciones sencillas",
+      "Enfoque en beneficios"
+    ],
+    "palabras_clave": ["beneficios", "aprendizaje", "niños", "escuela", "educación"]
+  },
+  "BAJO": {
+    "descripcion": "Lenguaje coloquial y simple - Para personas con educación básica",
+    "caracteristicas": [
+      "Lenguaje directo",
+      "Ejemplos concretos",
+      "Evitar términos complejos",
+      "Enfoque en resultados prácticos"
+    ],
+    "palabras_clave": ["costo", "precio", "horario", "cerca", "fácil"]
+  }
+}
