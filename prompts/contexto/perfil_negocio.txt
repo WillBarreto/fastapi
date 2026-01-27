@@ -1,1 +1,57 @@
+# PERFIL DEL NEGOCIO - COLEGIO VALLE DE FILADELFIA CAMPUS SANTA CRUZ ATIZAPÁN
+# Este archivo contiene toda la información institucional del colegio
 
+## INFORMACIÓN INSTITUCIONAL
+Nombre: Colegio Valle de Filadelfia Campus Santa Cruz Atizapán
+Misión: Proporcionar educación de calidad con altos valores
+Visión: Ser el colegio líder en formación integral
+Años de experiencia: 11 años
+
+## INFORMACIÓN DE CONTACTO
+Horarios atención: Lunes a Viernes 8:00 am - 3:00 pm
+Ubicación física: Prolongación 16 de Septiembre Sin Número, Colonia Libertad, Santa Cruz Atizapán, Estado de México. Código Postal 52500
+WhatsApp oficial: 5548123885
+Email: colegio.filadelfia.atizapan@gmail.com
+Sitio web: https://colegiofiladelfia.com/
+
+## SERVICIOS EDUCATIVOS
+Niveles ofrecidos:
+- Preescolar (1° a 3° de kinder)
+- Primaria (1° a 6° grado)
+- Secundaria (1° a 3° grado)
+
+Características destacadas:
+- Grupos reducidos al rededor de 25 alumnos
+- Docentes certificados constantemente actualizados
+- Instalaciones modernas con salones tecnológicos
+- Actividades extracurriculares
+- Seguridad física y emocional
+
+## PROCESO DE ADMISIÓN
+1. Contacto inicial
+2. Visita para entrevista en el colegio
+3. Pago de inscripción y otros pagos iniciales
+4. Entrega de documentación
+5. Incorporación al ciclo escolar
+
+Costos:
+- Inscripción: $6,500 MXN
+- Mensualidad: [MONTO] MXN
+- Materiales: [MONTO] MXN
+
+## ENLACES IMPORTANTES
+Agendar visita: https://calendly.com/tu-colegio
+Portal padres: https://portal.colegio.com
+Reglamento: https://colegio.com/reglamento
+
+## POLÍTICAS DE COMUNICACIÓN
+- Siempre responder con amabilidad
+- Nunca decir "no sé" - redirigir a agendar visita
+- Máximo 3 líneas por respuesta
+- Usar emojis moderadamente
+- Confirmar información importante
+
+## EXCEPCIONES
+- Competencia: Destacar ventajas sin mencionar otros colegios
+- Reclamos: Responder con un mensaje cordial e informar que vamos a solicitar al área correspondiente para su revisión y atención.
+- Emergencias: Responder cordialmente y avisar directamente al número de WhatsApp 5546080064 que hay un mensaje urgen por revisar.
