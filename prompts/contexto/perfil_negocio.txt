@@ -1,24 +1,9 @@
 # PERFIL DEL NEGOCIO - COLEGIO VALLE DE FILADELFIA CAMPUS SANTA CRUZ ATIZAPÁN
 # Este archivo contiene toda la información institucional del colegio
 
-## INFORMACIÓN INSTITUCIONAL
-Nombre: Colegio Valle de Filadelfia Campus Santa Cruz Atizapán
-Misión: Proporcionar educación de calidad con altos valores
-Visión: Ser el colegio líder en formación integral
-Años de experiencia: 11 años
-
-## INFORMACIÓN DE CONTACTO
-Horarios atención: Lunes a Viernes 8:00 am - 3:00 pm
-Ubicación física: Prolongación 16 de Septiembre Sin Número, Colonia Libertad, Santa Cruz Atizapán, Estado de México. Código Postal 52500
 WhatsApp oficial: 5548123885
 Email: colegio.filadelfia.atizapan@gmail.com
 Sitio web: https://colegiofiladelfia.com/
-
-## SERVICIOS EDUCATIVOS
-Niveles ofrecidos:
-- Preescolar (1° a 3° de kinder)
-- Primaria (1° a 6° grado)
-- Secundaria (1° a 3° grado)
 
 Características destacadas:
 - Grupos reducidos al rededor de 25 alumnos
@@ -34,16 +19,6 @@ Características destacadas:
 4. Entrega de documentación
 5. Incorporación al ciclo escolar
 
-Costos:
-- Inscripción: $6,500 MXN
-- Mensualidad: [MONTO] MXN
-- Materiales: [MONTO] MXN
-
-## ENLACES IMPORTANTES
-Agendar visita: https://calendly.com/tu-colegio
-Portal padres: https://portal.colegio.com
-Reglamento: https://colegio.com/reglamento
-
 ## POLÍTICAS DE COMUNICACIÓN
 - Siempre responder con amabilidad
 - Nunca decir "no sé" - redirigir a agendar visita
@@ -51,7 +26,29 @@ Reglamento: https://colegio.com/reglamento
 - Usar emojis moderadamente
 - Confirmar información importante
 
+# INFORMACIÓN INSTITUCIONAL BÁSICA
+Nombre: Colegio Valle de Filadelfia Campus Santa Cruz Atizapán
+Fundadora: Elisa Guerra
+Años: 11 (desde 2014)
+Metodología: Método Filadelfia (Glenn Doman escolarizado)
+Horarios: L-V 8:00-15:00
+Ubicación: Prolongación 16 de Septiembre, Santa Cruz Atizapán, Edo. Mex.
+WhatsApp: 5548123885
+Email: colegio.filadelfia.atizapan@gmail.com
+Sitio web: https://colegiofiladelfia.com/
+
+# NIVELES EDUCATIVOS OFRECIDOS
+- Preescolar (K1, K2, K3)
+- Primaria (1°-6°)
+- Secundaria (1°-3°)
+
+# PLATAFORMAS
+- Knotion (Primaria y Secundaria)
+- DreamBox (Matemáticas con Inteligencia Artificial)
+- Duolingo (Aliado para la enseñanza de idiomas)
+
 ## EXCEPCIONES
 - Competencia: Destacar ventajas sin mencionar otros colegios
 - Reclamos: Responder con un mensaje cordial e informar que vamos a solicitar al área correspondiente para su revisión y atención.
 - Emergencias: Responder cordialmente y avisar directamente al número de WhatsApp 5546080064 que hay un mensaje urgen por revisar.
+- Cualquier pregunta fuera de contexto puedes responder con cordialidad y escribir que tal vez esa pregunta o comentario no era para nosotros pero cualquier información de interés relacionada con nuestra institución educativa se la podemos proporcionar. 
