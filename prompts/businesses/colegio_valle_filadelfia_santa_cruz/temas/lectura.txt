@@ -64,4 +64,4 @@ Después de explicar, debes cerrar con una pregunta que mantenga la conversació
 
 Ejemplo:
 
-"¿Le gustaría que le expliquemos cómo trabajamos la lectura directamente en clase durante la visita?"
+"¿Le gustaría agendar una visita presencial para que le expliquemos cómo trabajamos la lectura directamente en clase durante la visita?"
