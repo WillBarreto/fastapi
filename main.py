@@ -4,6 +4,7 @@ import os
 import google.generativeai as genai
 from twilio.rest import Client
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
@@ -13,66 +14,50 @@ import requests
 import json
 from sqlalchemy.dialects.postgresql import ENUM
 
+LOCAL_TZ = ZoneInfo("America/Mexico_City")
+
+def convertir_a_hora_local(dt: datetime) -> datetime:
+    """Convierte un datetime almacenado en BD a hora local de México."""
+    if dt is None:
+        return None
+
+    # Si viene sin zona horaria, asumimos que está en UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt.astimezone(LOCAL_TZ)
+
 def formatear_fecha_para_mensaje(dt: datetime) -> str:
-    """Formatea fecha para mostrar en mensajes - USANDO ZONA HORARIA MÉXICO"""
-    # Definir offset para México (UTC-6)
-    # IMPORTANTE: Esto no considera horario de verano automáticamente
-    # Para CDMX: UTC-6 en invierno, UTC-5 en verano
-    
-    # Determinar si estamos en horario de verano (aproximado)
-    # En México: primer domingo de abril a último domingo de octubre
-    hoy = datetime.now()
-    es_horario_verano = False
-    
-    # Simple aproximación (no es 100% exacta pero funciona para la mayoría de los casos)
-    if 4 <= hoy.month <= 10:
-        es_horario_verano = True
-    elif hoy.month == 4 and hoy.day >= 7:  # Después del primer domingo de abril
-        es_horario_verano = True
-    elif hoy.month == 10 and hoy.day <= 28:  # Antes del último domingo de octubre
-        es_horario_verano = True
-    
-    # Ajustar offset
-    offset_horas = -5 if es_horario_verano else -6
-    
-    # Aplicar offset
-    dt_local = dt + timedelta(hours=offset_horas)
-    
-    # Fechas de referencia
-    hoy_local = datetime.now() + timedelta(hours=offset_horas)
+    """Formatea fecha para mostrar en mensajes usando zona horaria local real."""
+    dt_local = convertir_a_hora_local(dt)
+
+    hoy_local = datetime.now(LOCAL_TZ)
     fecha_hoy = hoy_local.date()
     fecha_ayer = fecha_hoy - timedelta(days=1)
     fecha_msg = dt_local.date()
-    
-    # Formatear hora en formato 12h (7:00 PM)
+
     hora = dt_local.hour
     minutos = dt_local.minute
-    
-    # Determinar AM/PM
-    if hora < 12:
-        periodo = "a.m."
-    else:
-        periodo = "p.m."
-    
-    # Convertir a formato 12h
+
+    periodo = "a.m." if hora < 12 else "p.m."
+
     if hora == 0:
         hora_12 = 12
     elif hora > 12:
         hora_12 = hora - 12
     else:
         hora_12 = hora
-    
+
     hora_str = f"{hora_12}:{minutos:02d} {periodo}"
-    
+
     if fecha_msg == fecha_hoy:
         return f"Hoy {hora_str}"
     elif fecha_msg == fecha_ayer:
         return f"Ayer {hora_str}"
     else:
-        meses = ["ene", "feb", "mar", "abr", "may", "jun", 
+        meses = ["ene", "feb", "mar", "abr", "may", "jun",
                  "jul", "ago", "sep", "oct", "nov", "dic"]
-        return f"{dt_local.day} {meses[dt_local.month-1]} {hora_str}"
-
+        return f"{dt_local.day} {meses[dt_local.month - 1]} {hora_str}"
 # ================= CONFIGURACIÓN DE BASE DE DATOS =================
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./whatsapp_bot.db")
 
@@ -262,7 +247,7 @@ def get_or_create_contact(db: Session, phone_number: str):
 def save_message(db: Session, contact_id: int, direction: str, content: str, twilio_sid: str = None):
     """Guarda un mensaje en la base de datos"""
     # Usar datetime estándar (la BD guardará en UTC)
-    timestamp = datetime.now()
+    timestamp = datetime.now(timezone.utc)
     
     message = Message(
         contact_id=contact_id,
@@ -637,8 +622,14 @@ async def get_conversations_by_phone(
         conversation_simple.append({
             "tipo": message_type,
             "texto": msg.content,
-            "hora": msg.timestamp.strftime("%H:%M"),  # Solo hora:minutos
-            "fecha": msg.timestamp.strftime("%d/%m/%Y")  # Para agrupación visual
+            dt_local = convertir_a_hora_local(msg.timestamp)
+
+            conversation_simple.append({
+                "tipo": message_type,
+                "texto": msg.content,
+                "hora": dt_local.strftime("%H:%M"),
+                "fecha": dt_local.strftime("%d/%m/%Y")
+            })
         })
     
     return {
@@ -696,7 +687,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
                 "id": contact.id,
                 "phone_number": contact.phone_number,
                 "status": contact.status,
-                "last_contact": contact.last_contact.strftime('%d/%m/%Y %H:%M'),
+                "last_contact": convertir_a_hora_local(contact.last_contact).strftime('%d/%m/%Y %H:%M'),
                 "total_messages": contact.total_messages
             },
             "mensajes_recientes": mensajes_simples
@@ -849,7 +840,7 @@ async def crm_panel(db: Session = Depends(get_db), page: int = 1, limit: int = 1
         </div>
         
         <footer style="text-align: center; margin-top: 40px; color: #888; padding: 20px; border-top: 1px solid #ddd;">
-            <p>CRM WhatsApp Cole • Colegio • {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
+            <p>CRM WhatsApp Cole • Colegio • {datetime.now(LOCAL_TZ).strftime("%d/%m/%Y %H:%M")}</p>
             <p style="font-size: 0.9em; margin-top: 10px;">Total contactos: {total_contacts} | Total páginas: {(total_contacts + limit - 1) // limit}</p>
         </footer>
     </body>
@@ -1099,7 +1090,7 @@ async def view_full_conversation(
     
     html_parts.append(""" mensajes • Último contacto: """)
     
-    html_parts.append(contact.last_contact.strftime('%d/%m/%Y %H:%M'))
+    html_parts.append(convertir_a_hora_local(contact.last_contact).strftime('%d/%m/%Y %H:%M'))
     
     html_parts.append("""
                     <span style="background: #FFEAA7; color: #E17055; padding: 2px 10px; border-radius: 10px; font-size: 0.8em; margin-left: 10px;">""")
