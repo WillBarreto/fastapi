@@ -234,8 +234,8 @@ def get_or_create_contact(db: Session, phone_number: str):
         contact = Contact(
             phone_number=clean_number,  # Usar número limpio
             status="PROSPECTO_NUEVO",
-            first_contact=datetime.now(),
-            last_contact=datetime.now(),
+            first_contact=datetime.now(timezone.utc),
+            last_contact=datetime.now(timezone.utc),
             total_messages=0
         )
         db.add(contact)
@@ -262,7 +262,7 @@ def save_message(db: Session, contact_id: int, direction: str, content: str, twi
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if contact:
         contact.total_messages += 1
-        contact.last_contact = datetime.now()
+        contact.last_contact = datetime.now(timezone.utc)
     
     db.commit()
     return message
@@ -618,18 +618,14 @@ async def get_conversations_by_phone(
             message_type = "usuario"
         else:
             message_type = "bot"
-        
+    
+        dt_local = convertir_a_hora_local(msg.timestamp)
+    
         conversation_simple.append({
             "tipo": message_type,
             "texto": msg.content,
-            dt_local = convertir_a_hora_local(msg.timestamp)
-
-            conversation_simple.append({
-                "tipo": message_type,
-                "texto": msg.content,
-                "hora": dt_local.strftime("%H:%M"),
-                "fecha": dt_local.strftime("%d/%m/%Y")
-            })
+            "hora": dt_local.strftime("%H:%M"),
+            "fecha": dt_local.strftime("%d/%m/%Y")
         })
     
     return {
@@ -637,7 +633,7 @@ async def get_conversations_by_phone(
             "telefono": contact.phone_number,
             "estado": contact.status,
             "total_mensajes": contact.total_messages,
-            "ultimo_contacto": contact.last_contact.strftime("%d/%m/%Y %H:%M")
+            "ultimo_contacto": convertir_a_hora_local(contact.last_contact).strftime("%d/%m/%Y %H:%M")
         },
         "conversacion": conversation_simple
     }
