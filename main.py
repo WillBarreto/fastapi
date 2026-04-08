@@ -13,8 +13,11 @@ from fastapi.responses import HTMLResponse
 import requests
 import json
 from sqlalchemy.dialects.postgresql import ENUM
+from prompt_manager import PromptManager
+
 
 LOCAL_TZ = ZoneInfo("America/Mexico_City")
+prompt_manager = PromptManager()
 
 def convertir_a_hora_local(dt: datetime) -> datetime:
     """Convierte un datetime almacenado en BD a hora local de México."""
