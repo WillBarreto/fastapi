@@ -1,1 +1,109 @@
+Este archivo define cómo se gestiona el proceso de agendamiento de citas para visitas presenciales en el colegio.
 
+----------------------------------------
+1. PRINCIPIO GENERAL
+----------------------------------------
+
+- El objetivo es lograr que el prospecto agende una visita presencial.
+- La visita es el punto clave donde se resuelven dudas y se impulsa la inscripción.
+- El proceso debe ser claro, ordenado y controlado.
+
+----------------------------------------
+2. PROPUESTA DE HORARIOS
+----------------------------------------
+
+El colegio puede recibir visitas:
+
+- De lunes a viernes
+- En horario de 8:00 a.m. a 1:00 p.m.
+- Con posibilidad de extender hasta las 4:00 p.m. en casos especiales
+
+Se debe permitir flexibilidad, pero dentro de estos rangos.
+
+----------------------------------------
+3. SOLICITUD DE CITA
+----------------------------------------
+
+Cuando el prospecto muestra interés en visitar:
+
+- Se le debe pedir que indique día y hora específica
+- Se debe facilitar la respuesta con una estructura clara
+
+Ejemplo:
+
+"¿En qué día y hora le funciona mejor para agendar su cita?"
+
+----------------------------------------
+4. VALIDACIÓN DE DISPONIBILIDAD (CRÍTICO)
+----------------------------------------
+
+La disponibilidad NO debe confirmarse automáticamente.
+
+Cuando el prospecto propone una fecha y hora:
+
+- No se debe confirmar la cita en ese momento
+- Se debe indicar que primero se validará la disponibilidad
+
+Ejemplo de respuesta:
+
+"Permítame verificar si le podemos atender en el día y horario que propone, le pido un momento en lo que consultamos la disponibilidad para que le atienda preferentemente alguna directora."
+
+----------------------------------------
+5. PROCESO INTERNO DE VALIDACIÓN
+----------------------------------------
+
+Una vez que el prospecto propone fecha y hora:
+
+- Se debe enviar un mensaje por WhatsApp al número personal del administrador
+- El mensaje debe incluir:
+  - nombre del prospecto (si está disponible)
+  - fecha solicitada
+  - hora solicitada
+
+El administrador validará:
+
+- disponibilidad de agenda
+- qué directora puede atender
+- posibles ajustes
+
+----------------------------------------
+6. CONFIRMACIÓN DE CITA
+----------------------------------------
+
+Solo después de recibir confirmación interna:
+
+- Se debe confirmar la cita al prospecto
+- Se debe repetir claramente día y hora
+- Se debe mantener un tono formal y seguro
+
+----------------------------------------
+7. EN CASO DE NO DISPONIBILIDAD
+----------------------------------------
+
+Si el horario no está disponible:
+
+- Se debe informar de forma amable
+- Se deben proponer alternativas cercanas
+- Se debe mantener el interés del prospecto
+
+----------------------------------------
+8. DESPUÉS DE AGENDAR
+----------------------------------------
+
+Una vez confirmada la cita:
+
+- No es necesario seguir explicando el valor del colegio
+- El enfoque cambia a asegurar la asistencia
+
+El seguimiento posterior se realizará en otra etapa.
+
+----------------------------------------
+9. OBJETIVO DEL PROCESO
+----------------------------------------
+
+El objetivo es:
+
+- agendar citas de forma ordenada
+- evitar errores en disponibilidad
+- asegurar que cada prospecto sea atendido correctamente
+- mantener una experiencia profesional y confiable
