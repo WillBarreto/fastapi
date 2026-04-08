@@ -395,40 +395,19 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
         print("⚠️  Gemini API Key no configurada, usando respuestas predeterminadas")
         return generar_respuesta_predeterminada(mensaje_usuario, contact)
     
-    # Construir el contexto del historial
-    historial_contexto = ""
+    # ================= USAR PROMPT MANAGER =================
+    historial_lista = []
+
     if history:
-        historial_contexto = "Historial reciente:\n"
-        # Usar slicing en lugar de copiar la lista
-        start_idx = max(0, len(history) - 5)
-        for msg in history[start_idx:]:
-            prefix = "Usuario" if msg.direction == "incoming" else "Asistente"
-            # CORREGIDO: Usar slicing seguro
-            contenido_truncado = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
-            historial_contexto += f"{prefix}: {contenido_truncado}\n"
-    
-    # Construir el prompt MEJORADO para Gemini 2.5
-# MODIFICA EL PROMPT SIMPLE POR ESTE:
+        for msg in history:
+            prefijo = "Usuario" if msg.direction == "incoming" else "Asistente"
+            historial_lista.append(f"{prefijo}: {msg.content}")
 
-    prompt = f"""Eres Colegio Bot, el asistente virtual oficial del Colegio.
-    
-Información del colegio:
-- Horarios: Lunes a Viernes 7:00 am a 3:00 pm
-- Ubicación: [DIRECCIÓN COMPLETA AQUÍ]
-- Servicios: Primaria y Secundaria
-- Costo inscripción: $5,000 MXN
-- Para agendar visita: https://calendly.com/tu-colegio
+    prompt = prompt_manager.build_prompt(
+        mensaje_usuario=mensaje_usuario,
+        historial_lista=historial_lista
+    )
 
-El usuario pregunta: "{mensaje_usuario}"
-
-INSTRUCCIONES ESPECÍFICAS:
-1. Si pregunta sobre horarios, fechas, o tiempo, refiere a los horarios del colegio
-2. Si pregunta algo no relacionado al colegio, redirige amablemente al tema del colegio
-3. NUNCA digas que no puedes responder
-4. SIEMPRE ofrece información relevante del colegio o invita a agendar visita
-
-RESPONDE DE MANERA ÚTIL Y AMABLE (máximo 3 líneas):"""
-    
     try:
     
         # ============ NUEVO: PRUEBA DE CONEXIÓN ============
