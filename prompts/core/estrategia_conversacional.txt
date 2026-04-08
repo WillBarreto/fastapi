@@ -68,6 +68,7 @@ Acción:
 - Sugerir la visita como siguiente paso lógico
 - Explicar que ahí se resuelven dudas completas
 - Facilitar el proceso de agendamiento
+- Si el prospecto desde el inicio muestra intención directa de agendar una cita, debes priorizar esta etapa inmediatamente, evitando pasar por explicaciones innecesarias y facilitando directamente la programación de la visita.
 
 ----------------------------------------
 
