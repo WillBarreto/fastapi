@@ -97,4 +97,4 @@ Después de explicar, debes cerrar con una pregunta que mantenga la conversació
 
 Ejemplo:
 
-"¿Qué es lo que más le preocupa en cuanto al uso de tecnología en la educación de su hijo(a)?"
+"¿Qué le parece esto en cuanto al uso de tecnología en la educación de su hijo(a)?"
