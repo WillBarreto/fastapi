@@ -437,43 +437,26 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
         print(f"❌ Excepción en Gemini: {e}")
         return generar_respuesta_predeterminada(mensaje_usuario, contact)
 
-def generar_respuesta_predeterminada(mensaje: str, contact) -> str:
-    """Respuestas predeterminadas como fallback"""
-    mensaje = mensaje.lower().strip()
-    
-    # Si es un contacto con historial, personalizar respuesta
-    if contact.total_messages > 1:
-        if contact.status == "COMPETENCIA":
-            return "Gracias por tu interés nuevamente. Te invito a agendar una visita para conocer nuestras instalaciones personalmente: https://calendly.com/tu-colegio"
-        
-        if contact.status == "PROSPECTO_INFORMADO":
-            return "Ya te hemos proporcionado la información básica. ¿Te gustaría agendar una visita para conocer nuestras instalaciones?"
-    
-    # Respuestas basadas en palabras clave
-    if any(palabra in mensaje for palabra in ["hola", "buenos días", "buenas tardes"]):
-        if contact.total_messages == 1:
-            return "¡Hola! Soy el asistente virtual del Colegio. ¿Es tu primera vez en contacto con nosotros?"
-        else:
-            return f"¡Hola de nuevo! Veo que ya hemos conversado antes ({contact.total_messages} mensajes). ¿En qué más puedo ayudarte?"
-    
-    elif any(palabra in mensaje for palabra in ["horario", "horarios", "abierto", "cierran"]):
-        return "Horarios: Lunes a Viernes de 7:00 am a 3:00 pm"
-    
-    elif any(palabra in mensaje for palabra in ["ubicación", "dirección", "donde están", "dónde"]):
-        return "📍 Estamos ubicados en: [TU DIRECCIÓN COMPLETA AQUÍ]"
-    
-    elif any(palabra in mensaje for palabra in ["costo", "precio", "inscripción", "cuota"]):
-        return "💰 Costo de inscripción: $5,000 MXN. ¿Te gustaría agendar una cita para más detalles?"
-    
-    elif any(palabra in mensaje for palabra in ["cita", "visita", "agendar", "calendario"]):
-        return "📅 Puedes agendar una visita en: https://calendly.com/tu-colegio"
-    
-    elif any(palabra in mensaje for palabra in ["servicios", "niveles", "grados", "primaria", "secundaria"]):
-        return "🏫 Ofrecemos: Primaria y Secundaria. Educación de calidad con enfoque integral."
-    
-    # Respuesta por defecto
-    return "¡Hola! Soy el asistente del Colegio. Puedo ayudarte con:\n• Horarios\n• Ubicación\n• Costos\n• Agendar visitas\n\n¿En qué necesitas información?"
+def generar_respuesta_predeterminada(mensaje_usuario: str, contact) -> str:
+    """
+    Fallback inteligente que respeta la estrategia comercial
+    """
 
+    mensaje = mensaje_usuario.lower()
+
+    # Nunca dar costos directos en fallback
+    if any(x in mensaje for x in ["costo", "precio", "colegiatura", "inscripción"]):
+        return (
+            "Con gusto le orientamos. ¿Ya tiene alguna referencia de Colegio Valle de Filadelfia Campus Santa Cruz?\n\n"
+            "Pero antes de proporcionarle costos, permítame compartirle brevemente por qué muchas familias nos eligen.\n\n"
+            "¿Para qué nivel le interesa información?"
+        )
+
+    # Caso general
+    return (
+        "Con gusto le apoyamos. ¿Podría indicarme un poco más sobre lo que le interesa conocer?\n\n"
+        "Así puedo brindarle información más precisa."
+    )
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
     """Analiza la intención y actualiza el estado del contacto"""
     mensaje_lower = mensaje_usuario.lower()
