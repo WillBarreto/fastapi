@@ -565,9 +565,9 @@ def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actua
     """Fallback alineado al embudo inicial por estado"""
 
     if estado_actual == "SALUDO_INICIAL":
-        return "¡Hola! Con gusto le atendemos.
+        return """¡Hola! Con gusto le atendemos.
 
-¿En qué podemos ayudarle?"
+¿En qué podemos ayudarle?"""
 
     if estado_actual == "ESPERANDO_INTENCION":
         return "Con gusto le orientamos,
