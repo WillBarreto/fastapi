@@ -19,6 +19,128 @@ from prompt_manager import PromptManager
 LOCAL_TZ = ZoneInfo("America/Mexico_City")
 prompt_manager = PromptManager()
 
+FLOW_STATE_PREFIX = "FLOW_STATE:"
+
+
+def get_flow_state(contact) -> str:
+    """Obtiene el estado conversacional actual guardado en notes."""
+    notes = (contact.notes or "").strip()
+    if notes.startswith(FLOW_STATE_PREFIX):
+        estado = notes.replace(FLOW_STATE_PREFIX, "", 1).strip()
+        if estado:
+            return estado
+    return "SALUDO_INICIAL"
+
+
+def set_flow_state(contact, estado: str):
+    """Guarda el estado conversacional actual en notes."""
+    contact.notes = f"{FLOW_STATE_PREFIX}{estado}"
+
+
+def es_zona_valida(mensaje: str) -> bool:
+    msg = (mensaje or "").lower()
+    zonas_validas = [
+        "santiago", "tianguistenco", "santa cruz", "san pedro",
+        "tlaltizapan", "tlaltizapán", "xalatlaco", "almoloya",
+        "buen suceso", "capulhuac"
+    ]
+    return any(z in msg for z in zonas_validas)
+
+
+def es_zona_invalida_probable(mensaje: str) -> bool:
+    msg = (mensaje or "").lower()
+    zonas_invalidas = ["metepec", "toluca"]
+    return any(z in msg for z in zonas_invalidas)
+
+
+def detecta_tema_interes_simple(mensaje: str) -> bool:
+    msg = (mensaje or "").lower()
+    temas = [
+        "matem", "lógico", "logico", "artist", "musical", "motriz",
+        "fisic", "ligamentos", "articulaciones", "emoc", "lectura",
+        "leer", "pantalla", "ipad", "knotion"
+    ]
+    return any(t in msg for t in temas)
+
+
+def detecta_costos(mensaje: str) -> bool:
+    msg = (mensaje or "").lower()
+    terminos = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
+    return any(t in msg for t in terminos)
+
+
+def detecta_intencion_cita(mensaje: str) -> bool:
+    msg = (mensaje or "").lower()
+    terminos = ["cita", "visita", "agendar", "agendo", "quiero ir", "quiero conocer", "sí quiero", "si quiero"]
+    return any(t in msg for t in terminos)
+
+
+def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str:
+    """
+    Define cuál será el siguiente estado conversacional después de enviar la respuesta
+    correspondiente al estado_actual.
+    """
+    msg = (mensaje_usuario or "").lower()
+
+    if estado_actual == "SALUDO_INICIAL":
+        return "ESPERANDO_INTENCION"
+
+    if estado_actual == "ESPERANDO_INTENCION":
+        return "ESPERANDO_REFERENCIA"
+
+    if estado_actual == "ESPERANDO_REFERENCIA":
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "VALIDACION_ZONA":
+        if es_zona_invalida_probable(msg):
+            return "ZONA_INVALIDA_POTENCIAL_METEPEC"
+        if es_zona_valida(msg):
+            return "RESPUESTA_SOBRE_METODO"
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
+        if any(x in msg for x in ["santa cruz", "con ustedes", "con nosotros", "ustedes", "nosotros"]):
+            return "RESPUESTA_SOBRE_METODO"
+        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
+
+    if estado_actual == "RESPUESTA_SOBRE_METODO":
+        return "RESPUESTA_DE_INTERES"
+
+    if estado_actual == "RESPUESTA_DE_INTERES":
+        if detecta_tema_interes_simple(msg):
+            return "DESPUES_DEL_TEMA"
+        return "RESPUESTA_DE_INTERES"
+
+    if estado_actual == "DESPUES_DEL_TEMA":
+        if detecta_costos(msg):
+            return "COSTOS_EN_ETAPA_AVANZADA"
+        return "INVITACION_CITA"
+
+    if estado_actual == "INVITACION_CITA":
+        if detecta_costos(msg):
+            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+        if detecta_intencion_cita(msg):
+            return "ESPERANDO_PROPUESTA_CITA"
+        return "INVITACION_CITA"
+
+    if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
+        if detecta_intencion_cita(msg):
+            return "ESPERANDO_PROPUESTA_CITA"
+        if detecta_costos(msg):
+            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+        return "COSTOS_EN_ETAPA_AVANZADA"
+
+    if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
+        if detecta_intencion_cita(msg):
+            return "ESPERANDO_PROPUESTA_CITA"
+        return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+
+    if estado_actual == "ESPERANDO_PROPUESTA_CITA":
+        return "ESPERANDO_PROPUESTA_CITA"
+
+    return estado_actual
+
+
 def convertir_a_hora_local(dt: datetime) -> datetime:
     """Convierte un datetime almacenado en BD a hora local de México."""
     if dt is None:
@@ -283,240 +405,6 @@ def get_conversation_history(db: Session, phone_number: str, limit: int = 10):
     
     return messages[::-1]  # Invertir para orden cronológico
 
-
-
-# ================= ESTADO CONVERSACIONAL DEL EMBUDO =================
-FLOW_STATE_PREFIX = "FLOW_STATE:"
-DEFAULT_FLOW_STATE = "SALUDO_INICIAL"
-VALID_ZONES = [
-    "santiago", "santiago tianguistenco", "santa cruz", "santa cruz atizapán",
-    "santa cruz atizapan", "san pedro", "san pedro tlaltizapán",
-    "san pedro tlaltizapan", "xalatlaco", "almoloya", "almoloya del río",
-    "almoloya del rio", "el buen suceso", "capulhuac"
-]
-INVALID_METEPEC_ZONES = ["metepec", "toluca"]
-
-
-def get_flow_state(contact) -> str:
-    """Obtiene el estado conversacional desde notes."""
-    notes = contact.notes or ""
-    for line in notes.splitlines():
-        if line.startswith(FLOW_STATE_PREFIX):
-            state = line.replace(FLOW_STATE_PREFIX, "").strip()
-            return state or DEFAULT_FLOW_STATE
-    return DEFAULT_FLOW_STATE
-
-
-def set_flow_state(contact, state: str):
-    """Guarda el estado conversacional en notes sin romper otros contenidos."""
-    notes = contact.notes or ""
-    other_lines = [line for line in notes.splitlines() if not line.startswith(FLOW_STATE_PREFIX)]
-    other_lines.insert(0, f"{FLOW_STATE_PREFIX}{state}")
-    contact.notes = "\n".join(other_lines).strip()
-
-
-def contains_cost_keywords(msg: str) -> bool:
-    msg = (msg or "").lower()
-    keywords = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
-    return any(k in msg for k in keywords)
-
-
-def contains_agendar_keywords(msg: str) -> bool:
-    msg = (msg or "").lower()
-    keywords = ["sí", "si", "quiero", "agendar", "cita", "visita", "conocer", "me interesa", "claro"]
-    return any(k in msg for k in keywords)
-
-
-def contains_level_keywords(msg: str) -> bool:
-    msg = (msg or "").lower()
-    keywords = ["preescolar", "kínder", "kinder", "primaria", "secundaria"]
-    return any(k in msg for k in keywords)
-
-
-def classify_zone(msg: str) -> str:
-    msg = (msg or "").lower()
-    if any(z in msg for z in INVALID_METEPEC_ZONES):
-        return "invalid_metepec"
-    if any(z in msg for z in VALID_ZONES):
-        return "valid"
-    return "unknown"
-
-
-def determine_response_state(current_state: str, mensaje_usuario: str) -> str:
-    """Determina el estado a usar para RESPONDER este turno."""
-    msg = (mensaje_usuario or "").lower()
-    current_state = current_state or DEFAULT_FLOW_STATE
-
-    if current_state == "SALUDO_INICIAL":
-        return "SALUDO_INICIAL"
-
-    if current_state == "ESPERANDO_INTENCION":
-        return "ESPERANDO_INTENCION"
-
-    if current_state == "ESPERANDO_REFERENCIA":
-        return "ESPERANDO_REFERENCIA"
-
-    if current_state == "VALIDANDO_ZONA":
-        zone_type = classify_zone(msg)
-        if zone_type == "invalid_metepec":
-            return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-        return "VALIDANDO_ZONA"
-
-    if current_state == "ZONA_INVALIDA_POTENCIAL_METEPEC":
-        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-
-    if current_state == "ESPERANDO_RESPUESTA_METODO":
-        return "ESPERANDO_RESPUESTA_METODO"
-
-    if current_state == "ESPERANDO_TEMA_INTERES":
-        if contains_cost_keywords(msg):
-            return "INSISTENCIA_COSTOS_PRE_CITA"
-        return "ESPERANDO_TEMA_INTERES"
-
-    if current_state == "ESPERANDO_REACCION_TEMA":
-        if contains_cost_keywords(msg):
-            return "INSISTENCIA_COSTOS_PRE_CITA"
-        return "INVITACION_CITA"
-
-    if current_state == "INVITACION_CITA":
-        if contains_cost_keywords(msg):
-            return "INSISTENCIA_COSTOS_PRE_CITA"
-        if contains_agendar_keywords(msg):
-            return "ESPERANDO_PROPUESTA_CITA"
-        return "INVITACION_CITA"
-
-    if current_state == "INSISTENCIA_COSTOS_PRE_CITA":
-        if contains_level_keywords(msg):
-            return "COSTOS_CONTROLADOS_POR_INSISTENCIA"
-        return "INSISTENCIA_COSTOS_PRE_CITA"
-
-    if current_state == "COSTOS_CONTROLADOS_POR_INSISTENCIA":
-        if contains_agendar_keywords(msg):
-            return "ESPERANDO_PROPUESTA_CITA"
-        return "COSTOS_CONTROLADOS_POR_INSISTENCIA"
-
-    if current_state == "ESPERANDO_PROPUESTA_CITA":
-        return "ESPERANDO_PROPUESTA_CITA"
-
-    return DEFAULT_FLOW_STATE
-
-
-def determine_next_waiting_state(response_state: str, mensaje_usuario: str) -> str:
-    """Determina el siguiente estado que quedará esperando la siguiente respuesta del usuario."""
-    msg = (mensaje_usuario or "").lower()
-
-    if response_state == "SALUDO_INICIAL":
-        return "ESPERANDO_INTENCION"
-
-    if response_state == "ESPERANDO_INTENCION":
-        return "ESPERANDO_REFERENCIA"
-
-    if response_state == "ESPERANDO_REFERENCIA":
-        return "VALIDANDO_ZONA"
-
-    if response_state == "VALIDANDO_ZONA":
-        zone_type = classify_zone(msg)
-        if zone_type == "invalid_metepec":
-            return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-        return "ESPERANDO_RESPUESTA_METODO"
-
-    if response_state == "ZONA_INVALIDA_POTENCIAL_METEPEC":
-        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-
-    if response_state == "ESPERANDO_RESPUESTA_METODO":
-        return "ESPERANDO_TEMA_INTERES"
-
-    if response_state == "ESPERANDO_TEMA_INTERES":
-        return "ESPERANDO_REACCION_TEMA"
-
-    if response_state == "INVITACION_CITA":
-        return "INVITACION_CITA"
-
-    if response_state == "INSISTENCIA_COSTOS_PRE_CITA":
-        return "INSISTENCIA_COSTOS_PRE_CITA"
-
-    if response_state == "COSTOS_CONTROLADOS_POR_INSISTENCIA":
-        return "INVITACION_CITA"
-
-    if response_state == "ESPERANDO_PROPUESTA_CITA":
-        return "ESPERANDO_PROPUESTA_CITA"
-
-    return DEFAULT_FLOW_STATE
-
-
-def generar_respuesta_predeterminada_por_estado(mensaje_usuario: str, estado_respuesta: str) -> str:
-    """Fallback alineado al embudo cuando Gemini falla."""
-    if estado_respuesta == "SALUDO_INICIAL":
-        return "¡Hola! Con gusto le atendemos.\n\n¿En qué podemos ayudarle?"
-
-    if estado_respuesta == "ESPERANDO_INTENCION":
-        return "Con gusto le orientamos,\n\n¿ya tiene alguna referencia de Colegio Valle de Filadelfia Campus Santa Cruz?"
-
-    if estado_respuesta == "ESPERANDO_REFERENCIA":
-        return "Muy bien.\n\nCon fines de confirmar, nuestro campus está en Santa Cruz Atizapán, a unos 15 min de Santiago Tianguistenco.\n\n¿En qué zona vive usted?"
-
-    if estado_respuesta == "VALIDANDO_ZONA":
-        return (
-            "¡Perfecto! Estamos muy cerca.\n\n"
-            "Permítame contarle brevemente por qué muchas familias eligen Valle de Filadelfia Campus Santa Cruz:\n\n"
-            "*Método Filadelfia:* Enseñanza activa y personalizada que potencia talentos únicos, cuidando su desarrollo físico, emocional e intelectual.\n\n"
-            "*Tecnología educativa avanzada:* Uso de plataformas como Knotion que integran contenidos, seguimiento académico y herramientas interactivas.\n\n"
-            "*Clases de idiomas:* Inglés y francés desde temprana edad.\n\n"
-            "*Actividades especiales:* Judo, robótica, violín Suzuki, aritmética mental Aloha, LEGO y más.\n\n"
-            "Todo esto en un ambiente seguro y colaborativo.\n\n"
-            "¿Ha escuchado hablar del *Método Filadelfia*?"
-        )
-
-    if estado_respuesta == "ZONA_INVALIDA_POTENCIAL_METEPEC":
-        return (
-            "Le ofrecemos una disculpa, probablemente esté buscando el campus de Metepec.\n\n"
-            "¿Desea información de ese campus o del de Santa Cruz Atizapán?"
-        )
-
-    if estado_respuesta == "ESPERANDO_RESPUESTA_METODO":
-        return (
-            "Nuestro *Método Filadelfia* es un modelo pedagógico que:\n\n"
-            "Se centra en cada niño(a), adaptando contenidos a sus necesidades.\n\n"
-            "Se basa en 3 pilares:\n"
-            "1. Desarrollo *lógico matemático*\n"
-            "2. Estimulación *artístico musical*\n"
-            "3. Fortalecimiento físico de *ligamentos y articulaciones*\n\n"
-            "También incluye desarrollo emocional, emprendimiento y salud física.\n\n"
-            "Integra el método Suzuki y apoyo neuromotor para potenciar el aprendizaje.\n\n"
-            "¿Qué área le interesa más fortalecer en su hijo(a)?"
-        )
-
-    if estado_respuesta == "INVITACION_CITA":
-        return (
-            "Para nosotros es muy importante que las familias conozcan nuestro modelo educativo en persona.\n\n"
-            "Una conversación por WhatsApp se queda limitada para transmitir todo lo que ofrecemos.\n\n"
-            "¿Le gustaría agendar una visita para conocer las instalaciones y platicar con la directora del nivel?"
-        )
-
-    if estado_respuesta == "INSISTENCIA_COSTOS_PRE_CITA":
-        return "Con gusto.\n\n¿Para qué nivel está interesado: preescolar, primaria o secundaria?"
-
-    if estado_respuesta == "COSTOS_CONTROLADOS_POR_INSISTENCIA":
-        return (
-            "Le menciono sobre los costos. Entendemos que elegir la mejor escuela es una decisión importante.\n\n"
-            "Tenemos opciones de beca, beneficios para hermanos y distintas modalidades de pago.\n\n"
-            "Actualmente nuestras colegiaturas son:\n"
-            "• Preescolar: $3,400 MXN/mes\n"
-            "• Primaria: $5,300 MXN/mes\n"
-            "• Secundaria: $5,600 MXN/mes\n\n"
-            "¿Le gustaría agendar su visita para conocer más detalles?"
-        )
-
-    if estado_respuesta == "ESPERANDO_PROPUESTA_CITA":
-        return (
-            "Le podemos recibir de lunes a viernes en un horario de 8:00 a.m. a 1:00 p.m., "
-            "pero si requiere algún horario especial por cuestiones laborales, con gusto evaluamos la alternativa, "
-            "siendo el horario máximo hasta las 4:00 p.m.\n\n"
-            "¿En qué día y hora le funciona mejor para agendar su cita?"
-        )
-
-    return "Con gusto le apoyamos.\n\n¿Podría indicarme un poco más sobre lo que desea conocer?"
-
 # ================= ENDPOINTS PRINCIPALES =================
 @app.get("/")
 async def root():
@@ -603,7 +491,7 @@ async def whatsapp_webhook(
         # ================= GUARDAR RESPUESTA =================
         save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
 
-        # ================= ACTUALIZAR ESTADO DEL EMBUDO =================
+        # ================= GUARDAR ESTADO DEL EMBUDO =================
         set_flow_state(contact, estado_siguiente)
         db.commit()
 
@@ -615,7 +503,6 @@ async def whatsapp_webhook(
         print(f"🤖 BOT: {respuesta}")
         print(f"🤖 Motor: {'Gemini' if GEMINI_API_KEY else 'Predeterminado'}")
         print(f"📤 Estado: {resultado}")
-        print(f"🧭 Estado embudo: {estado_actual} -> {estado_respuesta} -> {estado_siguiente}")
         print(f"👤 Estado contacto: {contact.status}")
         print(f"📊 Total mensajes: {contact.total_messages}")
         print(f"{'='*60}\n")
@@ -628,23 +515,17 @@ async def whatsapp_webhook(
 
 
 def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
-    """Genera respuesta usando Gemini API"""
+    """Genera respuesta usando Gemini API y devuelve respuesta + estado usado + estado siguiente"""
 
-    current_state = get_flow_state(contact)
-    response_state = determine_response_state(current_state, mensaje_usuario)
-    next_state = determine_next_waiting_state(response_state, mensaje_usuario)
+    estado_actual = get_flow_state(contact)
+    estado_siguiente = determinar_estado_siguiente(estado_actual, mensaje_usuario)
 
     if not GEMINI_API_KEY:
         print("⚠️  Gemini API Key no configurada, usando respuestas predeterminadas")
-        return (
-            generar_respuesta_predeterminada_por_estado(mensaje_usuario, response_state),
-            response_state,
-            next_state
-        )
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_actual)
+        return respuesta, estado_actual, estado_siguiente
 
-    # ================= USAR PROMPT MANAGER =================
     historial_lista = []
-
     if history:
         for msg in history:
             prefijo = "Usuario" if msg.direction == "incoming" else "Asistente"
@@ -653,7 +534,7 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     prompt = prompt_manager.build_prompt(
         mensaje_usuario=mensaje_usuario,
         historial_lista=historial_lista,
-        estado=response_state
+        estado=estado_actual
     )
 
     try:
@@ -673,26 +554,102 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
 
         respuesta = response.text.strip()
         print(f"🤖 Gemini respuesta COMPLETA: {repr(respuesta)}")
-        return respuesta, response_state, next_state
+        return respuesta, estado_actual, estado_siguiente
 
     except Exception as e:
         print(f"❌ Excepción en Gemini: {e}")
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_actual)
+        return respuesta, estado_actual, estado_siguiente
+
+def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actual: str) -> str:
+    """Fallback alineado al embudo inicial por estado"""
+
+    if estado_actual == "SALUDO_INICIAL":
+        return "¡Hola! Con gusto le atendemos.
+
+¿En qué podemos ayudarle?"
+
+    if estado_actual == "ESPERANDO_INTENCION":
+        return "Con gusto le orientamos,
+
+¿ya tiene alguna referencia de Colegio Valle de Filadelfia Campus Santa Cruz?"
+
+    if estado_actual == "ESPERANDO_REFERENCIA":
         return (
-            generar_respuesta_predeterminada_por_estado(mensaje_usuario, response_state),
-            response_state,
-            next_state
+            "Muy bien.
+
+"
+            "Con fines de confirmar, nuestro campus está en Santa Cruz Atizapán, a unos 15 min de Santiago Tianguistenco.
+
+"
+            "¿En qué zona vive usted?"
         )
 
+    if estado_actual == "VALIDACION_ZONA":
+        return (
+            "Para continuar y orientarle correctamente, necesito confirmar si se encuentra dentro de nuestra zona de atención.
 
-def generar_respuesta_predeterminada(mensaje_usuario: str, contact) -> str:
-    """
-    Fallback genérico. Se conserva por compatibilidad, pero el flujo principal
-    usa generar_respuesta_predeterminada_por_estado.
-    """
-    return generar_respuesta_predeterminada_por_estado(
-        mensaje_usuario,
-        determine_response_state(get_flow_state(contact), mensaje_usuario)
-    )
+"
+            "¿En qué zona vive usted?"
+        )
+
+    if estado_actual == "RESPUESTA_SOBRE_METODO":
+        return (
+            "Nuestro *Método Filadelfia* es un modelo pedagógico que:
+
+"
+            "Se centra en cada niño(a), adaptando contenidos y retos a sus necesidades.
+
+"
+            "Se basa en 3 pilares:
+"
+            "1. Desarrollo *lógico matemático*
+"
+            "2. Estimulación *artístico musical*
+"
+            "3. Fortalecimiento físico de *ligamentos y articulaciones*
+
+"
+            "También incluye desarrollo emocional, emprendimiento y salud física.
+
+"
+            "¿Qué área le interesa más fortalecer en su hijo(a)?"
+        )
+
+    if estado_actual == "RESPUESTA_DE_INTERES":
+        return "¿Qué área le interesa más fortalecer en su hijo(a)?"
+
+    if estado_actual == "DESPUES_DEL_TEMA":
+        return (
+            "Para nosotros es muy importante que las familias conozcan nuestro modelo educativo en persona.
+
+"
+            "Una conversación por WhatsApp se queda limitada para transmitir todo lo que ofrecemos.
+
+"
+            "¿Le gustaría agendar una visita para conocer las instalaciones y platicar con la directora del nivel?"
+        )
+
+    if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
+        return (
+            "Para poderle dar el resto de la información, es importante que las familias conozcan nuestro modelo educativo y nuestras instalaciones.
+
+"
+            "También es importante conocerlos a ustedes para poder orientarlos mejor.
+
+"
+            "¿Le gustaría agendar una cita presencial para compartirle todos los detalles, incluyendo costos y opciones?"
+        )
+
+    if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
+        return (
+            "Le podemos recibir de lunes a viernes en un horario de 8am a 1pm, pero si requiere algún horario en especial por cuestiones de sus actividades laborales, con gusto evaluamos la alternativa, siendo el horario máximo hasta las 4pm.
+
+"
+            "¿En qué día y hora le funciona mejor para agendar su cita?"
+        )
+
+    return "Con gusto le apoyamos. ¿Podría indicarme un poco más sobre lo que le interesa conocer?"
 
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
     """Analiza la intención y actualiza el estado del contacto"""
@@ -1441,7 +1398,6 @@ async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
         def __init__(self):
             self.status = "PROSPECTO_NUEVO"
             self.total_messages = 1
-            self.notes = f"{FLOW_STATE_PREFIX}{DEFAULT_FLOW_STATE}"
     
     contacto_prueba = ContactoPrueba()
     historial_prueba = []
