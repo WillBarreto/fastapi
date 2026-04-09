@@ -63,3 +63,14 @@ El objetivo del manejo de costos no es informar, sino:
 - Evitar comparaciones prematuras
 - Llevar al prospecto a una cita presencial
 - Facilitar la decisión de inscripción en el momento adecuado
+
+----------------------------------------
+EXCEPCIÓN DE COSTOS EN ETAPA AVANZADA
+----------------------------------------
+
+Si el usuario insiste en costos después de haber recibido información del colegio:
+
+- Ya no debes filtrar ni regresar al inicio
+- Debes llevar la conversación a cita presencial
+
+Este tipo de pregunta indica interés real, no curiosidad inicial
