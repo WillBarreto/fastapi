@@ -402,11 +402,10 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history) -> str:
         for msg in history:
             prefijo = "Usuario" if msg.direction == "incoming" else "Asistente"
             historial_lista.append(f"{prefijo}: {msg.content}")
+            
+    estado = "SALUDO_INICIAL"
 
-    prompt = prompt_manager.build_prompt(
-        mensaje_usuario=mensaje_usuario,
-        historial_lista=historial_lista
-    )
+    prompt = prompt_manager.build_prompt(mensaje_usuario, historial_lista, estado)
 
     try:
     
