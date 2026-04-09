@@ -478,7 +478,7 @@ async def whatsapp_webhook(
         # ================= GENERAR RESPUESTA CON GEMINI =================
         print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
         print(f"📊 Historial disponible: {len(history)} mensajes")
-        respuesta = generar_respuesta_inteligente(Body, contact, history)
+        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(Body, contact, history)
         
         # ================= ENVIAR RESPUESTA =================
         resultado = enviar_respuesta_twilio(From, respuesta)
@@ -570,86 +570,82 @@ def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actua
 ¿En qué podemos ayudarle?"""
 
     if estado_actual == "ESPERANDO_INTENCION":
-        return "Con gusto le orientamos,
+        return """Con gusto le orientamos,
 
-¿ya tiene alguna referencia de Colegio Valle de Filadelfia Campus Santa Cruz?"
+¿ya tiene alguna referencia de Colegio Valle de Filadelfia Campus Santa Cruz?"""
 
     if estado_actual == "ESPERANDO_REFERENCIA":
-        return (
-            "Muy bien.
+        return """Muy bien.
 
-"
-            "Con fines de confirmar, nuestro campus está en Santa Cruz Atizapán, a unos 15 min de Santiago Tianguistenco.
+Con fines de confirmar, nuestro campus está en Santa Cruz Atizapán, a unos 15 min de Santiago Tianguistenco.
 
-"
-            "¿En qué zona vive usted?"
-        )
+¿En qué zona vive usted?"""
 
     if estado_actual == "VALIDACION_ZONA":
-        return (
-            "Para continuar y orientarle correctamente, necesito confirmar si se encuentra dentro de nuestra zona de atención.
+        return """Para continuar y orientarle correctamente, necesito confirmar si se encuentra dentro de nuestra zona de atención.
 
-"
-            "¿En qué zona vive usted?"
-        )
+¿En qué zona vive usted?"""
+
+    if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
+        return """Le ofrecemos una disculpa, probablemente esté buscando el campus de Metepec.
+
+¿Desea información de ese campus o del de Santa Cruz Atizapán?"""
 
     if estado_actual == "RESPUESTA_SOBRE_METODO":
-        return (
-            "Nuestro *Método Filadelfia* es un modelo pedagógico que:
+        return """Nuestro *Método Filadelfia* es un modelo pedagógico que:
 
-"
-            "Se centra en cada niño(a), adaptando contenidos y retos a sus necesidades.
+Se centra en cada niño(a), adaptando contenidos y retos a sus necesidades.
 
-"
-            "Se basa en 3 pilares:
-"
-            "1. Desarrollo *lógico matemático*
-"
-            "2. Estimulación *artístico musical*
-"
-            "3. Fortalecimiento físico de *ligamentos y articulaciones*
+Se basa en 3 pilares:
+1. Desarrollo *lógico matemático*
+2. Estimulación *artístico musical*
+3. Fortalecimiento físico de *ligamentos y articulaciones*
 
-"
-            "También incluye desarrollo emocional, emprendimiento y salud física.
+También incluye desarrollo emocional, emprendimiento y salud física.
 
-"
-            "¿Qué área le interesa más fortalecer en su hijo(a)?"
-        )
+Integra el método Suzuki y apoyo neuromotor para potenciar el aprendizaje.
+
+Esta propuesta hace que aprender sea una experiencia práctica y significativa.
+
+¿Qué área le interesa más fortalecer en su hijo(a)?"""
 
     if estado_actual == "RESPUESTA_DE_INTERES":
-        return "¿Qué área le interesa más fortalecer en su hijo(a)?"
+        return """¿Qué área le interesa más fortalecer en su hijo(a)?"""
 
     if estado_actual == "DESPUES_DEL_TEMA":
-        return (
-            "Para nosotros es muy importante que las familias conozcan nuestro modelo educativo en persona.
+        return """Para nosotros es muy importante que las familias conozcan nuestro modelo educativo en persona.
 
-"
-            "Una conversación por WhatsApp se queda limitada para transmitir todo lo que ofrecemos.
+Una conversación por WhatsApp se queda limitada para transmitir todo lo que ofrecemos.
 
-"
-            "¿Le gustaría agendar una visita para conocer las instalaciones y platicar con la directora del nivel?"
-        )
+¿Le gustaría agendar una visita para conocer las instalaciones y platicar con la directora del nivel?"""
+
+    if estado_actual == "INVITACION_CITA":
+        return """Para nosotros es muy importante que las familias conozcan nuestro modelo educativo en persona.
+
+Una conversación por WhatsApp se queda limitada para transmitir todo lo que ofrecemos.
+
+¿Le gustaría agendar una visita para conocer las instalaciones y platicar con la directora del nivel?"""
 
     if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
-        return (
-            "Para poderle dar el resto de la información, es importante que las familias conozcan nuestro modelo educativo y nuestras instalaciones.
+        return """Para poderle dar el resto de la información, es importante que las familias conozcan nuestro modelo educativo y nuestras instalaciones.
 
-"
-            "También es importante conocerlos a ustedes para poder orientarlos mejor.
+También es importante conocerlos a ustedes para poder orientarlos mejor.
 
-"
-            "¿Le gustaría agendar una cita presencial para compartirle todos los detalles, incluyendo costos y opciones?"
-        )
+¿Le gustaría agendar una cita presencial para compartirle todos los detalles, incluyendo costos y opciones?"""
 
     if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
-        return (
-            "Le podemos recibir de lunes a viernes en un horario de 8am a 1pm, pero si requiere algún horario en especial por cuestiones de sus actividades laborales, con gusto evaluamos la alternativa, siendo el horario máximo hasta las 4pm.
+        return """Le podemos recibir de lunes a viernes en un horario de 8am a 1pm, pero si requiere algún horario en especial por cuestiones de sus actividades laborales, con gusto evaluamos la alternativa, siendo el horario máximo hasta las 4pm.
 
-"
-            "¿En qué día y hora le funciona mejor para agendar su cita?"
-        )
+¿En qué día y hora le funciona mejor para agendar su cita?"""
 
-    return "Con gusto le apoyamos. ¿Podría indicarme un poco más sobre lo que le interesa conocer?"
+    if estado_actual == "ESPERANDO_PROPUESTA_CITA":
+        return """Le podemos recibir de lunes a viernes en un horario de 8am a 1pm, pero si requiere algún horario en especial por cuestiones de sus actividades laborales, con gusto evaluamos la alternativa, siendo el horario máximo hasta las 4pm.
+
+¿En qué día y hora le funciona mejor para agendar su cita?"""
+
+    return """Con gusto le apoyamos.
+
+¿Podría indicarme un poco más sobre lo que le interesa conocer?"""
 
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
     """Analiza la intención y actualiza el estado del contacto"""
@@ -1402,11 +1398,13 @@ async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
     contacto_prueba = ContactoPrueba()
     historial_prueba = []
     
-    respuesta = generar_respuesta_gemini(message, contacto_prueba, historial_prueba)
+    respuesta, estado_actual, estado_siguiente = generar_respuesta_gemini(message, contacto_prueba, historial_prueba)
     
     return {
         "mensaje_usuario": message,
         "respuesta_gemini": respuesta,
+        "estado_actual": estado_actual,
+        "estado_siguiente": estado_siguiente,
         "modelo": GEMINI_MODEL,
         "api_key_configurada": bool(GEMINI_API_KEY)
     }
