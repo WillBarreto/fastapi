@@ -75,71 +75,192 @@ def detecta_intencion_cita(mensaje: str) -> bool:
     return any(t in msg for t in terminos)
 
 
-def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str:
+def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, history=None) -> str:
     """
-    Define cuál será el siguiente estado conversacional después de enviar la respuesta
-    correspondiente al estado_actual.
+    Define con qué estado se debe RESPONDER el mensaje actual.
+    Permite saltar directamente al mensaje correcto sin esperar
+    hasta el siguiente turno.
     """
-    msg = (mensaje_usuario or "").lower()
+    msg = (mensaje_usuario or "").lower().strip()
 
-    if estado_actual == "SALUDO_INICIAL":
-        return "ESPERANDO_INTENCION"
+    if estado_actual == "INVITACION_CITA":
+        clasificacion = clasificar_intencion_en_estado(
+            estado_actual=estado_actual,
+            mensaje_usuario=mensaje_usuario,
+            history=history or [],
+        )
 
-    if estado_actual == "ESPERANDO_INTENCION":
-        return "ESPERANDO_REFERENCIA"
+        if clasificacion == "ACEPTA_CITA":
+            return "ESPERANDO_PROPUESTA_CITA"
 
-    if estado_actual == "ESPERANDO_REFERENCIA":
-        return "VALIDACION_ZONA"
+        if clasificacion == "PIDE_COSTOS":
+            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+
+        if clasificacion in ["DUDA", "AMBIGUO"]:
+            return "INVITACION_CITA"
+
+    if estado_actual == "DESPUES_DEL_TEMA":
+        clasificacion = clasificar_intencion_en_estado(
+            estado_actual=estado_actual,
+            mensaje_usuario=mensaje_usuario,
+            history=history or [],
+        )
+
+        if clasificacion == "PIDE_COSTOS":
+            return "COSTOS_EN_ETAPA_AVANZADA"
+
+        if clasificacion == "ACEPTA_CITA":
+            return "ESPERANDO_PROPUESTA_CITA"
+
+        if clasificacion in ["REACCION_POSITIVA", "AMBIGUO"]:
+            return "INVITACION_CITA"
 
     if estado_actual == "VALIDACION_ZONA":
-        if es_zona_invalida_probable(msg):
+        clasificacion = clasificar_intencion_en_estado(
+            estado_actual=estado_actual,
+            mensaje_usuario=mensaje_usuario,
+            history=history or [],
+        )
+
+        if clasificacion == "ZONA_VALIDA":
+            return "RESPUESTA_SOBRE_METODO"
+
+        if clasificacion == "ZONA_INVALIDA":
             return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-        if es_zona_valida(msg):
-            return "RESPUESTA_SOBRE_METODO"
-        return "VALIDACION_ZONA"
 
-    if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
-        if any(x in msg for x in ["santa cruz", "con ustedes", "con nosotros", "ustedes", "nosotros"]):
-            return "RESPUESTA_SOBRE_METODO"
-        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
+        if clasificacion in ["ZONA_DUDOSA", "AMBIGUO"]:
+            return "VALIDACION_ZONA"
 
-    if estado_actual == "RESPUESTA_SOBRE_METODO":
-        return "RESPUESTA_DE_INTERES"
+    return estado_actual
+def clasificar_intencion_en_estado(
+    estado_actual: str,
+    mensaje_usuario: str,
+    history,
+) -> str:
+    """
+    Usa Gemini para clasificar la intención del usuario dentro de un estado ya definido.
+    Devuelve una etiqueta corta controlada.
+    """
 
-    if estado_actual == "RESPUESTA_DE_INTERES":
-        if detecta_tema_interes_simple(msg):
-            return "DESPUES_DEL_TEMA"
-        return "RESPUESTA_DE_INTERES"
+    msg = (mensaje_usuario or "").strip()
+
+    # Fallback rápido si no hay Gemini
+    if not GEMINI_API_KEY:
+        return clasificar_intencion_en_estado_fallback(estado_actual, msg)
+
+    # Historial breve para contexto
+    historial_lista = []
+    if history:
+        for item in history[-4:]:
+            prefijo = "Usuario" if item.direction == "incoming" else "Asistente"
+            historial_lista.append(f"{prefijo}: {item.content}")
+    historial_texto = "\n".join(historial_lista) if historial_lista else "Sin historial reciente."
+
+    # Etiquetas válidas por estado
+    if estado_actual == "INVITACION_CITA":
+        etiquetas_validas = [
+            "ACEPTA_CITA",
+            "PIDE_COSTOS",
+            "DUDA",
+            "AMBIGUO",
+        ]
+    elif estado_actual == "DESPUES_DEL_TEMA":
+        etiquetas_validas = [
+            "ACEPTA_CITA",
+            "PIDE_COSTOS",
+            "REACCION_POSITIVA",
+            "AMBIGUO",
+        ]
+    elif estado_actual == "VALIDACION_ZONA":
+        etiquetas_validas = [
+            "ZONA_VALIDA",
+            "ZONA_INVALIDA",
+            "ZONA_DUDOSA",
+            "AMBIGUO",
+        ]
+    else:
+        return clasificar_intencion_en_estado_fallback(estado_actual, msg)
+
+    prompt_clasificacion = f"""
+Eres un clasificador estricto de intención conversacional.
+
+ESTADO ACTUAL:
+{estado_actual}
+
+HISTORIAL RECIENTE:
+{historial_texto}
+
+MENSAJE DEL USUARIO:
+{msg}
+
+TAREA:
+Clasifica el mensaje en UNA sola etiqueta válida.
+
+ETIQUETAS VÁLIDAS:
+{", ".join(etiquetas_validas)}
+
+REGLAS:
+- Responde únicamente con una etiqueta.
+- No expliques nada.
+- No agregues puntuación.
+- Si no está claro, responde AMBIGUO.
+"""
+
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        response = model.generate_content(
+            prompt_clasificacion,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=10,
+                temperature=0.1,
+            ),
+        )
+        etiqueta = (response.text or "").strip().upper()
+
+        if etiqueta in etiquetas_validas:
+            return etiqueta
+
+        return "AMBIGUO"
+
+    except Exception as e:
+        print(f"⚠️ Error clasificando intención con IA: {e}")
+        return clasificar_intencion_en_estado_fallback(estado_actual, msg)
+
+
+def clasificar_intencion_en_estado_fallback(estado_actual: str, mensaje_usuario: str) -> str:
+    """
+    Respaldo simple por keywords.
+    """
+    msg = (mensaje_usuario or "").lower().strip()
+
+    if estado_actual == "INVITACION_CITA":
+        if any(x in msg for x in ["sí", "si", "claro", "excelente", "perfecto", "me interesa", "quiero", "agendar", "visita", "cita"]):
+            return "ACEPTA_CITA"
+        if detecta_costos(msg):
+            return "PIDE_COSTOS"
+        if any(x in msg for x in ["déjeme pensar", "lo voy a revisar", "más adelante", "no sé", "tal vez"]):
+            return "DUDA"
+        return "AMBIGUO"
 
     if estado_actual == "DESPUES_DEL_TEMA":
         if detecta_costos(msg):
-            return "COSTOS_EN_ETAPA_AVANZADA"
-        return "INVITACION_CITA"
+            return "PIDE_COSTOS"
+        if any(x in msg for x in ["sí", "si", "claro", "excelente", "perfecto", "me interesa", "quiero", "agendar", "visita", "cita"]):
+            return "ACEPTA_CITA"
+        if any(x in msg for x in ["bien", "muy bien", "interesante", "excelente", "me gusta"]):
+            return "REACCION_POSITIVA"
+        return "AMBIGUO"
 
-    if estado_actual == "INVITACION_CITA":
-        if detecta_costos(msg):
-            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
-        if detecta_intencion_cita(msg):
-            return "ESPERANDO_PROPUESTA_CITA"
-        return "INVITACION_CITA"
+    if estado_actual == "VALIDACION_ZONA":
+        if es_zona_valida(msg):
+            return "ZONA_VALIDA"
+        if es_zona_invalida_probable(msg):
+            return "ZONA_INVALIDA"
+        if any(x in msg for x in ["cerca", "como a 15 minutos", "por la zona", "no ubico", "colonia", "pueblo"]):
+            return "ZONA_DUDOSA"
+        return "AMBIGUO"
 
-    if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
-        if detecta_intencion_cita(msg):
-            return "ESPERANDO_PROPUESTA_CITA"
-        if detecta_costos(msg):
-            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
-        return "COSTOS_EN_ETAPA_AVANZADA"
-
-    if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
-        if detecta_intencion_cita(msg):
-            return "ESPERANDO_PROPUESTA_CITA"
-        return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
-
-    if estado_actual == "ESPERANDO_PROPUESTA_CITA":
-        return "ESPERANDO_PROPUESTA_CITA"
-
-    return estado_actual
-
+    return "AMBIGUO"
 
 def convertir_a_hora_local(dt: datetime) -> datetime:
     """Convierte un datetime almacenado en BD a hora local de México."""
