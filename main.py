@@ -70,8 +70,12 @@ def detecta_costos(mensaje: str) -> bool:
 
 
 def detecta_intencion_cita(mensaje: str) -> bool:
-    msg = (mensaje or "").lower()
-    terminos = ["cita", "visita", "agendar", "agendo", "quiero ir", "quiero conocer", "sí quiero", "si quiero"]
+    msg = (mensaje or "").lower().strip()
+    terminos = [
+        "cita", "visita", "agendar", "agendo", "quiero ir", "quiero conocer",
+        "sí quiero", "si quiero", "sí", "si", "claro", "perfecto", "excelente",
+        "me interesa", "quiero la cita", "quiero agendar"
+    ]
     return any(t in msg for t in terminos)
 
 
@@ -639,12 +643,13 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     """Genera respuesta usando Gemini API y devuelve respuesta + estado usado + estado siguiente"""
 
     estado_actual = get_flow_state(contact)
-    estado_siguiente = determinar_estado_siguiente(estado_actual, mensaje_usuario)
+    estado_respuesta = determinar_estado_respuesta(estado_actual, mensaje_usuario, history)
+    estado_siguiente = determinar_estado_siguiente(estado_respuesta, mensaje_usuario)
 
     if not GEMINI_API_KEY:
         print("⚠️  Gemini API Key no configurada, usando respuestas predeterminadas")
-        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_actual)
-        return respuesta, estado_actual, estado_siguiente
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
+        return respuesta, estado_respuesta, estado_siguiente
 
     historial_lista = []
     if history:
@@ -655,7 +660,7 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     prompt = prompt_manager.build_prompt(
         mensaje_usuario=mensaje_usuario,
         historial_lista=historial_lista,
-        estado=estado_actual
+        estado=estado_respuesta
     )
 
     try:
@@ -675,13 +680,12 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
 
         respuesta = response.text.strip()
         print(f"🤖 Gemini respuesta COMPLETA: {repr(respuesta)}")
-        return respuesta, estado_actual, estado_siguiente
+        return respuesta, estado_respuesta, estado_siguiente
 
     except Exception as e:
         print(f"❌ Excepción en Gemini: {e}")
-        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_actual)
-        return respuesta, estado_actual, estado_siguiente
-
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
+        return respuesta, estado_respuesta, estado_siguiente
 def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actual: str) -> str:
     """Fallback alineado al embudo inicial por estado"""
 
