@@ -219,13 +219,26 @@ REGLAS:
                 temperature=0.1,
             ),
         )
-        etiqueta = (response.text or "").strip().upper()
+        
+        etiqueta = ""
+
+        if hasattr(response, "text") and response.text:
+            etiqueta = response.text.strip().upper()
+        else:
+            try:
+                parts = response.candidates[0].content.parts
+                texto = "".join(
+                    part.text for part in parts if hasattr(part, "text") and part.text
+                )
+                etiqueta = texto.strip().upper()
+            except Exception:
+                etiqueta = ""
 
         if etiqueta in etiquetas_validas:
             return etiqueta
 
         return "AMBIGUO"
-
+        
     except Exception as e:
         print(f"⚠️ Error clasificando intención con IA: {e}")
         return clasificar_intencion_en_estado_fallback(estado_actual, msg)
@@ -638,6 +651,48 @@ async def whatsapp_webhook(
         print(f"❌ Error en webhook: {e}")
         return {"status": "error", "detail": str(e)}
 
+def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str:
+    """
+    Define el estado en el que quedará la conversación DESPUÉS de enviar
+    la respuesta correspondiente al estado_actual.
+    """
+    if estado_actual == "SALUDO_INICIAL":
+        return "ESPERANDO_INTENCION"
+
+    if estado_actual == "ESPERANDO_INTENCION":
+        return "ESPERANDO_REFERENCIA"
+
+    if estado_actual == "ESPERANDO_REFERENCIA":
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "VALIDACION_ZONA":
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
+        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
+
+    if estado_actual == "RESPUESTA_SOBRE_METODO":
+        return "RESPUESTA_DE_INTERES"
+
+    if estado_actual == "RESPUESTA_DE_INTERES":
+        return "RESPUESTA_DE_INTERES"
+
+    if estado_actual == "DESPUES_DEL_TEMA":
+        return "INVITACION_CITA"
+
+    if estado_actual == "INVITACION_CITA":
+        return "INVITACION_CITA"
+
+    if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
+        return "COSTOS_EN_ETAPA_AVANZADA"
+
+    if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
+        return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+
+    if estado_actual == "ESPERANDO_PROPUESTA_CITA":
+        return "ESPERANDO_PROPUESTA_CITA"
+
+    return estado_actual
 
 def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     """Genera respuesta usando Gemini API y devuelve respuesta + estado usado + estado siguiente"""
