@@ -12,7 +12,8 @@ from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
 import requests
 import json
-import tempfile
+import base64
+
 from sqlalchemy.dialects.postgresql import ENUM
 from prompt_manager import PromptManager
 
@@ -37,40 +38,30 @@ def descargar_media_twilio(media_url: str) -> bytes:
     resp.raise_for_status()
     return resp.content
 
-def transcribir_audio_openai(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+def transcribir_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
     """
-    Envía el audio a OpenAI Speech-to-Text y devuelve la transcripción.
+    Usa Gemini para transcribir audio a texto en español.
     """
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise RuntimeError("Falta OPENAI_API_KEY")
+    api_key = os.getenv("GOOGLE_AI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Falta GOOGLE_AI_API_KEY")
 
-    with tempfile.NamedTemporaryFile(delete=True, suffix=".ogg") as tmp:
-        tmp.write(audio_bytes)
-        tmp.flush()
+    genai.configure(api_key=api_key)
 
-        with open(tmp.name, "rb") as f:
-            files = {
-                "file": (filename, f, "audio/ogg")
-            }
-            data = {
-                "model": "gpt-4o-mini-transcribe"
-            }
-            headers = {
-                "Authorization": f"Bearer {openai_api_key}"
-            }
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
-            resp = requests.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers=headers,
-                files=files,
-                data=data,
-                timeout=120
-            )
-            resp.raise_for_status()
-            payload = resp.json()
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
-    return (payload.get("text") or "").strip()
+    response = model.generate_content([
+        {
+            "mime_type": mime_type,
+            "data": audio_b64
+        },
+        "Transcribe exactamente este audio a texto en español. Devuelve únicamente la transcripción, sin explicaciones."
+    ])
+
+    texto = (response.text or "").strip()
+    return texto
 
 def es_audio_whatsapp(num_media: str, media_content_type: str) -> bool:
     """
@@ -647,7 +638,7 @@ async def whatsapp_webhook(
 
             try:
                 audio_bytes = descargar_media_twilio(MediaUrl0)
-                transcripcion = transcribir_audio_openai(audio_bytes, filename="whatsapp_audio.ogg")
+                transcripcion = transcribir_audio_gemini(audio_bytes, mime_type=MediaContentType0 or "audio/ogg")
 
                 if transcripcion:
                     mensaje_entrada = transcripcion
