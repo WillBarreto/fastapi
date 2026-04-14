@@ -1601,3 +1601,19 @@ if __name__ == "__main__":
     # Obtener puerto de variable de entorno o usar 8080 por defecto
     port = int(os.getenv("PORT", "8080"))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+@app.get("/reset-contact")
+def reset_contact(db: Session = Depends(get_db)):
+    numero = "+5215546080064"
+
+    contact = db.query(Contact).filter(Contact.phone_number == numero).first()
+
+    if contact:
+        db.query(Message).filter(Message.contact_id == contact.id).delete()
+        db.delete(contact)
+        db.commit()
+
+        return {"status": "contact_deleted"}
+
+    return {"status": "not_found"}
+    
