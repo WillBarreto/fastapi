@@ -82,43 +82,21 @@ def detecta_intencion_cita(mensaje: str) -> bool:
 def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, history=None) -> str:
     """
     Define con qué estado se debe RESPONDER el mensaje actual.
-    Permite saltar directamente al mensaje correcto sin esperar
-    hasta el siguiente turno.
     """
     msg = (mensaje_usuario or "").lower().strip()
 
-    if estado_actual == "INVITACION_CITA":
-        clasificacion = clasificar_intencion_en_estado(
-            estado_actual=estado_actual,
-            mensaje_usuario=mensaje_usuario,
-            history=history or [],
-        )
+    # ===== ETAPAS TEMPRANAS DEL EMBUDO =====
+    if estado_actual == "SALUDO_INICIAL":
+        return "SALUDO_INICIAL"
 
-        if clasificacion == "ACEPTA_CITA":
-            return "ESPERANDO_PROPUESTA_CITA"
+    if estado_actual == "ESPERANDO_INTENCION":
+        # Aunque pregunte costo desde el inicio, primero se fuerza referencia.
+        return "ESPERANDO_REFERENCIA"
 
-        if clasificacion == "PIDE_COSTOS":
-            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+    if estado_actual == "ESPERANDO_REFERENCIA":
+        return "VALIDACION_ZONA"
 
-        if clasificacion in ["DUDA", "AMBIGUO"]:
-            return "INVITACION_CITA"
-
-    if estado_actual == "DESPUES_DEL_TEMA":
-        clasificacion = clasificar_intencion_en_estado(
-            estado_actual=estado_actual,
-            mensaje_usuario=mensaje_usuario,
-            history=history or [],
-        )
-
-        if clasificacion == "PIDE_COSTOS":
-            return "COSTOS_EN_ETAPA_AVANZADA"
-
-        if clasificacion == "ACEPTA_CITA":
-            return "ESPERANDO_PROPUESTA_CITA"
-
-        if clasificacion in ["REACCION_POSITIVA", "AMBIGUO"]:
-            return "INVITACION_CITA"
-
+    # ===== VALIDACIÓN DE ZONA CON IA =====
     if estado_actual == "VALIDACION_ZONA":
         clasificacion = clasificar_intencion_en_estado(
             estado_actual=estado_actual,
@@ -135,7 +113,42 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
         if clasificacion in ["ZONA_DUDOSA", "AMBIGUO"]:
             return "VALIDACION_ZONA"
 
+    # ===== DESPUÉS DEL TEMA =====
+    if estado_actual == "DESPUES_DEL_TEMA":
+        clasificacion = clasificar_intencion_en_estado(
+            estado_actual=estado_actual,
+            mensaje_usuario=mensaje_usuario,
+            history=history or [],
+        )
+
+        if clasificacion == "PIDE_COSTOS":
+            return "COSTOS_EN_ETAPA_AVANZADA"
+
+        if clasificacion == "ACEPTA_CITA":
+            return "ESPERANDO_PROPUESTA_CITA"
+
+        if clasificacion in ["REACCION_POSITIVA", "AMBIGUO"]:
+            return "INVITACION_CITA"
+
+    # ===== INVITACIÓN A CITA =====
+    if estado_actual == "INVITACION_CITA":
+        clasificacion = clasificar_intencion_en_estado(
+            estado_actual=estado_actual,
+            mensaje_usuario=mensaje_usuario,
+            history=history or [],
+        )
+
+        if clasificacion == "ACEPTA_CITA":
+            return "ESPERANDO_PROPUESTA_CITA"
+
+        if clasificacion == "PIDE_COSTOS":
+            return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+
+        if clasificacion in ["DUDA", "AMBIGUO"]:
+            return "INVITACION_CITA"
+
     return estado_actual
+
 def clasificar_intencion_en_estado(
     estado_actual: str,
     mensaje_usuario: str,
@@ -219,30 +232,30 @@ REGLAS:
                 temperature=0.1,
             ),
         )
-        
+
         etiqueta = ""
 
-        if hasattr(response, "text") and response.text:
-            etiqueta = response.text.strip().upper()
-        else:
-            try:
+        try:
+            if hasattr(response, "text") and response.text:
+                etiqueta = response.text.strip().upper()
+            else:
                 parts = response.candidates[0].content.parts
                 texto = "".join(
-                    part.text for part in parts if hasattr(part, "text") and part.text
+                    part.text for part in parts
+                    if hasattr(part, "text") and part.text
                 )
                 etiqueta = texto.strip().upper()
-            except Exception:
-                etiqueta = ""
+        except Exception:
+            etiqueta = ""
 
         if etiqueta in etiquetas_validas:
             return etiqueta
 
         return "AMBIGUO"
-        
+
     except Exception as e:
         print(f"⚠️ Error clasificando intención con IA: {e}")
         return clasificar_intencion_en_estado_fallback(estado_actual, msg)
-
 
 def clasificar_intencion_en_estado_fallback(estado_actual: str, mensaje_usuario: str) -> str:
     """
@@ -278,6 +291,50 @@ def clasificar_intencion_en_estado_fallback(estado_actual: str, mensaje_usuario:
         return "AMBIGUO"
 
     return "AMBIGUO"
+
+def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str:
+    """
+    Define el estado en el que quedará la conversación DESPUÉS de enviar
+    la respuesta correspondiente al estado_actual.
+    """
+    if estado_actual == "SALUDO_INICIAL":
+        return "ESPERANDO_INTENCION"
+
+    if estado_actual == "ESPERANDO_INTENCION":
+        return "ESPERANDO_REFERENCIA"
+
+    if estado_actual == "ESPERANDO_REFERENCIA":
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "VALIDACION_ZONA":
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
+        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
+
+    if estado_actual == "RESPUESTA_SOBRE_METODO":
+        return "RESPUESTA_DE_INTERES"
+
+    if estado_actual == "RESPUESTA_DE_INTERES":
+        return "RESPUESTA_DE_INTERES"
+
+    if estado_actual == "DESPUES_DEL_TEMA":
+        return "INVITACION_CITA"
+
+    if estado_actual == "INVITACION_CITA":
+        return "INVITACION_CITA"
+
+    if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
+        return "COSTOS_EN_ETAPA_AVANZADA"
+
+    if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
+        return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
+
+    if estado_actual == "ESPERANDO_PROPUESTA_CITA":
+        return "ESPERANDO_PROPUESTA_CITA"
+
+    return estado_actual
+
 
 def convertir_a_hora_local(dt: datetime) -> datetime:
     """Convierte un datetime almacenado en BD a hora local de México."""
@@ -532,167 +589,21 @@ def save_message(db: Session, contact_id: int, direction: str, content: str, twi
 
 def get_conversation_history(db: Session, phone_number: str, limit: int = 10):
     """Obtiene el historial de conversación de un contacto"""
-    contact = db.query(Contact).filter(Contact.phone_number == phone_number).first()
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+
+    contact = db.query(Contact).filter(Contact.phone_number == clean_number).first()
     if not contact:
         return []
-    
+
     messages = db.query(Message).filter(Message.contact_id == contact.id)\
         .order_by(Message.timestamp.desc())\
         .limit(limit)\
         .all()
-    
+
     return messages[::-1]  # Invertir para orden cronológico
-
-# ================= ENDPOINTS PRINCIPALES =================
-@app.get("/")
-async def root():
-    return {
-        "status": "WhatsApp Bot CRM",
-        "endpoints": {
-            "webhook": "/webhook/whatsapp (POST)",
-            "contacts": "/contacts (GET)",
-            "conversations": "/conversations/{phone} (GET)",
-            "panel": "/panel (GET)",
-            "health": "/health (GET)"
-        }
-    }
-
-@app.get("/health")
-async def health_check(db: Session = Depends(get_db)):
-    """Verifica salud de la aplicación y base de datos"""
-    try:
-        # Verificar conexión a BD
-        db.execute(text("SELECT 1"))
-        db_status = "✅ Conectada"
-        
-        # Estadísticas
-        total_contacts = db.query(Contact).count()
-        total_messages = db.query(Message).count()
-        
-    except Exception as e:
-        db_status = f"❌ Error: {str(e)}"
-        total_contacts = 0
-        total_messages = 0
-    
-    # Verificar Gemini
-    gemini_status = "✅ Configurado" if GEMINI_API_KEY else "❌ No configurado"
-    
-    return {
-        "status": "healthy",
-        "database": db_status,
-        "gemini": gemini_status,
-        "gemini_model": GEMINI_MODEL if GEMINI_API_KEY else "No configurado",
-        "statistics": {
-            "total_contacts": total_contacts,
-            "total_messages": total_messages
-        },
-        "twilio_configured": bool(os.getenv("TWILIO_API_KEY"))
-    }
-    
-@app.post("/webhook/whatsapp")
-async def whatsapp_webhook(
-    From: str = Form(...),
-    Body: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    try:
-        # ================= LOG EN CONSOLA =================
-        print(f"\n{'='*60}")
-        print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
-        print(f"📱 De: {From}")
-        print(f"👤 USUARIO: {Body}")
-        print(f"{'-'*40}")
-        
-        # ================= GESTIÓN DE CONTACTO =================
-        # Obtener o crear contacto
-        contact = get_or_create_contact(db, From)
-        
-        # Guardar mensaje entrante
-        save_message(db, contact.id, 'incoming', Body)
-        
-        # ================= OBTENER HISTORIAL =================
-        history = get_conversation_history(db, From, limit=5)
-        
-        # ================= GENERAR RESPUESTA CON GEMINI =================
-        print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
-        print(f"📊 Historial disponible: {len(history)} mensajes")
-        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(Body, contact, history)
-        
-        # ================= ENVIAR RESPUESTA =================
-        resultado = enviar_respuesta_twilio(From, respuesta)
-        
-        # Extraer SID si está disponible
-        twilio_sid = None
-        if "SID:" in resultado:
-            twilio_sid = resultado.split("SID: ")[1].strip()
-        
-        # ================= GUARDAR RESPUESTA =================
-        save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
-
-        # ================= GUARDAR ESTADO DEL EMBUDO =================
-        set_flow_state(contact, estado_siguiente)
-        db.commit()
-
-        # ================= ANÁLISIS DE INTENCIÓN =================
-        nuevo_estado = actualizar_estado_segun_intencion(Body, respuesta, contact, db)
-        print(f"🎯 Análisis de intención: {nuevo_estado}")
-        
-        # ================= LOG DE RESPUESTA =================
-        print(f"🤖 BOT: {respuesta}")
-        print(f"🤖 Motor: {'Gemini' if GEMINI_API_KEY else 'Predeterminado'}")
-        print(f"📤 Estado: {resultado}")
-        print(f"👤 Estado contacto: {contact.status}")
-        print(f"📊 Total mensajes: {contact.total_messages}")
-        print(f"{'='*60}\n")
-        
-        return {"status": "processed", "contact_id": contact.id}
-    
-    except Exception as e:
-        print(f"❌ Error en webhook: {e}")
-        return {"status": "error", "detail": str(e)}
-
-def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str:
-    """
-    Define el estado en el que quedará la conversación DESPUÉS de enviar
-    la respuesta correspondiente al estado_actual.
-    """
-    if estado_actual == "SALUDO_INICIAL":
-        return "ESPERANDO_INTENCION"
-
-    if estado_actual == "ESPERANDO_INTENCION":
-        return "ESPERANDO_REFERENCIA"
-
-    if estado_actual == "ESPERANDO_REFERENCIA":
-        return "VALIDACION_ZONA"
-
-    if estado_actual == "VALIDACION_ZONA":
-        return "VALIDACION_ZONA"
-
-    if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
-        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-
-    if estado_actual == "RESPUESTA_SOBRE_METODO":
-        return "RESPUESTA_DE_INTERES"
-
-    if estado_actual == "RESPUESTA_DE_INTERES":
-        return "RESPUESTA_DE_INTERES"
-
-    if estado_actual == "DESPUES_DEL_TEMA":
-        return "INVITACION_CITA"
-
-    if estado_actual == "INVITACION_CITA":
-        return "INVITACION_CITA"
-
-    if estado_actual == "COSTOS_EN_ETAPA_AVANZADA":
-        return "COSTOS_EN_ETAPA_AVANZADA"
-
-    if estado_actual == "INSISTE_COSTOS_ANTES_DE_AGENDAR":
-        return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
-
-    if estado_actual == "ESPERANDO_PROPUESTA_CITA":
-        return "ESPERANDO_PROPUESTA_CITA"
-
-    return estado_actual
 
 def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     """Genera respuesta usando Gemini API y devuelve respuesta + estado usado + estado siguiente"""
