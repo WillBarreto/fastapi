@@ -1734,5 +1734,3 @@ def reset_contact(db: Session = Depends(get_db)):
 
     return {"status": "not_found"}
 
-
-    
