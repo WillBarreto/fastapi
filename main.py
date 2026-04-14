@@ -519,6 +519,99 @@ def get_db():
 # ================= APLICACIÓN FASTAPI =================
 app = FastAPI(title="WhatsApp Bot CRM", version="1.0.0")
 
+
+# ================= ENDPOINTS PRINCIPALES =================
+@app.get("/")
+async def root():
+    return {
+        "status": "WhatsApp Bot CRM",
+        "endpoints": {
+            "webhook": "/webhook/whatsapp (POST)",
+            "contacts": "/contacts (GET)",
+            "conversations": "/conversations/{phone} (GET)",
+            "panel": "/panel (GET)",
+            "health": "/health (GET)"
+        }
+    }
+
+@app.get("/health")
+async def health_check(db: Session = Depends(get_db)):
+    """Verifica salud de la aplicación y base de datos"""
+    try:
+        db.execute(text("SELECT 1"))
+        db_status = "✅ Conectada"
+        total_contacts = db.query(Contact).count()
+        total_messages = db.query(Message).count()
+    except Exception as e:
+        db_status = f"❌ Error: {str(e)}"
+        total_contacts = 0
+        total_messages = 0
+
+    gemini_status = "✅ Configurado" if GEMINI_API_KEY else "❌ No configurado"
+
+    return {
+        "status": "healthy",
+        "database": db_status,
+        "gemini": gemini_status,
+        "gemini_model": GEMINI_MODEL if GEMINI_API_KEY else "No configurado",
+        "statistics": {
+            "total_contacts": total_contacts,
+            "total_messages": total_messages
+        },
+        "twilio_configured": bool(os.getenv("TWILIO_API_KEY"))
+    }
+
+@app.post("/webhook/whatsapp")
+async def whatsapp_webhook(
+    From: str = Form(...),
+    Body: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        print(f"\n{'='*60}")
+        print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
+        print(f"📱 De: {From}")
+        print(f"👤 USUARIO: {Body}")
+        print(f"{'-'*40}")
+
+        contact = get_or_create_contact(db, From)
+        save_message(db, contact.id, 'incoming', Body)
+
+        history = get_conversation_history(db, From, limit=5)
+
+        print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
+        print(f"📊 Historial disponible: {len(history)} mensajes")
+
+        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(Body, contact, history)
+
+        resultado = enviar_respuesta_twilio(From, respuesta)
+
+        twilio_sid = None
+        if "SID:" in resultado:
+            twilio_sid = resultado.split("SID: ")[1].strip()
+
+        save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
+
+        set_flow_state(contact, estado_siguiente)
+        db.commit()
+
+        nuevo_estado = actualizar_estado_segun_intencion(Body, respuesta, contact, db)
+        print(f"🎯 Análisis de intención: {nuevo_estado}")
+
+        print(f"🤖 BOT: {respuesta}")
+        print(f"🤖 Motor: {'Gemini' if GEMINI_API_KEY else 'Predeterminado'}")
+        print(f"📤 Estado: {resultado}")
+        print(f"👤 Estado contacto: {contact.status}")
+        print(f"📊 Total mensajes: {contact.total_messages}")
+        print(f"{'='*60}\n")
+
+        return {"status": "processed", "contact_id": contact.id}
+
+    except Exception as e:
+        print(f"❌ Error en webhook: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
 # Configuración del negocio
 NEGOCIO_INFO = """
 Eres el asistente virtual del Colegio. 
