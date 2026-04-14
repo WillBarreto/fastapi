@@ -12,6 +12,7 @@ from sqlalchemy.sql import func
 from fastapi.responses import HTMLResponse 
 import requests
 import json
+import tempfile
 from sqlalchemy.dialects.postgresql import ENUM
 from prompt_manager import PromptManager
 
@@ -21,6 +22,73 @@ prompt_manager = PromptManager()
 
 FLOW_STATE_PREFIX = "FLOW_STATE:"
 
+def descargar_media_twilio(media_url: str) -> bytes:
+    """
+    Descarga un archivo multimedia enviado por Twilio usando Basic Auth.
+    """
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    api_key = os.getenv("TWILIO_API_KEY")
+    api_secret = os.getenv("TWILIO_API_SECRET")
+
+    if not all([account_sid, api_key, api_secret]):
+        raise RuntimeError("Faltan credenciales de Twilio para descargar media")
+
+    resp = requests.get(media_url, auth=(api_key, api_secret), timeout=30)
+    resp.raise_for_status()
+    return resp.content
+
+def transcribir_audio_openai(audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+    """
+    Envía el audio a OpenAI Speech-to-Text y devuelve la transcripción.
+    """
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise RuntimeError("Falta OPENAI_API_KEY")
+
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".ogg") as tmp:
+        tmp.write(audio_bytes)
+        tmp.flush()
+
+        with open(tmp.name, "rb") as f:
+            files = {
+                "file": (filename, f, "audio/ogg")
+            }
+            data = {
+                "model": "gpt-4o-mini-transcribe"
+            }
+            headers = {
+                "Authorization": f"Bearer {openai_api_key}"
+            }
+
+            resp = requests.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=120
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+
+    return (payload.get("text") or "").strip()
+
+def es_audio_whatsapp(num_media: str, media_content_type: str) -> bool:
+    """
+    Determina si el mensaje entrante contiene audio.
+    """
+    try:
+        total = int(num_media or "0")
+    except ValueError:
+        total = 0
+
+    if total < 1:
+        return False
+
+    content_type = (media_content_type or "").lower()
+    return content_type.startswith("audio/")
+
+
+    
 
 def get_flow_state(contact) -> str:
     """Obtiene el estado conversacional actual guardado en notes."""
@@ -564,25 +632,49 @@ async def health_check(db: Session = Depends(get_db)):
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
-    Body: str = Form(...),
+    Body: str = Form(""),
+    NumMedia: str = Form("0"),
+    MediaUrl0: str = Form(""),
+    MediaContentType0: str = Form(""),
     db: Session = Depends(get_db)
 ):
     try:
+        mensaje_entrada = (Body or "").strip()
+
+        # Si llegó audio por WhatsApp, lo transcribimos
+        if es_audio_whatsapp(NumMedia, MediaContentType0):
+            print("🎙️ Se detectó audio entrante por WhatsApp")
+
+            try:
+                audio_bytes = descargar_media_twilio(MediaUrl0)
+                transcripcion = transcribir_audio_openai(audio_bytes, filename="whatsapp_audio.ogg")
+
+                if transcripcion:
+                    mensaje_entrada = transcripcion
+                    print(f"📝 Transcripción audio: {mensaje_entrada}")
+                else:
+                    mensaje_entrada = "[Audio recibido sin transcripción]"
+                    print("⚠️ Audio recibido, pero no se obtuvo texto")
+
+            except Exception as e:
+                print(f"❌ Error transcribiendo audio: {e}")
+                mensaje_entrada = "[Audio recibido pero no se pudo transcribir]"
+        
         print(f"\n{'='*60}")
         print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
         print(f"📱 De: {From}")
-        print(f"👤 USUARIO: {Body}")
+        print(f"👤 USUARIO: {mensaje_entrada}")
         print(f"{'-'*40}")
 
         contact = get_or_create_contact(db, From)
-        save_message(db, contact.id, 'incoming', Body)
+        save_message(db, contact.id, 'incoming', mensaje_entrada)
 
         history = get_conversation_history(db, From, limit=5)
 
         print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
         print(f"📊 Historial disponible: {len(history)} mensajes")
 
-        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(Body, contact, history)
+        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(mensaje_entrada, contact, history)
 
         resultado = enviar_respuesta_twilio(From, respuesta)
 
@@ -595,7 +687,7 @@ async def whatsapp_webhook(
         set_flow_state(contact, estado_siguiente)
         db.commit()
 
-        nuevo_estado = actualizar_estado_segun_intencion(Body, respuesta, contact, db)
+        nuevo_estado = actualizar_estado_segun_intencion(mensaje_entrada, respuesta, contact, db)
         print(f"🎯 Análisis de intención: {nuevo_estado}")
 
         print(f"🤖 BOT: {respuesta}")
