@@ -98,6 +98,7 @@ class PromptManager:
         bloques.append(self._read_file("businesses/colegio_valle_filadelfia_santa_cruz/negocio/propuesta_valor.txt"))
         bloques.append(self._read_file("businesses/colegio_valle_filadelfia_santa_cruz/negocio/politicas_comerciales.txt"))
         bloques.append(self._read_file("businesses/colegio_valle_filadelfia_santa_cruz/negocio/agenda_y_visitas.txt"))
+        bloques.append(self._read_file("businesses/colegio_valle_filadelfia_santa_cruz/negocio/precios.txt"))
 
         # TEMA OPCIONAL
         if tema:
