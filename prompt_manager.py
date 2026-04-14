@@ -121,14 +121,7 @@ class PromptManager:
             "No improvise. No salte pasos. No reinicie la conversación. "
             "No repita preguntas ya respondidas. "
             "Use formato claro para WhatsApp, con bloques breves y fáciles de leer."
+            "Priorice siempre avanzar la conversación hacia la cita presencial cuando el prospecto muestre interés. "
         )
 
         return prompt_final
-
-prompt_final += (
-    "\n\nINSTRUCCIÓN FINAL:\n"
-    "Responda estrictamente según el estado actual y el flujo definido. "
-    "No improvise. No salte pasos. No reinicie la conversación. "
-    "No repita preguntas ya respondidas. "
-    "Use formato claro para WhatsApp, con bloques breves y fáciles de leer."
-)
