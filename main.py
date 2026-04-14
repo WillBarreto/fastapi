@@ -48,7 +48,7 @@ def transcribir_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -
 
     genai.configure(api_key=api_key)
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel(GEMINI_MODEL)
 
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
@@ -62,7 +62,7 @@ def transcribir_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -
 
     texto = (response.text or "").strip()
     return texto
-
+    
 def es_audio_whatsapp(num_media: str, media_content_type: str) -> bool:
     """
     Determina si el mensaje entrante contiene audio.
