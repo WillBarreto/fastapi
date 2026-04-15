@@ -238,6 +238,7 @@ def clasificar_intencion_en_estado(
             "ACEPTA_CITA",
             "PIDE_COSTOS",
             "DUDA",
+            "ACUERDO_SEGUIMIENTO",
             "AMBIGUO",
         ]
     elif estado_actual == "DESPUES_DEL_TEMA":
@@ -245,6 +246,7 @@ def clasificar_intencion_en_estado(
             "ACEPTA_CITA",
             "PIDE_COSTOS",
             "REACCION_POSITIVA",
+            "ACUERDO_SEGUIMIENTO",
             "AMBIGUO",
         ]
     elif estado_actual == "VALIDACION_ZONA":
@@ -271,6 +273,11 @@ MENSAJE DEL USUARIO:
 
 TAREA:
 Clasifica el mensaje en UNA sola etiqueta válida.
+
+REGLA ESPECIAL:
+Si el usuario indica que revisará la información con otra persona (esposo, familia, etc.), 
+que lo pensará, o que retomará después, clasifica como:
+ACUERDO_SEGUIMIENTO
 
 ETIQUETAS VÁLIDAS:
 {", ".join(etiquetas_validas)}
