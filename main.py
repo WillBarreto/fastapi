@@ -972,9 +972,16 @@ También es importante conocerlos a ustedes para poder orientarlos mejor.
 
 ¿En qué día y hora le funciona mejor para agendar su cita?"""
 
+    if estado_actual == "SEGUIMIENTO_ACORDADO":
+        return """Perfecto, quedamos atentos por este mismo medio.
+
+Cuando lo revise con calma y guste retomar, con gusto le seguimos apoyando."""
+
     return """Con gusto le apoyamos.
 
 ¿Podría indicarme un poco más sobre lo que le interesa conocer?"""
+
+    
 
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
     """Analiza la intención y actualiza el estado del contacto"""
