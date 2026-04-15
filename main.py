@@ -179,13 +179,16 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
             mensaje_usuario=mensaje_usuario,
             history=history or [],
         )
-
+    
         if clasificacion == "PIDE_COSTOS":
             return "COSTOS_EN_ETAPA_AVANZADA"
-
+    
         if clasificacion == "ACEPTA_CITA":
             return "ESPERANDO_PROPUESTA_CITA"
-
+    
+        if clasificacion == "ACUERDO_SEGUIMIENTO":
+            return "SEGUIMIENTO_ACORDADO"
+    
         if clasificacion in ["REACCION_POSITIVA", "AMBIGUO"]:
             return "INVITACION_CITA"
 
@@ -196,13 +199,16 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
             mensaje_usuario=mensaje_usuario,
             history=history or [],
         )
-
+    
         if clasificacion == "ACEPTA_CITA":
             return "ESPERANDO_PROPUESTA_CITA"
-
+    
         if clasificacion == "PIDE_COSTOS":
             return "INSISTE_COSTOS_ANTES_DE_AGENDAR"
-
+    
+        if clasificacion == "ACUERDO_SEGUIMIENTO":
+            return "SEGUIMIENTO_ACORDADO"
+    
         if clasificacion in ["DUDA", "AMBIGUO"]:
             return "INVITACION_CITA"
 
@@ -418,6 +424,9 @@ def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str
 
     if estado_actual == "ESPERANDO_PROPUESTA_CITA":
         return "ESPERANDO_PROPUESTA_CITA"
+
+    if estado_actual == "SEGUIMIENTO_ACORDADO":
+        return "SEGUIMIENTO_ACORDADO"
 
     return estado_actual
 
@@ -880,6 +889,7 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
         print(f"❌ Excepción en Gemini: {e}")
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
         return respuesta, estado_respuesta, estado_siguiente
+        
 def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actual: str) -> str:
     """Fallback alineado al embudo inicial por estado"""
 
