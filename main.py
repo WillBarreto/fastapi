@@ -688,12 +688,10 @@ async def whatsapp_webhook(
                 mensaje_entrada = "[Audio recibido pero no se pudo transcribir]"
 
         # ===== FALLBACK SI FALLÓ LA TRANSCRIPCIÓN =====
-        if mensaje_entrada == "[Audio recibido pero no se pudo transcribir]":
-            respuesta = (
-                "Con gusto le apoyamos.\n\n"
-                "Recibimos su mensaje de voz, pero en este momento no pudimos procesarlo correctamente.\n\n"
-                "¿Nos lo podría compartir por texto para darle seguimiento adecuado por este medio?"
-            )
+        if mensaje_entrada in [
+            "[Audio recibido pero no se pudo transcribir]",
+            "[Audio recibido sin transcripción]"
+        ]:
 
             contact = get_or_create_contact(db, From)
 
