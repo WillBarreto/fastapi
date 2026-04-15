@@ -870,11 +870,6 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     )
 
     try:
-        print(f"🔍 PROBANDO CONEXIÓN CON MODELO: {GEMINI_MODEL}")
-        test_model = genai.GenerativeModel(GEMINI_MODEL)
-        test_response = test_model.generate_content("Responde únicamente con 'GEMINI_CONECTADO_OK'")
-        print(f"✅ Prueba Gemini: {test_response.text}")
-
         model = genai.GenerativeModel(GEMINI_MODEL)
         response = model.generate_content(
             prompt,
