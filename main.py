@@ -330,6 +330,16 @@ def clasificar_intencion_en_estado_fallback(estado_actual: str, mensaje_usuario:
     msg = (mensaje_usuario or "").lower().strip()
 
     if estado_actual == "INVITACION_CITA":
+        if any(x in msg for x in [
+            "lo reviso con mi esposo", "lo reviso con mi esposa",
+            "lo veo con mi esposo", "lo veo con mi esposa",
+            "lo consulto con mi esposo", "lo consulto con mi esposa",
+            "lo platico con mi esposo", "lo platico con mi esposa",
+            "lo revisamos y le avisamos", "después le escribo",
+            "yo le aviso", "luego le aviso", "luego le escribo",
+            "cuando lo revise le escribo", "cuando lo vea le escribo"
+        ]):
+            return "ACUERDO_SEGUIMIENTO"
         if any(x in msg for x in ["sí", "si", "claro", "excelente", "perfecto", "me interesa", "quiero", "agendar", "visita", "cita"]):
             return "ACEPTA_CITA"
         if detecta_costos(msg):
@@ -339,6 +349,16 @@ def clasificar_intencion_en_estado_fallback(estado_actual: str, mensaje_usuario:
         return "AMBIGUO"
 
     if estado_actual == "DESPUES_DEL_TEMA":
+        if any(x in msg for x in [
+            "lo reviso con mi esposo", "lo reviso con mi esposa",
+            "lo veo con mi esposo", "lo veo con mi esposa",
+            "lo consulto con mi esposo", "lo consulto con mi esposa",
+            "lo platico con mi esposo", "lo platico con mi esposa",
+            "lo revisamos y le avisamos", "después le escribo",
+            "yo le aviso", "luego le aviso", "luego le escribo",
+            "cuando lo revise le escribo", "cuando lo vea le escribo"
+        ]):
+            return "ACUERDO_SEGUIMIENTO"
         if detecta_costos(msg):
             return "PIDE_COSTOS"
         if any(x in msg for x in ["sí", "si", "claro", "excelente", "perfecto", "me interesa", "quiero", "agendar", "visita", "cita"]):
