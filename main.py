@@ -692,21 +692,26 @@ async def whatsapp_webhook(
             "[Audio recibido pero no se pudo transcribir]",
             "[Audio recibido sin transcripción]"
         ]:
-
+            respuesta = (
+                "Con gusto le apoyamos.\n\n"
+                "Recibimos su mensaje de voz, pero en este momento no pudimos procesarlo correctamente.\n\n"
+                "¿Nos lo podría compartir por texto para darle seguimiento adecuado por este medio?"
+            )
+        
             contact = get_or_create_contact(db, From)
-
+        
             resultado = enviar_respuesta_twilio(From, respuesta)
-
+        
             twilio_sid = None
             if "SID:" in resultado:
                 twilio_sid = resultado.split("SID: ")[1].strip()
-
+        
             save_message(db, contact.id, 'incoming', mensaje_entrada)
             save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
-
+        
             print(f"🤖 BOT (fallback audio): {respuesta}")
             print(f"📤 Estado: {resultado}")
-
+        
             return {"status": "processed_audio_fallback", "contact_id": contact.id}
             
         
