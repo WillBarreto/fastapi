@@ -175,7 +175,7 @@ Cuando el usuario diga frases como:
 NO intentes reactivar la conversación.
 NO preguntes si desea agendar.
 NO hagas otra pregunta.
-NO cierres con una frase genérica si puedes reconocer brevemente el contexto.
+Evita cerrar con una frase genérica cuando el mensaje del usuario permita reconocer brevemente el contexto.
 
 Responde de forma corta, cordial y contextual.
 
