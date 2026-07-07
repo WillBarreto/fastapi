@@ -730,6 +730,9 @@ async def whatsapp_webhook(
         print(f"📊 Historial disponible: {len(history)} mensajes")
 
         respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(mensaje_entrada, contact, history)
+        
+        print(f"🧭 Estado flujo usado para responder: {estado_actual}")
+        print(f"➡️ Estado flujo siguiente: {estado_siguiente}")
 
         resultado = enviar_respuesta_twilio(From, respuesta)
 
@@ -982,38 +985,149 @@ Cuando lo revise con calma y guste retomar, con gusto le seguimos apoyando."""
     
 
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
-    """Analiza la intención y actualiza el estado del contacto"""
-    mensaje_lower = mensaje_usuario.lower()
-    
-    # Detectar señales de competencia (Gemini 2.5 mejorará esto)
+    """
+    Analiza la intención y actualiza el estado comercial del contacto.
+
+    IMPORTANTE:
+    contact.status = estado comercial del CRM
+    contact.notes = estado conversacional del flujo, por ejemplo FLOW_STATE:SEGUIMIENTO_ACORDADO
+    """
+
+    mensaje_lower = (mensaje_usuario or "").lower().strip()
+    respuesta_lower = (respuesta_gemini or "").lower().strip()
+    flow_state = get_flow_state(contact)
+
+    # =========================
+    # 1. SEÑALES DE COMPETENCIA
+    # =========================
     señales_competencia = [
         "otro colegio", "competencia", "comparar precios", "vs ",
-        "versus", "más barato", "mejor precio", "diferencia con",
-        "qué tal ", "me recomiendan", "estoy viendo", "otras opciones"
+        "versus", "más barato", "mas barato", "mejor precio",
+        "diferencia con", "qué tal ", "que tal ",
+        "me recomiendan", "estoy viendo", "otras opciones"
     ]
-    
-    # Detectar interés genuino
+
+    es_competencia = any(señal in mensaje_lower for señal in señales_competencia)
+
+    # =========================
+    # 2. SEÑALES DE INTERÉS REAL
+    # =========================
     señales_interes = [
         "inscribir", "matricular", "proceso", "requisitos",
         "documentos", "vacantes", "agendar visita", "quiero conocer",
-        "cuándo empiezan", "horarios de", "puedo visitar"
+        "cuándo empiezan", "cuando empiezan", "horarios de",
+        "puedo visitar", "me interesa", "informes", "información",
+        "informacion", "costos", "precio", "colegiatura",
+        "colegiaturas", "inscripción", "inscripcion",
+        "primaria", "preescolar", "secundaria"
     ]
-    
-    # Análisis básico (Gemini 2.5 hará análisis más sofisticado)
-    es_competencia = any(señal in mensaje_lower for señal in señales_competencia)
+
     es_interes = any(señal in mensaje_lower for señal in señales_interes)
-    
+
+    # =========================
+    # 3. SEÑALES DE QUE YA FUE INFORMADO
+    # =========================
+    señales_respuesta_informativa = [
+        "método filadelfia", "metodo filadelfia",
+        "colegiatura mensual",
+        "aproximadamente de $",
+        "becas",
+        "descuentos",
+        "planes de apoyo",
+        "plataformas digitales",
+        "knotion",
+        "agendar una visita",
+        "cita presencial"
+    ]
+
+    bot_ya_informo = any(señal in respuesta_lower for señal in señales_respuesta_informativa)
+
+    # =========================
+    # 4. SEÑALES DE PAUSA / SEGUIMIENTO
+    # =========================
+    señales_pausa = [
+        "no por el momento",
+        "por el momento no",
+        "lo reviso",
+        "lo checo",
+        "lo consulto",
+        "lo platico",
+        "lo veo con mi esposo",
+        "lo veo con mi esposa",
+        "lo reviso con mi esposo",
+        "lo reviso con mi esposa",
+        "lo consulto con mi esposo",
+        "lo consulto con mi esposa",
+        "después les aviso",
+        "despues les aviso",
+        "luego les aviso",
+        "yo les aviso",
+        "más adelante",
+        "mas adelante"
+    ]
+
+    prospecto_pausa = any(señal in mensaje_lower for señal in señales_pausa)
+
+    # =========================
+    # 5. SEÑALES DE CITA
+    # =========================
+    señales_cita = [
+        "quiero agendar",
+        "quiero visitar",
+        "quiero conocer",
+        "agendamos",
+        "agendar cita",
+        "agendar una cita",
+        "visita",
+        "cita"
+    ]
+
+    quiere_cita = any(señal in mensaje_lower for señal in señales_cita)
+
+    # =========================
+    # 6. ACTUALIZACIÓN DE ESTADO COMERCIAL
+    # =========================
+
+    # Competencia solo si no hay interés real claro
     if es_competencia and not es_interes:
         if contact.status != "COMPETENCIA":
             contact.status = "COMPETENCIA"
             contact.is_competitor = True
-            print(f"🎯 Estado actualizado: COMPETENCIA (señales detectadas)")
-    
-    elif es_interes:
+            print("🎯 Estado comercial actualizado: COMPETENCIA")
+        db.commit()
+        return contact.status
+
+    # Si ya está en estados más avanzados, no degradar
+    estados_no_degradar = [
+        "VISITA_AGENDADA",
+        "INSCRIPCION_PENDIENTE",
+        "ALUMNO_ACTIVO",
+        "ALUMNO_INACTIVO",
+        "EX_ALUMNO"
+    ]
+
+    if contact.status in estados_no_degradar:
+        db.commit()
+        return contact.status
+
+    # Si pide cita explícitamente, por ahora se marca como informado.
+    # No usamos VISITA_AGENDADA hasta que exista confirmación interna real.
+    if quiere_cita:
         if contact.status == "PROSPECTO_NUEVO":
             contact.status = "PROSPECTO_INFORMADO"
-            print(f"🎯 Estado actualizado: PROSPECTO_INFORMADO")
-    
+            print("🎯 Estado comercial actualizado: PROSPECTO_INFORMADO (interés en cita)")
+        db.commit()
+        return contact.status
+
+    # Si ya recibió valor, precio, explicación o pausó después de recibir información,
+    # ya no debe permanecer como prospecto nuevo.
+    if es_interes or bot_ya_informo or prospecto_pausa or flow_state == "SEGUIMIENTO_ACORDADO":
+        if contact.status == "PROSPECTO_NUEVO":
+            contact.status = "PROSPECTO_INFORMADO"
+            print("🎯 Estado comercial actualizado: PROSPECTO_INFORMADO")
+        db.commit()
+        return contact.status
+
     db.commit()
     return contact.status
 
