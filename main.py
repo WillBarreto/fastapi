@@ -194,7 +194,7 @@ def detecta_pausa_o_cierre(mensaje: str) -> bool:
         "más adelante",
         "mas adelante",
         "ahorita no",
-        "por ahora no"
+        "por ahora no",
         "necesito consultarlo con mi esposo",
         "necesito consultarlo con mi esposa",
         "tengo que consultarlo con mi esposo",
@@ -980,8 +980,6 @@ def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actua
 
     if estado_actual == "SALUDO_INICIAL":
         return generar_saludo_inicial_contextual(mensaje_usuario)
-
-¿En qué podemos ayudarle?"""
 
     if estado_actual == "ESPERANDO_INTENCION":
         return """Con gusto le orientamos,
