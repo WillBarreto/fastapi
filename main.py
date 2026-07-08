@@ -122,7 +122,6 @@ def detecta_campus_externo(mensaje: str) -> bool:
         "campus metepec",
         "del campus metepec",
         "de campus metepec",
-        "metepec",
         "teléfono del campus metepec",
         "telefono del campus metepec",
         "número del campus metepec",
