@@ -127,6 +127,29 @@ def detecta_costos(mensaje: str) -> bool:
     terminos = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
     return any(t in msg for t in terminos)
 
+def generar_saludo_inicial_contextual(mensaje: str) -> str:
+    """
+    Genera un saludo inicial adaptado al mensaje del usuario.
+    """
+    msg = (mensaje or "").lower().strip()
+
+    if "buenos días" in msg or "buen dia" in msg or "buen día" in msg:
+        saludo = "Buenos días"
+    elif "buenas tardes" in msg:
+        saludo = "Buenas tardes"
+    elif "buenas noches" in msg:
+        saludo = "Buenas noches"
+    else:
+        saludo = "¡Hola!"
+
+    if saludo == "¡Hola!":
+        return """¡Hola! Con gusto le atendemos.
+
+¿En qué podemos ayudarle?"""
+
+    return f"""{saludo}, con gusto le atendemos.
+
+¿En qué podemos ayudarle?"""
 
 def detecta_intencion_cita(mensaje: str) -> bool:
     msg = (mensaje or "").lower().strip()
@@ -172,6 +195,16 @@ def detecta_pausa_o_cierre(mensaje: str) -> bool:
         "mas adelante",
         "ahorita no",
         "por ahora no"
+        "necesito consultarlo con mi esposo",
+        "necesito consultarlo con mi esposa",
+        "tengo que consultarlo con mi esposo",
+        "tengo que consultarlo con mi esposa",
+        "voy a consultarlo con mi esposo",
+        "voy a consultarlo con mi esposa",
+        "quiero consultarlo con mi esposo",
+        "quiero consultarlo con mi esposa",
+        "debo consultarlo con mi esposo",
+        "debo consultarlo con mi esposa",
     ]
 
     return any(frase in msg for frase in frases)
@@ -946,7 +979,7 @@ def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actua
     """Fallback alineado al embudo inicial por estado"""
 
     if estado_actual == "SALUDO_INICIAL":
-        return """¡Hola! Con gusto le atendemos.
+        return generar_saludo_inicial_contextual(mensaje_usuario)
 
 ¿En qué podemos ayudarle?"""
 
