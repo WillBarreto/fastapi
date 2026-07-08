@@ -111,6 +111,33 @@ def es_zona_invalida_probable(mensaje: str) -> bool:
     zonas_invalidas = ["metepec", "toluca"]
     return any(z in msg for z in zonas_invalidas)
 
+def detecta_campus_externo(mensaje: str) -> bool:
+    """
+    Detecta cuando el usuario está buscando información de otro campus
+    y no del Campus Santa Cruz Atizapán.
+    """
+    msg = (mensaje or "").lower().strip()
+
+    frases = [
+        "campus metepec",
+        "del campus metepec",
+        "de campus metepec",
+        "metepec",
+        "teléfono del campus metepec",
+        "telefono del campus metepec",
+        "número del campus metepec",
+        "numero del campus metepec",
+        "contacto del campus metepec",
+        "información del campus metepec",
+        "informacion del campus metepec",
+        "quiero informes de metepec",
+        "quiero informes del campus metepec",
+        "otro campus",
+        "de otro campus"
+    ]
+
+    return any(frase in msg for frase in frases)
+
 
 def detecta_tema_interes_simple(mensaje: str) -> bool:
     msg = (mensaje or "").lower()
@@ -215,6 +242,11 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
     Define con qué estado se debe RESPONDER el mensaje actual.
     """
     msg = (mensaje_usuario or "").lower().strip()
+
+    # ===== CAMPUS EXTERNO / NO ATENDIBLE =====
+    # Si el usuario confirma que busca otro campus, no insistir con Santa Cruz.
+    if detecta_campus_externo(mensaje_usuario):
+        return "CAMPUS_EXTERNO_NO_ATENDIBLE"
 
     # ===== PAUSA / CIERRE GLOBAL =====
     # Si el prospecto pausa la conversación en una etapa avanzada,
@@ -511,6 +543,9 @@ def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str
 
     if estado_actual == "SEGUIMIENTO_ACORDADO":
         return "SEGUIMIENTO_ACORDADO"
+
+    if estado_actual == "CAMPUS_EXTERNO_NO_ATENDIBLE":
+        return "CAMPUS_EXTERNO_NO_ATENDIBLE"
 
     return estado_actual
 
@@ -939,6 +974,10 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     estado_respuesta = determinar_estado_respuesta(estado_actual, mensaje_usuario, history)
     estado_siguiente = determinar_estado_siguiente(estado_respuesta, mensaje_usuario)
 
+    if estado_respuesta == "CAMPUS_EXTERNO_NO_ATENDIBLE":
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
+        return respuesta, estado_respuesta, estado_siguiente
+
     if not GEMINI_API_KEY:
         print("⚠️  Gemini API Key no configurada, usando respuestas predeterminadas")
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
@@ -1064,6 +1103,17 @@ Quedamos pendientes por este medio cuando guste retomarlo."""
 
 ¿Podría indicarme un poco más sobre lo que le interesa conocer?"""
 
+    if estado_actual == "CAMPUS_EXTERNO_NO_ATENDIBLE":
+        return """Entiendo, usted busca información del Campus Metepec.
+
+Este canal corresponde únicamente al Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+
+No contamos con información operativa, costos, horarios ni teléfonos de otros campus, ya que cada campus se administra de forma independiente.
+
+Le sugerimos contactar directamente al Campus Metepec por sus canales oficiales.
+
+Le ofrecemos una disculpa por no poderle proporcionar más información."""
+
     
 
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
@@ -1078,6 +1128,14 @@ def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: st
     mensaje_lower = (mensaje_usuario or "").lower().strip()
     respuesta_lower = (respuesta_gemini or "").lower().strip()
     flow_state = get_flow_state(contact)
+
+    if detecta_campus_externo(mensaje_usuario) or flow_state == "CAMPUS_EXTERNO_NO_ATENDIBLE":
+        if contact.status != "COMPETENCIA":
+            contact.status = "COMPETENCIA"
+            contact.is_competitor = True
+            print("🎯 Estado comercial actualizado: COMPETENCIA (campus externo)")
+        db.commit()
+        return contact.status
 
     # =========================
     # 1. SEÑALES DE COMPETENCIA
