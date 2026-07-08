@@ -1025,7 +1025,7 @@ También es importante conocerlos a ustedes para poder orientarlos mejor.
 ¿En qué día y hora le funciona mejor para agendar su cita?"""
 
     if estado_actual == "SEGUIMIENTO_ACORDADO":
-    return """Claro, entendemos que es una decisión importante.
+        return """Claro, entendemos que es una decisión importante.
 
 Quedamos pendientes por este medio cuando guste retomarlo."""
 
