@@ -1099,10 +1099,6 @@ También es importante conocerlos a ustedes para poder orientarlos mejor.
 
 Quedamos pendientes por este medio cuando guste retomarlo."""
 
-    return """Con gusto le apoyamos.
-
-¿Podría indicarme un poco más sobre lo que le interesa conocer?"""
-
     if estado_actual == "CAMPUS_EXTERNO_NO_ATENDIBLE":
         return """Entiendo, usted busca información del Campus Metepec.
 
@@ -1113,8 +1109,12 @@ No contamos con información operativa, costos, horarios ni teléfonos de otros 
 Le sugerimos contactar directamente al Campus Metepec por sus canales oficiales.
 
 Le ofrecemos una disculpa por no poderle proporcionar más información."""
-
     
+    return """Con gusto le apoyamos.
+
+¿Podría indicarme un poco más sobre lo que le interesa conocer?"""
+
+ 
 
 def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: str, contact, db: Session):
     """
