@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, B
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
-from fastapi.responses import HTMLResponse 
+from fastapi.responses import HTMLResponse
 import requests
 import json
 import base64
@@ -137,12 +137,63 @@ def detecta_intencion_cita(mensaje: str) -> bool:
     ]
     return any(t in msg for t in terminos)
 
+def detecta_pausa_o_cierre(mensaje: str) -> bool:
+    """
+    Detecta cuando el prospecto quiere pausar, revisar la información
+    o cerrar temporalmente la conversación sin avanzar a cita.
+    """
+    msg = (mensaje or "").lower().strip()
+
+    frases = [
+        "no por el momento",
+        "por el momento no",
+        "lo reviso",
+        "lo checo",
+        "lo consulto",
+        "lo platico",
+        "lo veo con mi esposo",
+        "lo veo con mi esposa",
+        "lo reviso con mi esposo",
+        "lo reviso con mi esposa",
+        "lo consulto con mi esposo",
+        "lo consulto con mi esposa",
+        "lo revisamos en familia",
+        "lo voy a pensar",
+        "lo pensamos",
+        "después les aviso",
+        "despues les aviso",
+        "después le aviso",
+        "despues le aviso",
+        "luego les aviso",
+        "luego le aviso",
+        "yo les aviso",
+        "yo le aviso",
+        "más adelante",
+        "mas adelante",
+        "ahorita no",
+        "por ahora no"
+    ]
+
+    return any(frase in msg for frase in frases)
+
 
 def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, history=None) -> str:
     """
     Define con qué estado se debe RESPONDER el mensaje actual.
     """
     msg = (mensaje_usuario or "").lower().strip()
+
+    # ===== PAUSA / CIERRE GLOBAL =====
+    # Si el prospecto pausa la conversación en una etapa avanzada,
+    # se responde con cierre contextual y sin pregunta.
+    if detecta_pausa_o_cierre(mensaje_usuario):
+        if estado_actual not in [
+            "SALUDO_INICIAL",
+            "ESPERANDO_INTENCION",
+            "ESPERANDO_REFERENCIA",
+            "VALIDACION_ZONA"
+        ]:
+            return "SEGUIMIENTO_ACORDADO"
 
     # ===== ETAPAS TEMPRANAS DEL EMBUDO =====
     if estado_actual == "SALUDO_INICIAL":
@@ -974,9 +1025,9 @@ También es importante conocerlos a ustedes para poder orientarlos mejor.
 ¿En qué día y hora le funciona mejor para agendar su cita?"""
 
     if estado_actual == "SEGUIMIENTO_ACORDADO":
-        return """Perfecto, quedamos atentos por este mismo medio.
+    return """Claro, entendemos que es una decisión importante.
 
-Cuando lo revise con calma y guste retomar, con gusto le seguimos apoyando."""
+Quedamos pendientes por este medio cuando guste retomarlo."""
 
     return """Con gusto le apoyamos.
 
