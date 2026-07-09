@@ -22,6 +22,7 @@ LOCAL_TZ = ZoneInfo("America/Mexico_City")
 prompt_manager = PromptManager()
 
 FLOW_STATE_PREFIX = "FLOW_STATE:"
+ADMIN_SELECTED_TASKS = {}
 
 def descargar_media_twilio(media_url: str) -> bytes:
     """
@@ -1417,6 +1418,45 @@ def obtener_ultima_tarea_admin_pendiente(db: Session):
     return db.query(AdminPendingTask).filter(
         AdminPendingTask.status == "PENDIENTE"
     ).order_by(AdminPendingTask.created_at.desc()).first()
+
+def obtener_tareas_admin_pendientes(db: Session):
+    """
+    Obtiene todas las tareas pendientes de atención humana.
+    """
+    return db.query(AdminPendingTask).filter(
+        AdminPendingTask.status == "PENDIENTE"
+    ).order_by(AdminPendingTask.created_at.asc()).all()
+
+def construir_menu_tareas_pendientes(tareas):
+    """
+    Construye un menú de tareas pendientes para el administrador.
+    """
+    if not tareas:
+        return "No hay conversaciones pendientes de confirmación en este momento."
+
+    lineas = []
+
+    total = len(tareas)
+
+    if total == 1:
+        lineas.append("Tienes 1 conversación pendiente de confirmación:\n")
+    else:
+        lineas.append(f"Tienes {total} conversaciones pendientes de confirmación:\n")
+
+    for idx, tarea in enumerate(tareas, start=1):
+        phone = tarea.prospect_phone or "Teléfono no disponible"
+        ultimo_mensaje = (tarea.trigger_message or "").strip()
+        if len(ultimo_mensaje) > 120:
+            ultimo_mensaje = ultimo_mensaje[:120] + "..."
+
+        lineas.append(f"{idx}) {phone}")
+        lineas.append(f"Último mensaje: {ultimo_mensaje}")
+        lineas.append("")
+
+    lineas.append("Responde con el número de la conversación que deseas atender.")
+    lineas.append("Ejemplo: 1")
+
+    return "\n".join(lineas)
     
 
 def enviar_alerta_admin_whatsapp(contact, mensaje_usuario: str, respuesta_bot: str, tarea_id: int = None) -> str:
@@ -1532,26 +1572,113 @@ Le compartimos la confirmación:
 
 def procesar_respuesta_admin(db: Session, from_number: str, mensaje_admin: str):
     """
-    Procesa un mensaje entrante del administrador y lo envía al prospecto pendiente.
-    El administrador nunca entra al flujo normal del bot.
-    """
-    tarea = obtener_ultima_tarea_admin_pendiente(db)
+    Procesa mensajes del WhatsApp maestro/admin.
 
-    if not tarea:
-        respuesta_admin = """No hay conversaciones pendientes de confirmación en este momento."""
+    Flujo:
+    1. Si no hay tarea seleccionada, muestra menú de pendientes.
+    2. Si el admin responde con un número, selecciona esa tarea.
+    3. Si ya hay tarea seleccionada, procesa el siguiente mensaje como respuesta final.
+    """
+    admin_key = normalizar_numero_whatsapp(from_number)
+    mensaje_limpio = (mensaje_admin or "").strip()
+
+    tareas = obtener_tareas_admin_pendientes(db)
+
+    if not tareas:
+        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+
+        respuesta_admin = "No hay conversaciones pendientes de confirmación en este momento."
         resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+
         print(f"📣 Admin sin pendientes: {resultado}")
         return {"status": "admin_no_pending"}
+
+    # Si el admin escribe "cancelar", salimos de la selección actual.
+    if mensaje_limpio.lower() in ["cancelar", "salir", "menú", "menu"]:
+        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+
+        menu = construir_menu_tareas_pendientes(tareas)
+        resultado = enviar_respuesta_twilio(from_number, menu)
+
+        print(f"📋 Menú de pendientes enviado al admin: {resultado}")
+        return {"status": "admin_menu_sent"}
+
+    # Si no hay tarea seleccionada todavía, interpretamos el mensaje como selección.
+    tarea_id_seleccionada = ADMIN_SELECTED_TASKS.get(admin_key)
+
+    if not tarea_id_seleccionada:
+        if mensaje_limpio.isdigit():
+            indice = int(mensaje_limpio)
+
+            if 1 <= indice <= len(tareas):
+                tarea = tareas[indice - 1]
+                ADMIN_SELECTED_TASKS[admin_key] = tarea.id
+
+                respuesta_admin = f"""Seleccionaste al prospecto {tarea.prospect_phone}.
+
+Último mensaje del prospecto:
+{tarea.trigger_message or ""}
+
+Ahora escribe la respuesta que deseas enviar.
+La IA la adaptará antes de mandarla.
+
+Para cancelar, escribe:
+cancelar"""
+
+                resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+
+                print(f"✅ Admin seleccionó tarea {tarea.id}: {resultado}")
+                return {
+                    "status": "admin_task_selected",
+                    "task_id": tarea.id
+                }
+
+            respuesta_admin = f"""La opción {indice} no existe.
+
+{construir_menu_tareas_pendientes(tareas)}"""
+
+            resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+            return {"status": "admin_invalid_option"}
+
+        # Si escribió cualquier otra cosa y no había selección, NO enviamos nada al prospecto.
+        menu = construir_menu_tareas_pendientes(tareas)
+        resultado = enviar_respuesta_twilio(from_number, menu)
+
+        print(f"📋 Admin escribió sin selección; se envió menú: {resultado}")
+        return {"status": "admin_menu_sent"}
+
+    # Si ya había tarea seleccionada, ahora sí procesamos el mensaje como respuesta.
+    tarea = db.query(AdminPendingTask).filter(
+        AdminPendingTask.id == tarea_id_seleccionada,
+        AdminPendingTask.status == "PENDIENTE"
+    ).first()
+
+    if not tarea:
+        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+
+        respuesta_admin = """La conversación que habías seleccionado ya no está pendiente.
+
+Te muestro nuevamente el menú actualizado:
+
+""" + construir_menu_tareas_pendientes(tareas)
+
+        resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+
+        print(f"⚠️ Tarea seleccionada ya no disponible: {resultado}")
+        return {"status": "admin_selected_task_not_available"}
 
     contact = db.query(Contact).filter(Contact.id == tarea.contact_id).first()
 
     if not contact:
-        respuesta_admin = """No encontré el contacto del prospecto pendiente."""
+        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+
+        respuesta_admin = "No encontré el contacto del prospecto pendiente."
         resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+
         print(f"⚠️ Contacto pendiente no encontrado: {resultado}")
         return {"status": "admin_contact_not_found"}
 
-    mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_admin, tarea)
+    mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_limpio, tarea)
 
     prospecto_to = f"whatsapp:{contact.phone_number}"
 
@@ -1564,11 +1691,11 @@ def procesar_respuesta_admin(db: Session, from_number: str, mensaje_admin: str):
     save_message(db, contact.id, "outgoing", mensaje_para_prospecto, twilio_sid)
 
     tarea.status = "RESUELTA"
-    tarea.admin_response = mensaje_admin
+    tarea.admin_response = mensaje_limpio
     tarea.final_response = mensaje_para_prospecto
     tarea.resolved_at = datetime.now(timezone.utc)
 
-    texto_admin_lower = (mensaje_admin or "").lower()
+    texto_admin_lower = mensaje_limpio.lower()
 
     if any(x in texto_admin_lower for x in [
         "confirmar",
@@ -1585,6 +1712,8 @@ def procesar_respuesta_admin(db: Session, from_number: str, mensaje_admin: str):
 
     db.commit()
 
+    ADMIN_SELECTED_TASKS.pop(admin_key, None)
+
     confirmacion_admin = f"""✅ Mensaje enviado al prospecto {contact.phone_number}.
 
 Mensaje enviado:
@@ -1599,7 +1728,6 @@ Mensaje enviado:
         "status": "admin_response_processed",
         "prospect_phone": contact.phone_number
     }
-
 
     
 # ================= ENDPOINTS CRM =================
