@@ -1266,15 +1266,39 @@ También es importante conocerlos a ustedes para poder orientarlos mejor.
 Quedamos pendientes por este medio cuando guste retomarlo."""
 
     if estado_actual == "CAMPUS_EXTERNO_NO_ATENDIBLE":
+        msg = (mensaje_usuario or "").lower().strip()
+    
+        if any(x in msg for x in [
+            "número", "numero", "teléfono", "telefono", "contacto",
+            "whatsapp", "celular", "llamar", "comunicar"
+        ]):
+            return """Le ofrecemos una disculpa.
+    
+    No contamos con el número telefónico, WhatsApp ni datos de contacto del Campus Metepec.
+    
+    Este canal corresponde únicamente al Colegio Valle de Filadelfia Campus Santa Cruz Atizapán, y cada campus se administra de forma independiente.
+    
+    Le sugerimos buscar directamente los canales oficiales del Campus Metepec."""
+    
+        if any(x in msg for x in [
+            "costo", "costos", "precio", "precios", "colegiatura",
+            "inscripción", "inscripcion", "mensualidad"
+        ]):
+            return """Le ofrecemos una disculpa.
+    
+    No contamos con costos, colegiaturas ni información administrativa del Campus Metepec.
+    
+    Este canal corresponde únicamente al Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+    
+    Le sugerimos consultar directamente los canales oficiales del Campus Metepec."""
+    
         return """Entiendo, usted busca información del Campus Metepec.
-
-Este canal corresponde únicamente al Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
-
-No contamos con información operativa, costos, horarios ni teléfonos de otros campus, ya que cada campus se administra de forma independiente.
-
-Le sugerimos contactar directamente al Campus Metepec por sus canales oficiales.
-
-Le ofrecemos una disculpa por no poderle proporcionar más información."""
+    
+    Este canal corresponde únicamente al Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+    
+    No contamos con información operativa, costos, horarios ni teléfonos de otros campus, ya que cada campus se administra de forma independiente.
+    
+    Le sugerimos contactar directamente al Campus Metepec por sus canales oficiales."""
     
     return """Con gusto le apoyamos.
 
