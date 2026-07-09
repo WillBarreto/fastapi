@@ -876,11 +876,18 @@ async def whatsapp_webhook(
                 print(f"❌ Error transcribiendo audio: {e}")
                 mensaje_entrada = "[Audio recibido pero no se pudo transcribir]"
 
+        # ===== RESPUESTA DE ADMINISTRADOR / WHATSAPP MAESTRO =====
+        # El número administrador nunca entra al flujo normal del bot.
+        if es_numero_admin(From):
+            print("👑 Mensaje recibido desde WhatsApp maestro/admin")
+            return procesar_respuesta_admin(db, From, mensaje_entrada)
+
         # ===== FALLBACK SI FALLÓ LA TRANSCRIPCIÓN =====
         if mensaje_entrada in [
             "[Audio recibido pero no se pudo transcribir]",
             "[Audio recibido sin transcripción]"
         ]:
+            
             respuesta = (
                 "Con gusto le apoyamos.\n\n"
                 "Recibimos su mensaje de voz, pero en este momento no pudimos procesarlo correctamente.\n\n"
@@ -902,12 +909,6 @@ async def whatsapp_webhook(
             print(f"📤 Estado: {resultado}")
         
             return {"status": "processed_audio_fallback", "contact_id": contact.id}
-            
-        # ===== RESPUESTA DE ADMINISTRADOR / WHATSAPP MAESTRO =====
-        # El número administrador nunca entra al flujo normal del bot.
-        if es_numero_admin(From):
-            print("👑 Mensaje recibido desde WhatsApp maestro/admin")
-            return procesar_respuesta_admin(db, From, mensaje_entrada)
         
         print(f"\n{'='*60}")
         print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
