@@ -235,6 +235,29 @@ def detecta_pausa_o_cierre(mensaje: str) -> bool:
 
     return any(frase in msg for frase in frases)
 
+def detecta_condicion_consulta_admin(respuesta_bot: str) -> bool:
+    """
+    Detecta cuando el bot dejó una conversación en espera de confirmación humana,
+    por ejemplo para validar disponibilidad de cita.
+    """
+    texto = (respuesta_bot or "").lower().strip()
+
+    frases = [
+        "permítame verificar",
+        "permitame verificar",
+        "consultamos la disponibilidad",
+        "estamos consultando la disponibilidad",
+        "consultar la disponibilidad",
+        "verificar si le podemos atender",
+        "en breve le confirmo",
+        "en breve le confirmamos",
+        "le pido un momento",
+        "mientras consultamos",
+        "queda pendiente de confirmación",
+        "pendiente de confirmación"
+    ]
+
+    return any(frase in texto for frase in frases)
 
 def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, history=None) -> str:
     """
@@ -859,10 +882,13 @@ async def whatsapp_webhook(
             twilio_sid = resultado.split("SID: ")[1].strip()
 
         save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
-
+        
         set_flow_state(contact, estado_siguiente)
         db.commit()
-
+        
+        if detecta_condicion_consulta_admin(respuesta):
+            enviar_alerta_admin_whatsapp(contact, mensaje_entrada, respuesta)
+        
         nuevo_estado = actualizar_estado_segun_intencion(mensaje_entrada, respuesta, contact, db)
         print(f"🎯 Análisis de intención: {nuevo_estado}")
 
@@ -1294,6 +1320,38 @@ def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
         return f"✅ Mensaje enviado. SID: {message.sid}"
     except Exception as e:
         return f"❌ Error Twilio: {str(e)}"
+
+def enviar_alerta_admin_whatsapp(contact, mensaje_usuario: str, respuesta_bot: str) -> str:
+    """
+    Envía una alerta interna al administrador cuando una conversación
+    requiere atención humana.
+    """
+    admin_number = os.getenv("ADMIN_WHATSAPP_NUMBER")
+
+    if not admin_number:
+        print("⚠️ ADMIN_WHATSAPP_NUMBER no configurado; no se envió alerta interna")
+        return "ADMIN_WHATSAPP_NUMBER no configurado"
+
+    phone = contact.phone_number if contact else "Teléfono no disponible"
+
+    mensaje_alerta = f"""🔔 Atención requerida
+
+Un prospecto está esperando confirmación de disponibilidad para visita.
+
+Teléfono: {phone}
+
+Último mensaje del prospecto:
+{mensaje_usuario}
+
+Respuesta del bot:
+{respuesta_bot}
+
+Revisar conversación:
+https://fastapi-production-efb5.up.railway.app/panel"""
+
+    resultado = enviar_respuesta_twilio(admin_number, mensaje_alerta)
+    print(f"📣 Alerta interna enviada: {resultado}")
+    return resultado
 
 # ================= ENDPOINTS CRM =================
 @app.get("/contacts")
