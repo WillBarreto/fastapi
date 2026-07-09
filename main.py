@@ -1000,7 +1000,13 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     estado_actual = get_flow_state(contact)
     estado_respuesta = determinar_estado_respuesta(estado_actual, mensaje_usuario, history)
     estado_siguiente = determinar_estado_siguiente(estado_respuesta, mensaje_usuario)
-
+    
+    # El saludo inicial se responde de forma controlada por código.
+    # La IA empieza a participar a partir del segundo mensaje.
+    if estado_respuesta == "SALUDO_INICIAL":
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
+        return respuesta, estado_respuesta, estado_siguiente
+    
     if estado_respuesta == "CAMPUS_EXTERNO_NO_ATENDIBLE":
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
         return respuesta, estado_respuesta, estado_siguiente
