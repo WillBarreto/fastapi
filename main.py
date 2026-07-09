@@ -2073,7 +2073,7 @@ if __name__ == "__main__":
 
 @app.get("/reset-contact")
 def reset_contact(db: Session = Depends(get_db)):
-    numero = "+5215546080064"
+    numero = "+5215548123885"
 
     contact = db.query(Contact).filter(Contact.phone_number == numero).first()
 
