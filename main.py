@@ -28,7 +28,7 @@ def obtener_modelos_gemini():
     """
     Devuelve el modelo principal + modelos de respaldo configurados en Railway.
     """
-    modelo_principal = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+    modelo_principal = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
 
     modelos_respaldo = [
         model.strip()
@@ -104,6 +104,7 @@ def descargar_media_twilio(media_url: str) -> bytes:
 def transcribir_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
     """
     Usa Gemini para transcribir audio a texto en español.
+    Aplica fallback de modelos si el modelo principal falla.
     """
     api_key = os.getenv("GOOGLE_AI_API_KEY")
     if not api_key:
@@ -111,17 +112,20 @@ def transcribir_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -
 
     genai.configure(api_key=api_key)
 
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
-    response = model.generate_content([
-        {
-            "mime_type": mime_type,
-            "data": audio_b64
-        },
-        "Transcribe exactamente este audio a texto en español. Devuelve únicamente la transcripción, sin explicaciones."
-    ])
+    response, modelo_usado = generar_con_gemini_con_fallback(
+        [
+            {
+                "mime_type": mime_type,
+                "data": audio_b64
+            },
+            "Transcribe exactamente este audio a texto en español. Devuelve únicamente la transcripción, sin explicaciones."
+        ],
+        tarea="transcripción de audio"
+    )
+
+    print(f"🎙️ Modelo usado para transcripción: {modelo_usado}")
 
     texto = (response.text or "").strip()
     return texto
@@ -529,14 +533,16 @@ REGLAS:
 """
 
     try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
+        response, modelo_usado = generar_con_gemini_con_fallback(
             prompt_clasificacion,
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=10,
                 temperature=0.1,
             ),
+            tarea="clasificación de intención"
         )
+        
+        print(f"🏷️ Modelo usado para clasificación: {modelo_usado}")
 
         etiqueta = ""
 
@@ -1155,16 +1161,17 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     )
 
     try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
+        response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=4000,
                 temperature=0.7
-            )
+            ),
+            tarea="respuesta principal"
         )
-
+        
         respuesta = response.text.strip()
+        print(f"🤖 Gemini modelo usado: {modelo_usado}")
         print(f"🤖 Gemini respuesta COMPLETA: {repr(respuesta)}")
         return respuesta, estado_respuesta, estado_siguiente
 
@@ -1623,15 +1630,16 @@ REGLAS:
 """
 
     try:
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
+        response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=600,
                 temperature=0.3
-            )
+            ),
+            tarea="respuesta admin para prospecto"
         )
-
+        
+        print(f"👑 Modelo usado para respuesta admin: {modelo_usado}")
         return response.text.strip()
 
     except Exception as e:
