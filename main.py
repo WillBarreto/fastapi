@@ -1017,7 +1017,7 @@ async def whatsapp_webhook(
         print(f"🎯 Análisis de intención: {nuevo_estado}")
 
         print(f"🤖 BOT: {respuesta}")
-        print(f"🤖 Motor: {'Gemini' if GEMINI_API_KEY else 'Predeterminado'}")
+        print(f"🤖 Motor disponible: {'Gemini' if GEMINI_API_KEY else 'Predeterminado'}")
         print(f"📤 Estado: {resultado}")
         print(f"👤 Estado contacto: {contact.status}")
         print(f"📊 Total mensajes: {contact.total_messages}")
