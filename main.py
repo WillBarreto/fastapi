@@ -261,6 +261,36 @@ def detecta_condicion_consulta_admin(respuesta_bot: str) -> bool:
 
     return any(frase in texto for frase in frases)
 
+def normalizar_numero_whatsapp(numero: str) -> str:
+    """
+    Normaliza números de WhatsApp para comparar.
+    """
+    numero = (numero or "").strip()
+
+    if numero.startswith("whatsapp:"):
+        numero = numero.replace("whatsapp:", "", 1)
+
+    return numero.strip()
+
+
+def es_numero_admin(from_number: str) -> bool:
+    """
+    Identifica si el mensaje entrante viene del administrador.
+    Este número nunca debe entrar al flujo normal del bot.
+    """
+    remitente = normalizar_numero_whatsapp(from_number)
+
+    admins = [
+        "+5215546080064",
+        "+525546080064"
+    ]
+
+    admin_env = normalizar_numero_whatsapp(os.getenv("ADMIN_WHATSAPP_NUMBER", ""))
+    if admin_env:
+        admins.append(admin_env)
+
+    return remitente in admins
+
 def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, history=None) -> str:
     """
     Define con qué estado se debe RESPONDER el mensaje actual.
@@ -693,6 +723,22 @@ class Message(Base):
     # Relación con contacto
     contact = relationship("Contact", back_populates="messages")
 
+class AdminPendingTask(Base):
+    __tablename__ = "admin_pending_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    prospect_phone = Column(String(50), nullable=False)
+
+    status = Column(String(30), default="PENDIENTE")  # PENDIENTE / RESUELTA
+    trigger_message = Column(Text, nullable=True)
+    bot_response = Column(Text, nullable=True)
+    admin_response = Column(Text, nullable=True)
+    final_response = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=func.now())
+    resolved_at = Column(DateTime, nullable=True)
+
 # ================= MANEJO SEGURO DE LA CREACIÓN DE TABLAS =================
 def setup_database():
     """Configura la base de datos de manera segura"""
@@ -857,6 +903,11 @@ async def whatsapp_webhook(
         
             return {"status": "processed_audio_fallback", "contact_id": contact.id}
             
+        # ===== RESPUESTA DE ADMINISTRADOR / WHATSAPP MAESTRO =====
+        # El número administrador nunca entra al flujo normal del bot.
+        if es_numero_admin(From):
+            print("👑 Mensaje recibido desde WhatsApp maestro/admin")
+            return procesar_respuesta_admin(db, From, mensaje_entrada)
         
         print(f"\n{'='*60}")
         print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
@@ -889,7 +940,8 @@ async def whatsapp_webhook(
         db.commit()
         
         if detecta_condicion_consulta_admin(respuesta):
-            enviar_alerta_admin_whatsapp(contact, mensaje_entrada, respuesta)
+            tarea_admin = crear_tarea_admin_pendiente(db, contact, mensaje_entrada, respuesta)
+            enviar_alerta_admin_whatsapp(contact, mensaje_entrada, respuesta, tarea_admin.id)
         
         nuevo_estado = actualizar_estado_segun_intencion(mensaje_entrada, respuesta, contact, db)
         print(f"🎯 Análisis de intención: {nuevo_estado}")
@@ -1329,7 +1381,44 @@ def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     except Exception as e:
         return f"❌ Error Twilio: {str(e)}"
 
-def enviar_alerta_admin_whatsapp(contact, mensaje_usuario: str, respuesta_bot: str) -> str:
+def crear_tarea_admin_pendiente(db: Session, contact, mensaje_usuario: str, respuesta_bot: str):
+    """
+    Crea una tarea pendiente para que el administrador pueda responder
+    y esa respuesta se envíe al prospecto.
+    """
+    tarea_existente = db.query(AdminPendingTask).filter(
+        AdminPendingTask.contact_id == contact.id,
+        AdminPendingTask.status == "PENDIENTE"
+    ).order_by(AdminPendingTask.created_at.desc()).first()
+
+    if tarea_existente:
+        return tarea_existente
+
+    tarea = AdminPendingTask(
+        contact_id=contact.id,
+        prospect_phone=contact.phone_number,
+        status="PENDIENTE",
+        trigger_message=mensaje_usuario,
+        bot_response=respuesta_bot
+    )
+
+    db.add(tarea)
+    db.commit()
+    db.refresh(tarea)
+
+    return tarea
+
+
+def obtener_ultima_tarea_admin_pendiente(db: Session):
+    """
+    Obtiene la última tarea pendiente de atención humana.
+    """
+    return db.query(AdminPendingTask).filter(
+        AdminPendingTask.status == "PENDIENTE"
+    ).order_by(AdminPendingTask.created_at.desc()).first()
+    
+
+def enviar_alerta_admin_whatsapp(contact, mensaje_usuario: str, respuesta_bot: str, tarea_id: int = None) -> str:
     """
     Envía una alerta interna al administrador cuando una conversación
     requiere atención humana.
@@ -1341,11 +1430,12 @@ def enviar_alerta_admin_whatsapp(contact, mensaje_usuario: str, respuesta_bot: s
         return "ADMIN_WHATSAPP_NUMBER no configurado"
 
     phone = contact.phone_number if contact else "Teléfono no disponible"
+    tarea_txt = f"\nID pendiente: {tarea_id}\n" if tarea_id else ""
 
     mensaje_alerta = f"""🔔 Atención requerida
 
 Un prospecto está esperando confirmación de disponibilidad para visita.
-
+{tarea_txt}
 Teléfono: {phone}
 
 Último mensaje del prospecto:
@@ -1354,6 +1444,13 @@ Teléfono: {phone}
 Respuesta del bot:
 {respuesta_bot}
 
+Responda directamente a este WhatsApp con la indicación que desea enviar al prospecto.
+
+Ejemplo:
+Confirmar lunes 11am
+
+La IA adaptará su respuesta antes de enviarla al prospecto.
+
 Revisar conversación:
 https://fastapi-production-efb5.up.railway.app/panel"""
 
@@ -1361,6 +1458,149 @@ https://fastapi-production-efb5.up.railway.app/panel"""
     print(f"📣 Alerta interna enviada: {resultado}")
     return resultado
 
+def redactar_respuesta_admin_para_prospecto(texto_admin: str, tarea: AdminPendingTask) -> str:
+    """
+    Convierte la respuesta del administrador en un mensaje listo para el prospecto.
+    Siempre intenta usar IA para adaptar el tono.
+    """
+    texto_admin = (texto_admin or "").strip()
+
+    if not texto_admin:
+        return """Gracias por esperar.
+
+En breve le confirmamos la disponibilidad por este medio."""
+
+    if not GEMINI_API_KEY:
+        return f"""Gracias por esperar.
+
+Le compartimos la confirmación:
+
+{texto_admin}"""
+
+    prompt = f"""
+Eres el asistente de WhatsApp del Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+
+CONTEXTO:
+Un prospecto estaba esperando confirmación de disponibilidad para una visita.
+
+ÚLTIMO MENSAJE DEL PROSPECTO:
+{tarea.trigger_message or ""}
+
+RESPUESTA PREVIA DEL BOT AL PROSPECTO:
+{tarea.bot_response or ""}
+
+RESPUESTA INTERNA DEL ADMINISTRADOR:
+{texto_admin}
+
+TAREA:
+Convierte la respuesta interna del administrador en un mensaje final para el prospecto.
+
+REGLAS:
+- Redacta en tono amable, claro e institucional.
+- No menciones al administrador.
+- No digas "mi jefe", "el director", "el administrador" ni "me autorizaron".
+- No menciones que eres IA.
+- No uses lenguaje interno.
+- Si el administrador confirma disponibilidad, confirma la cita con día y hora.
+- Si el administrador propone otro horario, explica que ese horario está disponible y pide confirmación.
+- Si el administrador rechaza la disponibilidad, pide una alternativa de día u hora.
+- Mantén formato WhatsApp con bloques cortos.
+- No inventes datos que no estén en la respuesta del administrador.
+- Responde sólo con el mensaje final para el prospecto.
+"""
+
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=600,
+                temperature=0.3
+            )
+        )
+
+        return response.text.strip()
+
+    except Exception as e:
+        print(f"⚠️ Error redactando respuesta admin con IA: {e}")
+        return f"""Gracias por esperar.
+
+Le compartimos la confirmación:
+
+{texto_admin}"""
+
+def procesar_respuesta_admin(db: Session, from_number: str, mensaje_admin: str):
+    """
+    Procesa un mensaje entrante del administrador y lo envía al prospecto pendiente.
+    El administrador nunca entra al flujo normal del bot.
+    """
+    tarea = obtener_ultima_tarea_admin_pendiente(db)
+
+    if not tarea:
+        respuesta_admin = """No hay conversaciones pendientes de confirmación en este momento."""
+        resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+        print(f"📣 Admin sin pendientes: {resultado}")
+        return {"status": "admin_no_pending"}
+
+    contact = db.query(Contact).filter(Contact.id == tarea.contact_id).first()
+
+    if not contact:
+        respuesta_admin = """No encontré el contacto del prospecto pendiente."""
+        resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+        print(f"⚠️ Contacto pendiente no encontrado: {resultado}")
+        return {"status": "admin_contact_not_found"}
+
+    mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_admin, tarea)
+
+    prospecto_to = f"whatsapp:{contact.phone_number}"
+
+    resultado_envio = enviar_respuesta_twilio(prospecto_to, mensaje_para_prospecto)
+
+    twilio_sid = None
+    if "SID:" in resultado_envio:
+        twilio_sid = resultado_envio.split("SID: ")[1].strip()
+
+    save_message(db, contact.id, "outgoing", mensaje_para_prospecto, twilio_sid)
+
+    tarea.status = "RESUELTA"
+    tarea.admin_response = mensaje_admin
+    tarea.final_response = mensaje_para_prospecto
+    tarea.resolved_at = datetime.now(timezone.utc)
+
+    texto_admin_lower = (mensaje_admin or "").lower()
+
+    if any(x in texto_admin_lower for x in [
+        "confirmar",
+        "confirmado",
+        "sí",
+        "si",
+        "ok",
+        "adelante",
+        "está bien",
+        "esta bien",
+        "disponible"
+    ]):
+        contact.status = "VISITA_AGENDADA"
+
+    db.commit()
+
+    confirmacion_admin = f"""✅ Mensaje enviado al prospecto {contact.phone_number}.
+
+Mensaje enviado:
+{mensaje_para_prospecto}"""
+
+    resultado_admin = enviar_respuesta_twilio(from_number, confirmacion_admin)
+
+    print(f"📤 Respuesta admin enviada al prospecto: {resultado_envio}")
+    print(f"📣 Confirmación enviada al admin: {resultado_admin}")
+
+    return {
+        "status": "admin_response_processed",
+        "prospect_phone": contact.phone_number
+    }
+
+
+    
 # ================= ENDPOINTS CRM =================
 @app.get("/contacts")
 async def list_contacts(
