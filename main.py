@@ -155,25 +155,27 @@ def detecta_costos(mensaje: str) -> bool:
 
 def generar_saludo_inicial_contextual(mensaje: str) -> str:
     """
-    Genera un saludo inicial adaptado al mensaje del usuario.
+    Fallback simple para saludo inicial.
+    La naturalidad principal del saludo se controla desde reglas_base.txt.
     """
     msg = (mensaje or "").lower().strip()
 
     if "buenos días" in msg or "buen dia" in msg or "buen día" in msg:
-        saludo = "Buenos días"
-    elif "buenas tardes" in msg:
-        saludo = "Buenas tardes"
-    elif "buenas noches" in msg:
-        saludo = "Buenas noches"
-    else:
-        saludo = "¡Hola!"
-
-    if saludo == "¡Hola!":
-        return """¡Hola! Con gusto le atendemos.
+        return """Buenos días.
 
 ¿En qué podemos ayudarle?"""
 
-    return f"""{saludo}, con gusto le atendemos.
+    if "buenas tardes" in msg:
+        return """Buenas tardes.
+
+¿En qué podemos ayudarle?"""
+
+    if "buenas noches" in msg:
+        return """Buenas noches.
+
+¿En qué podemos ayudarle?"""
+
+    return """¡Hola!
 
 ¿En qué podemos ayudarle?"""
 
