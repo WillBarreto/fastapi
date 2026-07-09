@@ -24,6 +24,68 @@ prompt_manager = PromptManager()
 FLOW_STATE_PREFIX = "FLOW_STATE:"
 ADMIN_SELECTED_TASKS = {}
 
+def obtener_modelos_gemini():
+    """
+    Devuelve el modelo principal + modelos de respaldo configurados en Railway.
+    """
+    modelo_principal = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+
+    modelos_respaldo = [
+        model.strip()
+        for model in os.getenv(
+            "GEMINI_FALLBACK_MODELS",
+            "gemini-1.5-flash"
+        ).split(",")
+        if model.strip()
+    ]
+
+    modelos = []
+
+    if modelo_principal:
+        modelos.append(modelo_principal)
+
+    for modelo in modelos_respaldo:
+        if modelo not in modelos:
+            modelos.append(modelo)
+
+    return modelos
+
+
+def generar_con_gemini_con_fallback(
+    contenido,
+    generation_config=None,
+    tarea: str = "gemini"
+):
+    """
+    Intenta generar contenido usando el modelo principal.
+    Si falla, prueba modelos de respaldo.
+    """
+    ultimo_error = None
+
+    for model_name in obtener_modelos_gemini():
+        try:
+            print(f"🧠 Probando Gemini para {tarea}: {model_name}")
+
+            model = genai.GenerativeModel(model_name)
+
+            if generation_config:
+                response = model.generate_content(
+                    contenido,
+                    generation_config=generation_config
+                )
+            else:
+                response = model.generate_content(contenido)
+
+            print(f"✅ Gemini usado para {tarea}: {model_name}")
+            return response, model_name
+
+        except Exception as e:
+            ultimo_error = e
+            print(f"⚠️ Falló Gemini para {tarea} con {model_name}: {e}")
+
+    raise RuntimeError(f"Todos los modelos Gemini fallaron para {tarea}. Último error: {ultimo_error}")
+    
+
 def descargar_media_twilio(media_url: str) -> bytes:
     """
     Descarga un archivo multimedia enviado por Twilio usando Basic Auth.
@@ -976,7 +1038,17 @@ Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar u
 
 # Configuración de Gemini
 GEMINI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+
+GEMINI_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-1.5-flash"
+    ).split(",")
+    if model.strip()
+]
+
 # Configurar la API de Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
