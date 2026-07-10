@@ -204,6 +204,100 @@ def detecta_campus_externo(mensaje: str) -> bool:
 
     return any(frase in msg for frase in frases)
 
+def clasificar_alcance_campus_con_ia(mensaje_usuario: str, history=None) -> str:
+    """
+    Usa IA para detectar si el usuario busca Campus Santa Cruz Atizapán
+    o información de otro campus / zona no atendida.
+    Devuelve: SANTA_CRUZ, OTRO_CAMPUS, FUERA_DE_ZONA, AMBIGUO
+    """
+    msg = (mensaje_usuario or "").strip()
+
+    if not GEMINI_API_KEY:
+        if detecta_campus_externo(msg) or es_zona_invalida_probable(msg):
+            return "OTRO_CAMPUS"
+        return "AMBIGUO"
+
+    historial_lista = []
+    if history:
+        for item in history[-4:]:
+            prefijo = "Usuario" if item.direction == "incoming" else "Asistente"
+            historial_lista.append(f"{prefijo}: {item.content}")
+
+    historial_texto = "\n".join(historial_lista) if historial_lista else "Sin historial reciente."
+
+    prompt = f"""
+Eres un clasificador estricto para un bot de WhatsApp del Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+
+CONTEXTO:
+Este canal atiende únicamente al Campus Santa Cruz Atizapán.
+
+ZONAS/CAMPUS QUE SÍ CORRESPONDEN:
+- Santa Cruz Atizapán
+- Santiago Tianguistenco
+- Tianguistenco
+- Capulhuac
+- Xalatlaco
+- Almoloya
+- San Pedro
+- Buen Suceso
+- zonas cercanas al Campus Santa Cruz Atizapán
+
+ZONAS/CAMPUS QUE NO DEBEN ATENDERSE EN ESTE CANAL:
+- Metepec
+- Toluca
+- Atlacomulco
+- cualquier otro campus
+- cualquier zona donde el usuario claramente busca otra sede
+
+HISTORIAL RECIENTE:
+{historial_texto}
+
+MENSAJE ACTUAL DEL USUARIO:
+{msg}
+
+TAREA:
+Clasifica la intención del usuario en UNA sola etiqueta.
+
+ETIQUETAS VÁLIDAS:
+SANTA_CRUZ
+OTRO_CAMPUS
+FUERA_DE_ZONA
+AMBIGUO
+
+REGLAS:
+- Si el usuario dice que busca Metepec, Toluca, Atlacomulco u otro campus, responde OTRO_CAMPUS.
+- Si el usuario pide número, contacto, costos, dirección u horarios de otro campus, responde OTRO_CAMPUS.
+- Si el usuario sólo menciona una zona lejana o no atendida, responde FUERA_DE_ZONA.
+- Si el usuario busca Santa Cruz Atizapán o zonas cercanas, responde SANTA_CRUZ.
+- Si no queda claro, responde AMBIGUO.
+- Responde únicamente la etiqueta. No expliques nada.
+"""
+
+    try:
+        response, modelo_usado = generar_con_gemini_con_fallback(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=10,
+                temperature=0.0,
+            ),
+            tarea="clasificación de alcance campus"
+        )
+
+        etiqueta = (response.text or "").strip().upper()
+
+        if etiqueta in ["SANTA_CRUZ", "OTRO_CAMPUS", "FUERA_DE_ZONA", "AMBIGUO"]:
+            print(f"🏫 Alcance campus IA: {etiqueta} usando {modelo_usado}")
+            return etiqueta
+
+        return "AMBIGUO"
+
+    except Exception as e:
+        print(f"⚠️ Error clasificando alcance campus con IA: {e}")
+
+        if detecta_campus_externo(msg) or es_zona_invalida_probable(msg):
+            return "OTRO_CAMPUS"
+
+        return "AMBIGUO"
 
 def detecta_tema_interes_simple(mensaje: str) -> bool:
     msg = (mensaje or "").lower()
@@ -365,8 +459,16 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
     msg = (mensaje_usuario or "").lower().strip()
 
     # ===== CAMPUS EXTERNO / NO ATENDIBLE =====
-    # Si el usuario confirma que busca otro campus, no insistir con Santa Cruz.
+    # Primero usamos reglas rápidas; después IA para interpretar variantes.
     if detecta_campus_externo(mensaje_usuario):
+        return "CAMPUS_EXTERNO_NO_ATENDIBLE"
+    
+    clasificacion_campus = clasificar_alcance_campus_con_ia(
+        mensaje_usuario=mensaje_usuario,
+        history=history or []
+    )
+    
+    if clasificacion_campus in ["OTRO_CAMPUS", "FUERA_DE_ZONA"]:
         return "CAMPUS_EXTERNO_NO_ATENDIBLE"
 
     # ===== PAUSA / CIERRE GLOBAL =====
