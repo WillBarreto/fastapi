@@ -2703,17 +2703,51 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 @app.get("/reset-contact")
-def reset_contact(db: Session = Depends(get_db)):
-    numero = "+5215548123885"
+def reset_contact(phone: str = "+5215548123885", db: Session = Depends(get_db)):
+    """
+    Borra de forma segura un contacto de prueba, incluyendo:
+    - mensajes
+    - tareas pendientes de administrador
+    - selección temporal de admin si aplica
+    - contacto
+    """
+    numero = (phone or "").strip()
+
+    if numero.startswith("whatsapp:"):
+        numero = numero.replace("whatsapp:", "", 1)
 
     contact = db.query(Contact).filter(Contact.phone_number == numero).first()
 
-    if contact:
-        db.query(Message).filter(Message.contact_id == contact.id).delete()
-        db.delete(contact)
-        db.commit()
+    if not contact:
+        return {
+            "status": "not_found",
+            "phone": numero
+        }
 
-        return {"status": "contact_deleted"}
+    contact_id = contact.id
 
-    return {"status": "not_found"}
+    # Primero borrar tareas admin relacionadas, porque dependen del contacto.
+    tareas_borradas = db.query(AdminPendingTask).filter(
+        AdminPendingTask.contact_id == contact_id
+    ).delete(synchronize_session=False)
+
+    # Luego borrar mensajes.
+    mensajes_borrados = db.query(Message).filter(
+        Message.contact_id == contact_id
+    ).delete(synchronize_session=False)
+
+    # Limpiar selección temporal del admin si alguna apuntaba a tareas borradas.
+    ADMIN_SELECTED_TASKS.clear()
+
+    # Finalmente borrar contacto.
+    db.delete(contact)
+    db.commit()
+
+    return {
+        "status": "contact_deleted",
+        "phone": numero,
+        "contact_id": contact_id,
+        "messages_deleted": mensajes_borrados,
+        "admin_tasks_deleted": tareas_borradas
+    }
 
