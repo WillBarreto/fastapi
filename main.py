@@ -84,7 +84,27 @@ def generar_con_gemini_con_fallback(
             print(f"⚠️ Falló Gemini para {tarea} con {model_name}: {e}")
 
     raise RuntimeError(f"Todos los modelos Gemini fallaron para {tarea}. Último error: {ultimo_error}")
-    
+
+def extraer_texto_respuesta_gemini(response) -> str:
+    """
+    Extrae texto de una respuesta Gemini aunque no venga como response.text simple.
+    """
+    try:
+        if hasattr(response, "text") and response.text:
+            return response.text.strip()
+    except Exception:
+        pass
+
+    try:
+        parts = response.candidates[0].content.parts
+        texto = "".join(
+            part.text for part in parts
+            if hasattr(part, "text") and part.text
+        )
+        return texto.strip()
+    except Exception:
+        return ""
+        
 
 def descargar_media_twilio(media_url: str) -> bytes:
     """
@@ -283,7 +303,8 @@ REGLAS:
             tarea="clasificación de alcance campus"
         )
 
-        etiqueta = (response.text or "").strip().upper()
+        texto_respuesta = extraer_texto_respuesta_gemini(response)
+        etiqueta = texto_respuesta.strip().upper()
 
         if etiqueta in ["SANTA_CRUZ", "OTRO_CAMPUS", "FUERA_DE_ZONA", "AMBIGUO"]:
             print(f"🏫 Alcance campus IA: {etiqueta} usando {modelo_usado}")
@@ -313,6 +334,29 @@ def detecta_costos(mensaje: str) -> bool:
     msg = (mensaje or "").lower()
     terminos = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
     return any(t in msg for t in terminos)
+
+def es_saludo_simple(mensaje: str) -> bool:
+    """
+    Detecta si el mensaje es únicamente un saludo simple.
+    """
+    msg = (mensaje or "").lower().strip()
+
+    saludos = [
+        "hola",
+        "buenos días",
+        "buenos dias",
+        "buen día",
+        "buen dia",
+        "buenas tardes",
+        "buenas noches",
+        "hola buenas tardes",
+        "hola buenos días",
+        "hola buenos dias",
+        "hola buenas noches"
+    ]
+
+    return msg in saludos
+    
 
 def generar_saludo_inicial_contextual(mensaje: str) -> str:
     """
@@ -467,9 +511,12 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
         mensaje_usuario=mensaje_usuario,
         history=history or []
     )
-    
-    if clasificacion_campus in ["OTRO_CAMPUS", "FUERA_DE_ZONA"]:
+        
+    if clasificacion_campus == "OTRO_CAMPUS":
         return "CAMPUS_EXTERNO_NO_ATENDIBLE"
+    
+    if clasificacion_campus == "FUERA_DE_ZONA":
+        return "ZONA_INVALIDA_POTENCIAL_METEPEC"
 
     # ===== PAUSA / CIERRE GLOBAL =====
     # Si el prospecto pausa la conversación en una etapa avanzada,
@@ -485,7 +532,12 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
 
     # ===== ETAPAS TEMPRANAS DEL EMBUDO =====
     if estado_actual == "SALUDO_INICIAL":
-        return "SALUDO_INICIAL"
+        if es_saludo_simple(mensaje_usuario):
+            return "SALUDO_INICIAL"
+    
+        # Si el primer mensaje ya trae intención, no responder sólo saludo.
+        # Avanzamos directo a preguntar referencia.
+        return "ESPERANDO_INTENCION"
 
     if estado_actual == "ESPERANDO_INTENCION":
         # Aunque pregunte costo desde el inicio, primero se fuerza referencia.
@@ -1272,7 +1324,7 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
             tarea="respuesta principal"
         )
         
-        respuesta = response.text.strip()
+        respuesta = extraer_texto_respuesta_gemini(response)
         print(f"🤖 Gemini modelo usado: {modelo_usado}")
         print(f"🤖 Gemini respuesta COMPLETA: {repr(respuesta)}")
         return respuesta, estado_respuesta, estado_siguiente
@@ -1306,9 +1358,13 @@ Con fines de confirmar, nuestro campus está en Santa Cruz Atizapán, a unos 15 
 ¿En qué zona vive usted?"""
 
     if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
-        return """Le ofrecemos una disculpa, probablemente esté buscando el campus de Metepec.
-
-¿Desea información de ese campus o del de Santa Cruz Atizapán?"""
+        return """Le ofrecemos una disculpa.
+    
+    Por la zona que nos menciona, es posible que esté buscando otro campus o una ubicación distinta al Campus Santa Cruz Atizapán.
+    
+    Este canal corresponde al Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+    
+    ¿Desea continuar con información de este campus?"""
 
     if estado_actual == "RESPUESTA_SOBRE_METODO":
         return """Nuestro *Método Filadelfia* es un modelo pedagógico que:
@@ -1766,7 +1822,7 @@ REGLAS:
         )
         
         print(f"👑 Modelo usado para respuesta admin: {modelo_usado}")
-        return response.text.strip()
+        return extraer_texto_respuesta_gemini(response)
 
     except Exception as e:
         print(f"⚠️ Error redactando respuesta admin con IA: {e}")
