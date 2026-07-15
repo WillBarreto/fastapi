@@ -168,19 +168,62 @@ def es_audio_whatsapp(num_media: str, media_content_type: str) -> bool:
 
     
 
+def get_note_value(contact, key: str) -> str:
+    """
+    Lee un valor guardado en contact.notes con formato KEY:valor.
+    """
+    notes = contact.notes or ""
+    prefix = f"{key}:"
+
+    for line in notes.splitlines():
+        if line.startswith(prefix):
+            return line.replace(prefix, "", 1).strip()
+
+    return ""
+
+
+def set_note_value(contact, key: str, value: str):
+    """
+    Guarda o actualiza un valor en contact.notes sin borrar otros datos.
+    """
+    notes = contact.notes or ""
+    lines = notes.splitlines()
+    prefix = f"{key}:"
+
+    nuevas_lineas = []
+    actualizado = False
+
+    for line in lines:
+        if line.startswith(prefix):
+            nuevas_lineas.append(f"{key}:{value}")
+            actualizado = True
+        else:
+            nuevas_lineas.append(line)
+
+    if not actualizado:
+        nuevas_lineas.append(f"{key}:{value}")
+
+    contact.notes = "\n".join([line for line in nuevas_lineas if line.strip()])
+
+
 def get_flow_state(contact) -> str:
-    """Obtiene el estado conversacional actual guardado en notes."""
-    notes = (contact.notes or "").strip()
-    if notes.startswith(FLOW_STATE_PREFIX):
-        estado = notes.replace(FLOW_STATE_PREFIX, "", 1).strip()
-        if estado:
-            return estado
+    """
+    Obtiene el estado conversacional actual guardado en notes.
+    Compatible con notes de varias líneas.
+    """
+    estado = get_note_value(contact, "FLOW_STATE")
+
+    if estado:
+        return estado
+
     return "SALUDO_INICIAL"
 
 
 def set_flow_state(contact, estado: str):
-    """Guarda el estado conversacional actual en notes."""
-    contact.notes = f"{FLOW_STATE_PREFIX}{estado}"
+    """
+    Guarda el estado conversacional actual sin borrar otros datos del prospecto.
+    """
+    set_note_value(contact, "FLOW_STATE", estado)
 
 
 def es_zona_valida(mensaje: str) -> bool:
@@ -334,6 +377,32 @@ def detecta_costos(mensaje: str) -> bool:
     msg = (mensaje or "").lower()
     terminos = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
     return any(t in msg for t in terminos)
+
+def detectar_nivel_interes(mensaje: str) -> str:
+    """
+    Detecta el nivel o grado de interés mencionado por el prospecto.
+    """
+    msg = (mensaje or "").lower().strip()
+
+    if any(x in msg for x in ["preescolar 2", "preescolar ii", "kinder 2", "kínder 2", "k2"]):
+        return "Preescolar 2"
+
+    if any(x in msg for x in ["preescolar 1", "preescolar i", "kinder 1", "kínder 1", "k1"]):
+        return "Preescolar 1"
+
+    if any(x in msg for x in ["preescolar 3", "preescolar iii", "kinder 3", "kínder 3", "k3"]):
+        return "Preescolar 3"
+
+    if "preescolar" in msg or "kinder" in msg or "kínder" in msg:
+        return "Preescolar"
+
+    if "primaria" in msg:
+        return "Primaria"
+
+    if "secundaria" in msg:
+        return "Secundaria"
+
+    return ""
 
 def es_saludo_simple(mensaje: str) -> bool:
     """
@@ -1156,6 +1225,13 @@ async def whatsapp_webhook(
         contact = get_or_create_contact(db, From)
         save_message(db, contact.id, 'incoming', mensaje_entrada)
 
+        nivel_detectado = detectar_nivel_interes(mensaje_entrada)
+
+        if nivel_detectado:
+            set_note_value(contact, "NIVEL_INTERES", nivel_detectado)
+            db.commit()
+            print(f"🎓 Nivel de interés guardado: {nivel_detectado}")
+
         history = get_conversation_history(db, From, limit=5)
 
         print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
@@ -1321,6 +1397,14 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
         for msg in history:
             prefijo = "Usuario" if msg.direction == "incoming" else "Asistente"
             historial_lista.append(f"{prefijo}: {msg.content}")
+
+    nivel_interes = get_note_value(contact, "NIVEL_INTERES")
+
+    if nivel_interes:
+        historial_lista.insert(
+            0,
+            f"DATO CONOCIDO DEL PROSPECTO: El nivel de interés es {nivel_interes}. No vuelva a preguntar el nivel educativo."
+        )
 
     prompt = prompt_manager.build_prompt(
         mensaje_usuario=mensaje_usuario,
