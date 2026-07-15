@@ -77,6 +77,14 @@ class PromptManager:
         ]):
             return "artistico_musical"
 
+        if any(x in msg for x in [
+            "idioma", "idiomas", "inglés", "ingles",
+            "francés", "frances", "bilingüe", "bilingue",
+            "clases de inglés", "clases de ingles",
+            "clases de francés", "clases de frances"
+        ]):
+            return "idiomas"
+
         return None
 
     def build_prompt(self, mensaje_usuario: str, historial_lista: list[str], estado: str) -> str:
