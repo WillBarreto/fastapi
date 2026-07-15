@@ -147,7 +147,7 @@ def transcribir_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -
 
     print(f"🎙️ Modelo usado para transcripción: {modelo_usado}")
 
-    texto = (response.text or "").strip()
+    texto = extraer_texto_respuesta_gemini(response)
     return texto
     
 def es_audio_whatsapp(num_media: str, media_content_type: str) -> bool:
@@ -1401,8 +1401,7 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
     nivel_interes = get_note_value(contact, "NIVEL_INTERES")
 
     if nivel_interes:
-        historial_lista.insert(
-            0,
+        historial_lista.append(
             f"DATO CONOCIDO DEL PROSPECTO: El nivel de interés es {nivel_interes}. No vuelva a preguntar el nivel educativo."
         )
 
