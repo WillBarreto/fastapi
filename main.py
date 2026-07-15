@@ -338,8 +338,14 @@ def detecta_costos(mensaje: str) -> bool:
 def es_saludo_simple(mensaje: str) -> bool:
     """
     Detecta si el mensaje es únicamente un saludo simple.
+    Tolera signos de puntuación como coma, punto, signos de admiración o pregunta.
     """
     msg = (mensaje or "").lower().strip()
+
+    for caracter in [",", ".", "!", "¡", "?", "¿", ":", ";"]:
+        msg = msg.replace(caracter, " ")
+
+    msg = " ".join(msg.split())
 
     saludos = [
         "hola",
@@ -349,14 +355,17 @@ def es_saludo_simple(mensaje: str) -> bool:
         "buen dia",
         "buenas tardes",
         "buenas noches",
-        "hola buenas tardes",
         "hola buenos días",
         "hola buenos dias",
-        "hola buenas noches"
+        "hola buen día",
+        "hola buen dia",
+        "hola buenas tardes",
+        "hola buenas noches",
+        "qué tal",
+        "que tal"
     ]
 
-    return msg in saludos
-    
+    return msg in saludos    
 
 def generar_saludo_inicial_contextual(mensaje: str) -> str:
     """
@@ -501,6 +510,11 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
     Define con qué estado se debe RESPONDER el mensaje actual.
     """
     msg = (mensaje_usuario or "").lower().strip()
+
+        # ===== SALUDO INICIAL PURO =====
+    # Si el primer mensaje es sólo un saludo, no debe pasar por IA ni avanzar el embudo.
+    if estado_actual == "SALUDO_INICIAL" and es_saludo_simple(mensaje_usuario):
+        return "SALUDO_INICIAL"
 
     # ===== CAMPUS EXTERNO / NO ATENDIBLE =====
     # Primero usamos reglas rápidas; después IA para interpretar variantes.
@@ -1759,7 +1773,10 @@ Revisar conversación:
 https://fastapi-production-efb5.up.railway.app/panel"""
 
     resultado = enviar_respuesta_twilio(admin_number, mensaje_alerta)
-    print(f"📣 Alerta interna enviada: {resultado}")
+    
+    print(f"📣 Alerta interna enviada a: {admin_number}")
+    print(f"📣 Resultado alerta interna: {resultado}")
+    
     return resultado
 
 def redactar_respuesta_admin_para_prospecto(texto_admin: str, tarea: AdminPendingTask) -> str:
