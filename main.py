@@ -1746,7 +1746,9 @@ Teléfono: {phone}
 Respuesta del bot:
 {respuesta_bot}
 
-Responda directamente a este WhatsApp con la indicación que desea enviar al prospecto.
+Si sólo hay una conversación pendiente, puede responder directamente con la indicación que desea enviar al prospecto.
+
+Si hay varias conversaciones pendientes, primero se le pedirá elegir a cuál responder.
 
 Ejemplo:
 Confirmar lunes 11am
@@ -1865,10 +1867,12 @@ def procesar_respuesta_admin(db: Session, from_number: str, mensaje_admin: str):
         print(f"📋 Menú de pendientes enviado al admin: {resultado}")
         return {"status": "admin_menu_sent"}
 
-    # Si no hay tarea seleccionada todavía, interpretamos el mensaje como selección.
+    # Si no hay tarea seleccionada todavía, interpretamos el mensaje como selección
+    # o, si sólo hay una tarea pendiente, como respuesta directa.
     tarea_id_seleccionada = ADMIN_SELECTED_TASKS.get(admin_key)
 
     if not tarea_id_seleccionada:
+        # Si el admin responde con número, selecciona la tarea como antes.
         if mensaje_limpio.isdigit():
             indice = int(mensaje_limpio)
 
@@ -1902,12 +1906,23 @@ cancelar"""
             resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
             return {"status": "admin_invalid_option"}
 
-        # Si escribió cualquier otra cosa y no había selección, NO enviamos nada al prospecto.
-        menu = construir_menu_tareas_pendientes(tareas)
-        resultado = enviar_respuesta_twilio(from_number, menu)
+        # NUEVO:
+        # Si sólo hay una conversación pendiente y el admin escribe texto,
+        # tomamos ese texto como respuesta directa para ese único prospecto.
+        if len(tareas) == 1:
+            tarea = tareas[0]
+            ADMIN_SELECTED_TASKS[admin_key] = tarea.id
+            tarea_id_seleccionada = tarea.id
 
-        print(f"📋 Admin escribió sin selección; se envió menú: {resultado}")
-        return {"status": "admin_menu_sent"}
+            print(f"✅ Admin respondió directo; se usará la única tarea pendiente {tarea.id}")
+
+        else:
+            # Si hay varias conversaciones pendientes, por seguridad se exige selección.
+            menu = construir_menu_tareas_pendientes(tareas)
+            resultado = enviar_respuesta_twilio(from_number, menu)
+
+            print(f"📋 Admin escribió sin selección; se envió menú: {resultado}")
+            return {"status": "admin_menu_sent"}
 
     # Si ya había tarea seleccionada, ahora sí procesamos el mensaje como respuesta.
     tarea = db.query(AdminPendingTask).filter(
