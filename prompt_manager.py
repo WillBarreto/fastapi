@@ -130,7 +130,7 @@ class PromptManager:
             "No improvise. No salte pasos. No reinicie la conversación. "
             "No repita preguntas ya respondidas. "
             "Si en el historial o en los datos conocidos aparece el nivel educativo de interés, no vuelva a preguntar por el nivel. "
-            "Use formato claro para WhatsApp, con bloques breves y fáciles de leer."
+            "Use formato claro para WhatsApp, con bloques breves y fáciles de leer. "
             "Priorice siempre avanzar la conversación hacia la cita presencial cuando el prospecto muestre interés. "
         )
 
