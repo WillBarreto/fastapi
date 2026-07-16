@@ -1862,6 +1862,98 @@ https://fastapi-production-efb5.up.railway.app/panel"""
     
     return resultado
 
+def limpiar_instruccion_admin(texto_admin: str) -> str:
+    """
+    Limpia frases internas del administrador para usarlas como respaldo seguro
+    si la IA genera una respuesta incompleta.
+    """
+    texto = (texto_admin or "").strip()
+
+    prefijos = [
+        "dile que ",
+        "diles que ",
+        "contéstale que ",
+        "contestale que ",
+        "confírmale que ",
+        "confirmale que ",
+        "respóndele que ",
+        "respondele que ",
+        "avísale que ",
+        "avisale que ",
+        "dile ",
+        "diles ",
+        "contéstale ",
+        "contestale ",
+        "confírmale ",
+        "confirmale "
+    ]
+
+    texto_lower = texto.lower()
+
+    for prefijo in prefijos:
+        if texto_lower.startswith(prefijo):
+            texto = texto[len(prefijo):].strip()
+            break
+
+    if texto:
+        texto = texto[0].upper() + texto[1:]
+
+    return texto
+
+
+def respuesta_admin_parece_incompleta(texto: str) -> bool:
+    """
+    Detecta si la respuesta generada por IA parece vacía, cortada o incompleta.
+    No evalúa estilo; sólo evita enviar mensajes técnicamente incompletos.
+    """
+    respuesta = (texto or "").strip()
+
+    if not respuesta:
+        return True
+
+    if len(respuesta) < 25:
+        return True
+
+    respuesta_lower = respuesta.lower().strip()
+
+    finales_incompletos = [
+        " se encontrará",
+        " se encontrara",
+        " se encuentra",
+        " se encontrarán",
+        " se encontraran",
+        " estará",
+        " estara",
+        " estarán",
+        " estaran",
+        " podremos",
+        " podemos",
+        " podría",
+        " podria",
+        " podrían",
+        " podrian",
+        " quedaría",
+        " quedaria",
+        " sería",
+        " seria",
+        " a las",
+        " el día",
+        " el dia",
+        " para",
+        " con",
+        " que",
+        " de",
+        " en"
+    ]
+
+    if any(respuesta_lower.endswith(final) for final in finales_incompletos):
+        return True
+
+    if respuesta_lower.endswith((",", ":", ";")):
+        return True
+
+    return False
+
 def redactar_respuesta_admin_para_prospecto(texto_admin: str, tarea: AdminPendingTask) -> str:
     """
     Convierte la respuesta del administrador en un mensaje listo para el prospecto.
@@ -1906,10 +1998,18 @@ REGLAS:
 - No menciones que eres IA.
 - No uses lenguaje interno.
 - Si el administrador confirma disponibilidad, confirma la cita con día y hora.
-- Si el administrador propone otro horario, explica que ese horario está disponible y pide confirmación.
+- Si el administrador propone otro horario disponible, explica que ese horario está disponible y pide confirmación.
+- Si el administrador propone alternativas sin confirmar disponibilidad definitiva, preséntalas como opciones posibles y pide al prospecto cuál le acomoda mejor.
 - Si el administrador rechaza la disponibilidad, pide una alternativa de día u hora.
 - Mantén formato WhatsApp con bloques cortos.
 - No inventes datos que no estén en la respuesta del administrador.
+- Respeta exactamente el día, hora, condición o alternativa indicada por el administrador.
+- Si el administrador dice que un día u horario no está disponible, explícalo claramente.
+- Si el administrador propone alternativas, inclúyelas de forma clara.
+- No omitas información importante de la respuesta interna del administrador.
+- No dejes frases incompletas.
+- No termines el mensaje con frases como "se encontrará", "a las", "para", "con", "que", "de" o "en".
+- Antes de responder, verifica que el mensaje final tenga sentido completo.
 - Responde sólo con el mensaje final para el prospecto.
 """
 
@@ -1917,14 +2017,35 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=600,
-                temperature=0.3
+                max_output_tokens=1200,
+                temperature=0.2
             ),
             tarea="respuesta admin para prospecto"
         )
         
         print(f"👑 Modelo usado para respuesta admin: {modelo_usado}")
-        return extraer_texto_respuesta_gemini(response)
+
+        mensaje_final = extraer_texto_respuesta_gemini(response).strip()
+        
+        print(f"👑 Respuesta admin generada por IA: {repr(mensaje_final)}")
+        
+        if respuesta_admin_parece_incompleta(mensaje_final):
+            print(f"⚠️ Respuesta admin generada parece incompleta: {repr(mensaje_final)}")
+        
+            texto_limpio = limpiar_instruccion_admin(texto_admin)
+        
+            if texto_limpio:
+                return f"""Gracias por su amable espera.
+        
+        Le compartimos la información:
+        
+        {texto_limpio}"""
+        
+            return """Gracias por su amable espera.
+        
+        En breve le confirmamos la disponibilidad por este medio."""
+        
+        return mensaje_final
 
     except Exception as e:
         print(f"⚠️ Error redactando respuesta admin con IA: {e}")
@@ -2056,7 +2177,10 @@ Te muestro nuevamente el menú actualizado:
         return {"status": "admin_contact_not_found"}
 
     mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_limpio, tarea)
-
+    
+    print(f"👑 Texto admin original: {repr(mensaje_limpio)}")
+    print(f"👑 Mensaje final para prospecto: {repr(mensaje_para_prospecto)}")
+    
     prospecto_to = f"whatsapp:{contact.phone_number}"
 
     resultado_envio = enviar_respuesta_twilio(prospecto_to, mensaje_para_prospecto)
