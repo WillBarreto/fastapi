@@ -379,6 +379,26 @@ def detecta_costos(mensaje: str) -> bool:
     terminos = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
     return any(t in msg for t in terminos)
 
+def requiere_validacion_zona_antes_de_informes(estado_actual: str, mensaje_usuario: str) -> bool:
+    """
+    Bloquea información comercial sensible si todavía no se validó zona.
+    Aplica especialmente cuando el usuario pregunta costos, colegiaturas,
+    inscripción o precios antes de confirmar ubicación.
+    """
+    estados_previos_a_zona = [
+        "ESPERANDO_INTENCION",
+        "ESPERANDO_REFERENCIA",
+        "VALIDACION_ZONA"
+    ]
+
+    if estado_actual not in estados_previos_a_zona:
+        return False
+
+    if detecta_costos(mensaje_usuario):
+        return True
+
+    return False
+
 def detectar_nivel_interes(mensaje: str) -> str:
     """
     Detecta el nivel o grado de interés mencionado por el prospecto.
@@ -621,6 +641,12 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
     Define con qué estado se debe RESPONDER el mensaje actual.
     """
     msg = (mensaje_usuario or "").lower().strip()
+
+    # ===== BLOQUEO COMERCIAL HASTA VALIDAR ZONA =====
+    # Si el prospecto pregunta colegiatura/costos antes de confirmar zona,
+    # no se entrega información comercial ni se pregunta nivel todavía.
+    if requiere_validacion_zona_antes_de_informes(estado_actual, mensaje_usuario):
+        return "VALIDACION_ZONA_OBLIGATORIA"
 
         # ===== SALUDO INICIAL PURO =====
     # Si el primer mensaje es sólo un saludo, no debe pasar por IA ni avanzar el embudo.
@@ -917,6 +943,9 @@ def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str
         return "VALIDACION_ZONA"
 
     if estado_actual == "VALIDACION_ZONA":
+        return "VALIDACION_ZONA"
+
+    if estado_actual == "VALIDACION_ZONA_OBLIGATORIA":
         return "VALIDACION_ZONA"
 
     if estado_actual == "ZONA_INVALIDA_POTENCIAL_METEPEC":
@@ -1437,6 +1466,10 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
         return respuesta, estado_respuesta, estado_siguiente
 
+    if estado_respuesta == "VALIDACION_ZONA_OBLIGATORIA":
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
+        return respuesta, estado_respuesta, estado_siguiente
+
     if not GEMINI_API_KEY:
         print("⚠️  Gemini API Key no configurada, usando respuestas predeterminadas")
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
@@ -1501,6 +1534,13 @@ Con fines de confirmar, nuestro campus está en Santa Cruz Atizapán, a unos 15 
 
     if estado_actual == "VALIDACION_ZONA":
         return """Para continuar y orientarle correctamente, necesito confirmar si se encuentra dentro de nuestra zona de atención.
+
+¿En qué zona vive usted?"""
+
+    if estado_actual == "VALIDACION_ZONA_OBLIGATORIA":
+        return """Con gusto le compartimos la información de colegiaturas.
+
+Antes de avanzar con costos, necesito confirmar si se encuentra dentro de nuestra zona de atención, ya que este canal corresponde únicamente al Campus Santa Cruz Atizapán.
 
 ¿En qué zona vive usted?"""
 
