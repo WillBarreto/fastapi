@@ -1995,7 +1995,7 @@ def admin_confirma_cita_final(texto_admin: str) -> bool:
 
     return False
 
-    def formatear_fecha_larga_es(fecha):
+def formatear_fecha_larga_es(fecha):
     """
     Convierte una fecha a formato: 20 de julio
     """
