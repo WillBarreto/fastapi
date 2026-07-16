@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 import requests
 import json
 import base64
+import re
 
 from sqlalchemy.dialects.postgresql import ENUM
 from prompt_manager import PromptManager
@@ -1225,6 +1226,11 @@ async def whatsapp_webhook(
         contact = get_or_create_contact(db, From)
         save_message(db, contact.id, 'incoming', mensaje_entrada)
 
+        estado_flujo_actual = get_flow_state(contact)
+
+        if estado_flujo_actual == "ESPERANDO_DATOS_CITA":
+            return procesar_datos_registro_cita(db, contact, From, mensaje_entrada)
+
         nivel_detectado = detectar_nivel_interes(mensaje_entrada)
 
         if nivel_detectado:
@@ -1951,8 +1957,387 @@ def respuesta_admin_parece_incompleta(texto: str) -> bool:
 
     if respuesta_lower.endswith((",", ":", ";")):
         return True
+    
+    if respuesta_lower.endswith(("a.m", "p.m")):
+        return True
 
     return False
+
+def admin_confirma_cita_final(texto_admin: str) -> bool:
+    """
+    Detecta cuando la respuesta del admin sí confirma definitivamente la cita.
+    Evita confundir propuestas tentativas con citas ya confirmadas.
+    """
+    msg = (texto_admin or "").lower().strip()
+
+    frases_confirmacion = [
+        "le puedes confirmar",
+        "puedes confirmar",
+        "confírmale",
+        "confirmale",
+        "queda confirmado",
+        "queda confirmada",
+        "cita confirmada",
+        "sí tenemos disponibilidad",
+        "si tenemos disponibilidad",
+        "sí hay disponibilidad",
+        "si hay disponibilidad",
+        "sí, le puedes confirmar",
+        "si, le puedes confirmar"
+    ]
+
+    if any(frase in msg for frase in frases_confirmacion):
+        return True
+
+    # Permitimos respuestas muy cortas sólo cuando claramente son confirmación.
+    if msg in ["sí", "si", "ok", "confirmado", "confirmada", "adelante"]:
+        return True
+
+    return False
+
+    def formatear_fecha_larga_es(fecha):
+    """
+    Convierte una fecha a formato: 20 de julio
+    """
+    meses = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ]
+
+    return f"{fecha.day} de {meses[fecha.month - 1]}"
+
+
+def calcular_fecha_proximo_dia(dia_nombre: str):
+    """
+    Calcula la fecha del próximo día de la semana mencionado.
+    Ejemplo: si hoy es jueves y dice lunes, devuelve el lunes siguiente.
+    """
+    dias = {
+        "lunes": 0,
+        "martes": 1,
+        "miércoles": 2,
+        "miercoles": 2,
+        "jueves": 3,
+        "viernes": 4,
+        "sábado": 5,
+        "sabado": 5,
+        "domingo": 6
+    }
+
+    dia_nombre = (dia_nombre or "").lower().strip()
+
+    if dia_nombre not in dias:
+        return None
+
+    hoy = datetime.now(LOCAL_TZ).date()
+    objetivo = dias[dia_nombre]
+
+    dias_a_sumar = (objetivo - hoy.weekday()) % 7
+
+    # Si dice el mismo día, asumimos hoy.
+    # Ejemplo: si hoy es lunes y agenda "lunes a las 8", se entiende hoy lunes.
+    fecha_objetivo = hoy + timedelta(days=dias_a_sumar)
+
+    return fecha_objetivo
+
+
+def enriquecer_fecha_cita_en_mensaje(mensaje: str) -> str:
+    """
+    Agrega la fecha exacta cuando el mensaje contiene frases como:
+    - este lunes a las 8:00 a.m.
+    - el lunes a las 8:00 a.m.
+    - lunes a las 8:00 a.m.
+
+    Resultado:
+    - este lunes 20 de julio a las 8:00 a.m.
+    """
+    texto = mensaje or ""
+
+    dias_regex = r"(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)"
+
+    patrones = [
+        rf"\b(este|esta)\s+{dias_regex}\s+a\s+las\b",
+        rf"\b(el|la)\s+{dias_regex}\s+a\s+las\b",
+        rf"\b{dias_regex}\s+a\s+las\b"
+    ]
+
+    for patron in patrones:
+        matches = list(re.finditer(patron, texto, flags=re.IGNORECASE))
+
+        for match in reversed(matches):
+            grupos = match.groups()
+
+            if len(grupos) >= 2 and grupos[0].lower() in ["este", "esta", "el", "la"]:
+                articulo = grupos[0]
+                dia = grupos[1]
+                inicio_dia = match.start(1)
+                fin_dia = match.end(1)
+            else:
+                articulo = ""
+                dia = grupos[0]
+                inicio_dia = match.start(1)
+                fin_dia = match.end(1)
+
+            fecha = calcular_fecha_proximo_dia(dia)
+
+            if not fecha:
+                continue
+
+            fecha_texto = formatear_fecha_larga_es(fecha)
+
+            # Evita duplicar fecha si ya dice algo como "lunes 20 de julio"
+            texto_despues_dia = texto[fin_dia:fin_dia + 20].lower()
+            if " de " in texto_despues_dia:
+                continue
+
+            texto = texto[:fin_dia] + f" {fecha_texto}" + texto[fin_dia:]
+
+    return texto
+    
+
+def construir_solicitud_datos_cita(contact) -> str:
+    """
+    Construye el mensaje para pedir datos después de confirmar la cita.
+    """
+    nivel_interes = get_note_value(contact, "NIVEL_INTERES")
+
+    if nivel_interes:
+        complemento_grado = ""
+    else:
+        complemento_grado = "\n\nTambién, ¿me podría confirmar para qué grado o nivel educativo está interesado?"
+
+    return f"""Para registrar su cita, ¿me podría ayudar por favor con su nombre completo y el nombre completo de su hijo(a)?
+
+De esta manera podremos tenerlos registrados y dedicarles el tiempo que requieren.{complemento_grado}"""
+
+
+def extraer_hora_cita_confirmada(mensaje_confirmacion: str, respaldo: str = "") -> str:
+    """
+    Extrae una frase breve con día y hora de la cita a partir del mensaje confirmado.
+    """
+    texto = (mensaje_confirmacion or "").strip()
+    respaldo = (respaldo or "").strip()
+
+    if not GEMINI_API_KEY:
+        return respaldo or texto[:120]
+
+    prompt = f"""
+Extrae únicamente el día y hora de la cita del siguiente mensaje.
+
+MENSAJE:
+{texto}
+
+RESPALDO:
+{respaldo}
+
+REGLAS:
+- Responde sólo con una frase breve.
+- Ejemplo: lunes a las 8:00 a.m.
+- Si no encuentras día y hora completos, usa el respaldo.
+- No expliques nada.
+"""
+
+    try:
+        response, modelo_usado = generar_con_gemini_con_fallback(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=80,
+                temperature=0.0
+            ),
+            tarea="extracción hora cita"
+        )
+
+        resultado = extraer_texto_respuesta_gemini(response).strip()
+        return resultado or respaldo or texto[:120]
+
+    except Exception as e:
+        print(f"⚠️ Error extrayendo hora de cita: {e}")
+        return respaldo or texto[:120]
+
+
+def extraer_datos_registro_cita(mensaje_usuario: str, contact) -> dict:
+    """
+    Extrae nombre del padre/madre/tutor, nombre del alumno y grado/nivel.
+    """
+    texto = (mensaje_usuario or "").strip()
+    nivel_conocido = get_note_value(contact, "NIVEL_INTERES")
+
+    datos = {
+        "padres": "",
+        "alumno": "",
+        "grado": nivel_conocido or ""
+    }
+
+    if not texto:
+        return datos
+
+    if not GEMINI_API_KEY:
+        return datos
+
+    prompt = f"""
+Extrae datos de registro de cita escolar desde el siguiente mensaje de WhatsApp.
+
+MENSAJE DEL PROSPECTO:
+{texto}
+
+GRADO O NIVEL YA CONOCIDO:
+{nivel_conocido or "No especificado"}
+
+TAREA:
+Devuelve únicamente un JSON válido con estas claves:
+{{
+  "padres": "",
+  "alumno": "",
+  "grado": ""
+}}
+
+REGLAS:
+- "padres" debe ser el nombre de la mamá, papá o tutor que agenda.
+- "alumno" debe ser el nombre del niño, niña o alumno.
+- "grado" debe ser el grado o nivel de interés.
+- Si el grado ya está conocido, úsalo.
+- Si algún dato no aparece, déjalo como cadena vacía.
+- No inventes apellidos.
+- No agregues explicaciones fuera del JSON.
+"""
+
+    try:
+        response, modelo_usado = generar_con_gemini_con_fallback(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=300,
+                temperature=0.0
+            ),
+            tarea="extracción datos cita"
+        )
+
+        texto_respuesta = extraer_texto_respuesta_gemini(response).strip()
+
+        texto_respuesta = texto_respuesta.replace("```json", "").replace("```", "").strip()
+
+        datos_ia = json.loads(texto_respuesta)
+
+        datos["padres"] = (datos_ia.get("padres") or "").strip()
+        datos["alumno"] = (datos_ia.get("alumno") or "").strip()
+        datos["grado"] = (datos_ia.get("grado") or nivel_conocido or "").strip()
+
+        return datos
+
+    except Exception as e:
+        print(f"⚠️ Error extrayendo datos de cita: {e}")
+        return datos
+
+
+def construir_resumen_cita_admin(contact) -> str:
+    """
+    Construye el resumen final que se envía al WhatsApp maestro.
+    """
+    padres = get_note_value(contact, "NOMBRE_PADRES")
+    alumno = get_note_value(contact, "NOMBRE_ALUMNO")
+    grado = get_note_value(contact, "GRADO_INTERES") or get_note_value(contact, "NIVEL_INTERES")
+    hora_cita = get_note_value(contact, "HORA_CITA")
+
+    return f"""📌 Cita registrada
+
+Padres: {padres or "Pendiente"}
+Cel: {contact.phone_number}
+Alumno:
+{alumno or "Pendiente"}
+{grado or "Pendiente"}
+Hora cita: {hora_cita or "Pendiente"}"""
+
+
+def enviar_resumen_cita_admin_whatsapp(contact):
+    """
+    Envía al WhatsApp maestro el resumen de la cita registrada.
+    """
+    admin_number = os.getenv("ADMIN_WHATSAPP_NUMBER", "whatsapp:+5215546080064")
+
+    resumen = construir_resumen_cita_admin(contact)
+
+    resultado = enviar_respuesta_twilio(admin_number, resumen)
+
+    print(f"📌 Resumen de cita enviado al admin: {resultado}")
+    print(f"📌 Resumen cita: {repr(resumen)}")
+
+    return resultado
+
+
+def procesar_datos_registro_cita(db: Session, contact, from_number: str, mensaje_usuario: str):
+    """
+    Procesa la respuesta del prospecto cuando ya se le pidieron datos para registrar cita.
+    """
+    datos = extraer_datos_registro_cita(mensaje_usuario, contact)
+
+    if datos.get("padres"):
+        set_note_value(contact, "NOMBRE_PADRES", datos["padres"])
+
+    if datos.get("alumno"):
+        set_note_value(contact, "NOMBRE_ALUMNO", datos["alumno"])
+
+    if datos.get("grado"):
+        set_note_value(contact, "GRADO_INTERES", datos["grado"])
+
+    db.commit()
+
+    padres = get_note_value(contact, "NOMBRE_PADRES")
+    alumno = get_note_value(contact, "NOMBRE_ALUMNO")
+    grado = get_note_value(contact, "GRADO_INTERES") or get_note_value(contact, "NIVEL_INTERES")
+
+    faltantes = []
+
+    if not padres:
+        faltantes.append("su nombre completo")
+
+    if not alumno:
+        faltantes.append("el nombre completo de su hijo(a)")
+
+    if not grado:
+        faltantes.append("el grado o nivel de interés")
+
+    if faltantes:
+        if len(faltantes) == 1:
+            faltantes_texto = faltantes[0]
+        else:
+            faltantes_texto = ", ".join(faltantes[:-1]) + " y " + faltantes[-1]
+
+        respuesta = f"""Muchas gracias.
+
+Para completar el registro de su cita, ¿me podría apoyar también con {faltantes_texto}?"""
+
+        resultado = enviar_respuesta_twilio(from_number, respuesta)
+
+        twilio_sid = None
+        if "SID:" in resultado:
+            twilio_sid = resultado.split("SID: ")[1].strip()
+
+        save_message(db, contact.id, "outgoing", respuesta, twilio_sid)
+
+        print(f"📌 Datos de cita incompletos. Faltan: {faltantes}")
+        return {"status": "datos_cita_incompletos"}
+
+    respuesta = """Muchas gracias.
+
+Su cita queda registrada. Le esperamos con mucho gusto."""
+
+    resultado = enviar_respuesta_twilio(from_number, respuesta)
+
+    twilio_sid = None
+    if "SID:" in resultado:
+        twilio_sid = resultado.split("SID: ")[1].strip()
+
+    save_message(db, contact.id, "outgoing", respuesta, twilio_sid)
+
+    set_flow_state(contact, "CITA_DATOS_COMPLETOS")
+    contact.status = "VISITA_AGENDADA"
+    db.commit()
+
+    enviar_resumen_cita_admin_whatsapp(contact)
+
+    print("📌 Datos de cita completos y resumen enviado al admin")
+
+    return {"status": "datos_cita_completos"}
+    
 
 def redactar_respuesta_admin_para_prospecto(texto_admin: str, tarea: AdminPendingTask) -> str:
     """
@@ -2177,10 +2562,38 @@ Te muestro nuevamente el menú actualizado:
         return {"status": "admin_contact_not_found"}
 
     mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_limpio, tarea)
-    
+
+    # Si el admin está confirmando definitivamente la cita,
+    # primero enriquecemos el mensaje antes de enviarlo al prospecto.
+    if admin_confirma_cita_final(mensaje_limpio):
+        contact.status = "VISITA_AGENDADA"
+
+        # Agrega fecha exacta si el mensaje dice algo como:
+        # "este lunes a las 8:00 a.m."
+        # para convertirlo en:
+        # "este lunes 20 de julio a las 8:00 a.m."
+        mensaje_para_prospecto = enriquecer_fecha_cita_en_mensaje(mensaje_para_prospecto)
+
+        hora_cita = extraer_hora_cita_confirmada(
+            mensaje_para_prospecto,
+            respaldo=tarea.trigger_message or ""
+        )
+
+        if hora_cita:
+            set_note_value(contact, "HORA_CITA", hora_cita)
+
+        solicitud_datos = construir_solicitud_datos_cita(contact)
+
+        if "nombre completo" not in mensaje_para_prospecto.lower():
+            mensaje_para_prospecto = f"""{mensaje_para_prospecto}
+
+{solicitud_datos}"""
+
+        set_flow_state(contact, "ESPERANDO_DATOS_CITA")
+
     print(f"👑 Texto admin original: {repr(mensaje_limpio)}")
     print(f"👑 Mensaje final para prospecto: {repr(mensaje_para_prospecto)}")
-    
+
     prospecto_to = f"whatsapp:{contact.phone_number}"
 
     resultado_envio = enviar_respuesta_twilio(prospecto_to, mensaje_para_prospecto)
@@ -2196,23 +2609,8 @@ Te muestro nuevamente el menú actualizado:
     tarea.final_response = mensaje_para_prospecto
     tarea.resolved_at = datetime.now(timezone.utc)
 
-    texto_admin_lower = mensaje_limpio.lower()
-
-    if any(x in texto_admin_lower for x in [
-        "confirmar",
-        "confirmado",
-        "sí",
-        "si",
-        "ok",
-        "adelante",
-        "está bien",
-        "esta bien",
-        "disponible"
-    ]):
-        contact.status = "VISITA_AGENDADA"
-
     db.commit()
-
+    
     ADMIN_SELECTED_TASKS.pop(admin_key, None)
 
     confirmacion_admin = f"""✅ Mensaje enviado al prospecto {contact.phone_number}.
