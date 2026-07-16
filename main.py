@@ -2007,37 +2007,148 @@ def respuesta_admin_parece_incompleta(texto: str) -> bool:
 
     return False
 
-def admin_confirma_cita_final(texto_admin: str) -> bool:
+def clasificar_respuesta_admin_cita_con_ia(texto_admin: str, tarea: AdminPendingTask = None) -> str:
     """
-    Detecta cuando la respuesta del admin sí confirma definitivamente la cita.
-    Evita confundir propuestas tentativas con citas ya confirmadas.
+    Usa IA para interpretar la intención real del administrador respecto a una cita.
+    Devuelve:
+    - CONFIRMA_CITA
+    - PROPONE_ALTERNATIVA
+    - RECHAZA_DISPONIBILIDAD
+    - AMBIGUO
     """
-    msg = (texto_admin or "").lower().strip()
+    texto_admin = (texto_admin or "").strip()
 
-    frases_confirmacion = [
-        "le puedes confirmar",
-        "puedes confirmar",
-        "confírmale",
-        "confirmale",
-        "queda confirmado",
-        "queda confirmada",
-        "cita confirmada",
-        "sí tenemos disponibilidad",
-        "si tenemos disponibilidad",
-        "sí hay disponibilidad",
-        "si hay disponibilidad",
-        "sí, le puedes confirmar",
-        "si, le puedes confirmar"
-    ]
+    if not texto_admin:
+        return "AMBIGUO"
 
-    if any(frase in msg for frase in frases_confirmacion):
+    if not GEMINI_API_KEY:
+        return "AMBIGUO"
+
+    mensaje_prospecto = ""
+    respuesta_bot = ""
+
+    if tarea:
+        mensaje_prospecto = tarea.trigger_message or ""
+        respuesta_bot = tarea.bot_response or ""
+
+    prompt = f"""
+Eres un clasificador estricto para un flujo de citas escolares por WhatsApp.
+
+CONTEXTO:
+El prospecto pidió una cita o propuso un horario.
+El bot consultó al administrador la disponibilidad.
+Ahora el administrador respondió con una instrucción interna.
+
+MENSAJE ORIGINAL DEL PROSPECTO:
+{mensaje_prospecto}
+
+RESPUESTA DEL BOT AL PROSPECTO ANTES DE CONSULTAR:
+{respuesta_bot}
+
+RESPUESTA INTERNA DEL ADMINISTRADOR:
+{texto_admin}
+
+TAREA:
+Clasifica la respuesta interna del administrador en UNA sola etiqueta.
+
+ETIQUETAS VÁLIDAS:
+
+CONFIRMA_CITA
+Usa esta etiqueta cuando el administrador acepta o confirma que sí se puede recibir al prospecto en el día y horario mencionado, aunque no use la palabra "confirmar".
+Ejemplos:
+- sí, está bien
+- sí, el día de mañana está bien a las 3pm
+- claro, mañana a las 3
+- sí podemos recibirla
+- adelante
+- perfecto
+- ok, está bien
+- sí hay disponibilidad
+- le puedes confirmar
+
+PROPONE_ALTERNATIVA
+Usa esta etiqueta cuando el administrador NO confirma el horario solicitado, pero propone otro día, otra hora o una opción tentativa.
+Ejemplos:
+- hoy no, podría ser mañana
+- mejor el viernes
+- puede ser la siguiente semana
+- a esa hora no, pero a las 3:30 sí
+- podríamos recibirla mañana
+
+RECHAZA_DISPONIBILIDAD
+Usa esta etiqueta cuando el administrador dice que no se puede atender y no da una alternativa clara.
+Ejemplos:
+- hoy no podemos
+- no hay disponibilidad
+- no se puede
+- no nos da tiempo
+
+AMBIGUO
+Usa esta etiqueta si no queda claro si está confirmando, proponiendo alternativa o rechazando.
+
+REGLAS:
+- Responde únicamente con una etiqueta.
+- No expliques nada.
+- No agregues puntuación.
+- Si el administrador dice "sí" y menciona día/hora, normalmente es CONFIRMA_CITA.
+- Si usa "podría", "podríamos", "tal vez", "mejor", normalmente es PROPONE_ALTERNATIVA, salvo que también confirme explícitamente.
+"""
+
+    try:
+        response, modelo_usado = generar_con_gemini_con_fallback(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=20,
+                temperature=0.0
+            ),
+            tarea="clasificación respuesta admin cita"
+        )
+
+        etiqueta = extraer_texto_respuesta_gemini(response).strip().upper()
+
+        etiquetas_validas = [
+            "CONFIRMA_CITA",
+            "PROPONE_ALTERNATIVA",
+            "RECHAZA_DISPONIBILIDAD",
+            "AMBIGUO"
+        ]
+
+        if etiqueta in etiquetas_validas:
+            print(f"👑 Clasificación admin cita IA: {etiqueta} usando {modelo_usado}")
+            return etiqueta
+
+        print(f"⚠️ Clasificación admin cita no válida: {repr(etiqueta)}")
+        return "AMBIGUO"
+
+    except Exception as e:
+        print(f"⚠️ Error clasificando respuesta admin cita con IA: {e}")
+        return "AMBIGUO"
+        
+
+def admin_confirma_cita_final(texto_admin: str, tarea: AdminPendingTask = None) -> bool:
+    """
+    Detecta si la respuesta del admin confirma definitivamente la cita.
+    Primero usa IA. Si la IA falla, usa un fallback mínimo por seguridad.
+    """
+    clasificacion = clasificar_respuesta_admin_cita_con_ia(texto_admin, tarea)
+
+    if clasificacion == "CONFIRMA_CITA":
         return True
 
-    # Permitimos respuestas muy cortas sólo cuando claramente son confirmación.
-    if msg in ["sí", "si", "ok", "confirmado", "confirmada", "adelante"]:
+    if clasificacion in ["PROPONE_ALTERNATIVA", "RECHAZA_DISPONIBILIDAD"]:
+        return False
+
+    # Fallback mínimo, sólo por si Gemini falla.
+    msg = normalizar_texto_para_deteccion(texto_admin)
+
+    if msg in ["si", "ok", "confirmado", "confirmada", "adelante"]:
+        return True
+
+    if "confirm" in msg and not any(x in msg for x in ["no confirm", "sin confirm"]):
         return True
 
     return False
+
 
 def formatear_fecha_larga_es(fecha):
     """
@@ -2609,7 +2720,7 @@ Te muestro nuevamente el menú actualizado:
 
     # Si el admin está confirmando definitivamente la cita,
     # primero enriquecemos el mensaje antes de enviarlo al prospecto.
-    if admin_confirma_cita_final(mensaje_limpio):
+    if admin_confirma_cita_final(mensaje_limpio, tarea):
         contact.status = "VISITA_AGENDADA"
 
         # Agrega fecha exacta si el mensaje dice algo como:
