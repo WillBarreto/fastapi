@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import funcdef generar_saludo_inicial_contextual(mensaje: str) -> str:
 from fastapi.responses import HTMLResponse
 import requests
 import json
@@ -462,6 +462,47 @@ def generar_saludo_inicial_contextual(mensaje: str) -> str:
     return """¡Hola!
 
 ¿En qué podemos ayudarle?"""
+
+def es_saludo_repetido_temprano(estado_actual: str, mensaje: str) -> bool:
+    """
+    Detecta saludos simples enviados después del primer saludo,
+    cuando el prospecto todavía no ha expresado una intención real.
+    """
+    if not es_saludo_simple(mensaje):
+        return False
+
+    return estado_actual in [
+        "ESPERANDO_INTENCION",
+        "ESPERANDO_REFERENCIA"
+    ]
+
+
+def responder_saludo_repetido_temprano(db: Session, contact, from_number: str, mensaje_usuario: str):
+    """
+    Responde un segundo saludo sin avanzar el embudo ni mandar a Gemini.
+    """
+    respuesta = generar_saludo_inicial_contextual(mensaje_usuario)
+
+    resultado = enviar_respuesta_twilio(from_number, respuesta)
+
+    twilio_sid = None
+    if "SID:" in resultado:
+        twilio_sid = resultado.split("SID: ")[1].strip()
+
+    save_message(db, contact.id, "outgoing", respuesta, twilio_sid)
+
+    # Dejamos al prospecto en espera de intención real.
+    set_flow_state(contact, "ESPERANDO_INTENCION")
+    db.commit()
+
+    print("👋 Saludo repetido temprano detectado; no se avanzó el embudo")
+    print(f"🤖 BOT: {respuesta}")
+    print(f"📤 Estado: {resultado}")
+
+    return {
+        "status": "saludo_repetido_temprano",
+        "contact_id": contact.id
+    }
 
 def detecta_intencion_cita(mensaje: str) -> bool:
     msg = (mensaje or "").lower().strip()
@@ -1225,12 +1266,15 @@ async def whatsapp_webhook(
 
         contact = get_or_create_contact(db, From)
         save_message(db, contact.id, 'incoming', mensaje_entrada)
-
+        
         estado_flujo_actual = get_flow_state(contact)
-
+        
         if estado_flujo_actual == "ESPERANDO_DATOS_CITA":
             return procesar_datos_registro_cita(db, contact, From, mensaje_entrada)
-
+        
+        if es_saludo_repetido_temprano(estado_flujo_actual, mensaje_entrada):
+            return responder_saludo_repetido_temprano(db, contact, From, mensaje_entrada)
+        
         nivel_detectado = detectar_nivel_interes(mensaje_entrada)
 
         if nivel_detectado:
