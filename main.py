@@ -778,7 +778,6 @@ CONTRATO OBLIGATORIO:
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=3000,
                 temperature=0.0,
-                response_mime_type="application/json",
             ),
             tarea="análisis estructurado del prospecto",
         )
