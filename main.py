@@ -823,7 +823,535 @@ CONTRATO OBLIGATORIO:
         )
         return crear_analisis_mensaje_vacio()
         
+# ============================================================
+# REGLAS DETERMINISTAS DEL NUEVO FLUJO ESTRUCTURADO
+# ============================================================
 
+def crear_decision_negocio_vacia() -> Dict[str, Any]:
+    """
+    Devuelve una decisión segura y neutral.
+
+    Esta estructura representa la decisión tomada por Python,
+    no la recomendación entregada por Gemini.
+    """
+    return {
+        "accion": "CONTINUAR_CONVERSACION",
+        "motivo": "No se identificó una regla prioritaria.",
+        "requiere_admin": False,
+        "puede_compartir_costos": False,
+        "zona_validada": False,
+        "debe_finalizar_conversacion": False,
+        "datos_detectados": {},
+    }
+
+
+def zona_previamente_validada_en_flujo(contact=None) -> bool:
+    """
+    Determina si la conversación ya superó la validación de zona.
+
+    Por ahora se apoya en el estado conversacional existente.
+    No modifica las notas ni la base de datos.
+    """
+    if contact is None:
+        return False
+
+    try:
+        estado_actual = get_flow_state(contact)
+    except Exception:
+        return False
+
+    estados_antes_de_validar_zona = {
+        "",
+        "SALUDO_INICIAL",
+        "ESPERANDO_INTENCION",
+        "ESPERANDO_REFERENCIA",
+        "VALIDACION_ZONA",
+        "VALIDACION_ZONA_OBLIGATORIA",
+        "ZONA_INVALIDA_POTENCIAL_METEPEC",
+        "CAMPUS_EXTERNO_NO_ATENDIBLE",
+    }
+
+    return estado_actual not in estados_antes_de_validar_zona
+
+
+def construir_datos_detectados_para_decision(
+    analisis: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Reúne solamente datos útiles que posteriormente podrían guardarse.
+
+    Esta función no escribe todavía en contact.notes.
+    """
+    datos = {}
+
+    if analisis.get("zona_mencionada"):
+        datos["zona_mencionada"] = analisis["zona_mencionada"]
+
+    if analisis.get("nivel"):
+        datos["nivel"] = analisis["nivel"]
+
+    if analisis.get("grado"):
+        datos["grado"] = analisis["grado"]
+
+    if analisis.get("edad_alumno") is not None:
+        datos["edad_alumno"] = analisis["edad_alumno"]
+
+    if analisis.get("fecha_nacimiento_texto"):
+        datos["fecha_nacimiento_texto"] = analisis[
+            "fecha_nacimiento_texto"
+        ]
+
+    if analisis.get("nombre_tutor"):
+        datos["nombre_tutor"] = analisis["nombre_tutor"]
+
+    if analisis.get("nombre_alumno"):
+        datos["nombre_alumno"] = analisis["nombre_alumno"]
+
+    if analisis.get("fecha_cita_iso"):
+        datos["fecha_cita_iso"] = analisis["fecha_cita_iso"]
+
+    if analisis.get("hora_cita_24h"):
+        datos["hora_cita_24h"] = analisis["hora_cita_24h"]
+
+    return datos
+
+
+def aplicar_reglas_negocio_estructuradas(
+    analisis: Dict[str, Any],
+    contact=None,
+) -> Dict[str, Any]:
+    """
+    Aplica las reglas críticas del colegio sobre el análisis de Gemini.
+
+    Orden de prioridad:
+    1. Campus externo o zona no atendida.
+    2. Cita en día no laborable.
+    3. Evaluación de alumno menor a Kínder.
+    4. Pausa o cierre de conversación.
+    5. Saludo simple.
+    6. Protección de costos mediante validación de zona.
+    7. Flujo de cita.
+    8. Registro de datos de cita.
+    9. Temas educativos e informes generales.
+
+    Esta función:
+    - No redacta respuestas.
+    - No guarda información.
+    - No envía mensajes.
+    - No avisa al administrador.
+    - No cambia el FLOW_STATE.
+    """
+    analisis_seguro = normalizar_analisis_mensaje_ia(
+        analisis
+    )
+
+    decision = crear_decision_negocio_vacia()
+
+    decision["datos_detectados"] = (
+        construir_datos_detectados_para_decision(
+            analisis_seguro
+        )
+    )
+
+    clasificacion_zona = analisis_seguro.get(
+        "clasificacion_zona",
+        "NO_MENCIONADA",
+    )
+
+    campus_externo = analisis_seguro.get(
+        "campus_externo",
+        False,
+    )
+
+    zona_valida_en_mensaje = (
+        clasificacion_zona == "VALIDA"
+        and not campus_externo
+    )
+
+    zona_valida_previamente = (
+        zona_previamente_validada_en_flujo(contact)
+    )
+
+    zona_validada = (
+        zona_valida_en_mensaje
+        or zona_valida_previamente
+    )
+
+    decision["zona_validada"] = zona_validada
+
+    # ========================================================
+    # 1. CAMPUS EXTERNO O ZONA NO ATENDIDA
+    # ========================================================
+
+    if (
+        campus_externo
+        or clasificacion_zona in {
+            "CAMPUS_EXTERNO",
+            "FUERA_DE_ZONA",
+        }
+        or analisis_seguro.get("intencion_principal")
+        == "CAMPUS_EXTERNO"
+    ):
+        decision.update({
+            "accion": "RECHAZAR_CAMPUS",
+            "motivo": (
+                "El prospecto busca otro campus o una zona "
+                "que no corresponde a Santa Cruz Atizapán."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+            "debe_finalizar_conversacion": True,
+        })
+
+        return decision
+
+    # ========================================================
+    # 2. CITA EN SÁBADO O DOMINGO
+    # ========================================================
+
+    if analisis_seguro.get("dia_no_laboral"):
+        decision.update({
+            "accion": "CITA_DIA_NO_LABORAL",
+            "motivo": (
+                "La fecha propuesta corresponde a sábado "
+                "o domingo."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+        })
+
+        return decision
+
+    # ========================================================
+    # 3. ALUMNO MENOR A KÍNDER
+    # ========================================================
+
+    if analisis_seguro.get(
+        "requiere_validar_pre_kinder"
+    ):
+        if not analisis_seguro.get(
+            "fecha_nacimiento_texto"
+        ):
+            decision.update({
+                "accion": "PEDIR_FECHA_NACIMIENTO",
+                "motivo": (
+                    "Se requiere la fecha de nacimiento para "
+                    "evaluar si el alumno puede ingresar a "
+                    "Pre-kínder no incorporado."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+            })
+
+            return decision
+
+        decision.update({
+            "accion": "ORIENTAR_PRE_KINDER",
+            "motivo": (
+                "El alumno podría ser menor a la edad oficial "
+                "de ingreso a Kínder."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+        })
+
+        return decision
+
+    # ========================================================
+    # 4. PAUSA O CIERRE TEMPORAL
+    # ========================================================
+
+    if (
+        analisis_seguro.get("pausa_conversacion")
+        or analisis_seguro.get("intencion_principal")
+        == "PAUSAR_CONVERSACION"
+    ):
+        decision.update({
+            "accion": "SEGUIMIENTO",
+            "motivo": (
+                "El prospecto indicó que revisará la "
+                "información o retomará posteriormente."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+        })
+
+        return decision
+
+    # ========================================================
+    # 5. SALUDO SIMPLE
+    # ========================================================
+
+    if (
+        analisis_seguro.get("saludo_simple")
+        and analisis_seguro.get("intencion_principal")
+        == "SALUDO"
+        and not analisis_seguro.get(
+            "intenciones_secundarias"
+        )
+    ):
+        decision.update({
+            "accion": "RESPONDER_SALUDO",
+            "motivo": (
+                "El mensaje contiene únicamente un saludo."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+        })
+
+        return decision
+
+    # ========================================================
+    # 6. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
+    # ========================================================
+
+    if (
+        analisis_seguro.get("pide_costos")
+        or analisis_seguro.get("intencion_principal")
+        == "PEDIR_COSTOS"
+        or "PEDIR_COSTOS"
+        in analisis_seguro.get(
+            "intenciones_secundarias",
+            [],
+        )
+    ):
+        if not zona_validada:
+            decision.update({
+                "accion": "PEDIR_ZONA",
+                "motivo": (
+                    "El prospecto pidió costos, pero todavía "
+                    "no se ha validado que corresponda al "
+                    "Campus Santa Cruz Atizapán."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+            })
+
+            return decision
+
+        decision.update({
+            "accion": "RESPONDER_COSTOS",
+            "motivo": (
+                "El prospecto pidió costos y la zona ya fue "
+                "validada."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": True,
+        })
+
+        return decision
+
+    # ========================================================
+    # 7. FLUJO DE CITA
+    # ========================================================
+
+    intenciones_cita = {
+        "PEDIR_CITA",
+        "PROPONER_FECHA_CITA",
+        "PROPONER_HORA_CITA",
+    }
+
+    tiene_intencion_cita = (
+        analisis_seguro.get("pide_cita")
+        or analisis_seguro.get("intencion_principal")
+        in intenciones_cita
+        or any(
+            intencion in intenciones_cita
+            for intencion in analisis_seguro.get(
+                "intenciones_secundarias",
+                [],
+            )
+        )
+    )
+
+    if tiene_intencion_cita:
+        fecha_cita = analisis_seguro.get(
+            "fecha_cita_iso",
+            "",
+        )
+
+        hora_cita = analisis_seguro.get(
+            "hora_cita_24h",
+            "",
+        )
+
+        if not fecha_cita:
+            decision.update({
+                "accion": "PEDIR_FECHA_CITA",
+                "motivo": (
+                    "El prospecto quiere una cita, pero no "
+                    "proporcionó una fecha."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+            })
+
+            return decision
+
+        if not hora_cita:
+            decision.update({
+                "accion": "PEDIR_HORA_CITA",
+                "motivo": (
+                    "El prospecto proporcionó fecha, pero "
+                    "todavía falta el horario."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+            })
+
+            return decision
+
+        decision.update({
+            "accion": "CONSULTAR_ADMIN",
+            "motivo": (
+                "El prospecto proporcionó fecha y hora; "
+                "la disponibilidad debe confirmarla una "
+                "persona administradora."
+            ),
+            "requiere_admin": True,
+            "puede_compartir_costos": zona_validada,
+        })
+
+        return decision
+
+    # ========================================================
+    # 8. DATOS POSTERIORES A LA CONFIRMACIÓN DE CITA
+    # ========================================================
+
+    if (
+        analisis_seguro.get("intencion_principal")
+        == "DAR_DATOS_CITA"
+    ):
+        nombre_tutor = analisis_seguro.get(
+            "nombre_tutor",
+            "",
+        )
+
+        nombre_alumno = analisis_seguro.get(
+            "nombre_alumno",
+            "",
+        )
+
+        nivel = analisis_seguro.get("nivel", "")
+        grado = analisis_seguro.get("grado", "")
+
+        if (
+            nombre_tutor
+            and nombre_alumno
+            and (nivel or grado)
+        ):
+            decision.update({
+                "accion": "REGISTRAR_DATOS_CITA",
+                "motivo": (
+                    "El prospecto proporcionó los datos "
+                    "requeridos para completar el registro."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+            })
+
+            return decision
+
+        decision.update({
+            "accion": "PEDIR_DATOS_CITA",
+            "motivo": (
+                "Faltan uno o más datos para completar "
+                "el registro de la cita."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+        })
+
+        return decision
+
+    # ========================================================
+    # 9. RESPUESTA DE ZONA VÁLIDA
+    # ========================================================
+
+    if (
+        analisis_seguro.get("intencion_principal")
+        == "RESPONDER_ZONA"
+    ):
+        if zona_valida_en_mensaje:
+            decision.update({
+                "accion": "CONTINUAR_INFORMES",
+                "motivo": (
+                    "La zona proporcionada corresponde al "
+                    "Campus Santa Cruz Atizapán."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": True,
+            })
+
+            return decision
+
+        decision.update({
+            "accion": "PEDIR_ZONA",
+            "motivo": (
+                "La ubicación proporcionada no permite "
+                "validar claramente la zona."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+        })
+
+        return decision
+
+    # ========================================================
+    # 10. TEMA EDUCATIVO
+    # ========================================================
+
+    if (
+        analisis_seguro.get("intencion_principal")
+        == "PREGUNTAR_TEMA_EDUCATIVO"
+        or analisis_seguro.get("tema_interes")
+    ):
+        decision.update({
+            "accion": "RESPONDER_TEMA",
+            "motivo": (
+                "El prospecto preguntó sobre un tema "
+                "educativo o institucional."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+        })
+
+        return decision
+
+    # ========================================================
+    # 11. INFORMES GENERALES
+    # ========================================================
+
+    if analisis_seguro.get(
+        "intencion_principal"
+    ) == "PEDIR_INFORMES":
+        if not zona_validada:
+            decision.update({
+                "accion": "PEDIR_ZONA",
+                "motivo": (
+                    "El prospecto solicita informes y aún "
+                    "no se ha validado su ubicación."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+            })
+
+            return decision
+
+        decision.update({
+            "accion": "CONTINUAR_INFORMES",
+            "motivo": (
+                "El prospecto solicita informes y la zona "
+                "ya está validada."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": True,
+        })
+
+        return decision
+
+    return decision
+        
 def descargar_media_twilio(media_url: str) -> bytes:
     """
     Descarga un archivo multimedia enviado por Twilio usando Basic Auth.
