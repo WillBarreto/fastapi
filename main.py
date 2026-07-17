@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 import os
 import google.generativeai as genai
 from twilio.rest import Client
