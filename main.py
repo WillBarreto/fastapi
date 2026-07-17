@@ -541,6 +541,104 @@ def detecta_intencion_cita(mensaje: str) -> bool:
     ]
     return any(t in msg for t in terminos)
 
+def obtener_fecha_relativa_cita(mensaje: str):
+    """
+    Detecta referencias simples de fecha para cita:
+    - hoy
+    - mañana
+    - lunes, martes, miércoles, jueves, viernes, sábado, domingo
+    Devuelve un date o None.
+    """
+    msg = normalizar_texto_para_deteccion(mensaje)
+
+    hoy = datetime.now(LOCAL_TZ).date()
+
+    if "manana" in msg:
+        return hoy + timedelta(days=1)
+
+    if "hoy" in msg:
+        return hoy
+
+    dias = {
+        "lunes": 0,
+        "martes": 1,
+        "miercoles": 2,
+        "jueves": 3,
+        "viernes": 4,
+        "sabado": 5,
+        "domingo": 6
+    }
+
+    for nombre_dia, weekday_objetivo in dias.items():
+        if nombre_dia in msg:
+            diferencia = (weekday_objetivo - hoy.weekday()) % 7
+
+            # Si dice el mismo día de la semana, asumimos hoy.
+            fecha_objetivo = hoy + timedelta(days=diferencia)
+            return fecha_objetivo
+
+    return None
+
+
+def es_dia_laborable_para_visitas(fecha) -> bool:
+    """
+    El colegio recibe visitas de lunes a viernes.
+    weekday(): lunes=0, domingo=6
+    """
+    if not fecha:
+        return True
+
+    return fecha.weekday() in [0, 1, 2, 3, 4]
+
+
+def esta_en_contexto_de_agendar_cita(history=None) -> bool:
+    """
+    Detecta si la conversación reciente está en etapa de agendar visita.
+    """
+    if not history:
+        return False
+
+    textos = []
+
+    for item in history[-6:]:
+        contenido = (item.content or "").lower()
+        textos.append(contenido)
+
+    historial = "\n".join(textos)
+
+    frases = [
+        "agendar una visita",
+        "agendamos su visita",
+        "en qué día y hora",
+        "que día y hora",
+        "qué día y hora",
+        "horario le gustaría asistir",
+        "validaré la disponibilidad",
+        "verificar si le podemos atender",
+        "consultamos la disponibilidad",
+        "directora de primaria",
+        "directora de preescolar",
+        "directora de secundaria"
+    ]
+
+    return any(frase in historial for frase in frases)
+
+
+def detecta_propuesta_cita_en_dia_no_laboral(mensaje_usuario: str, history=None) -> bool:
+    """
+    Detecta cuando el prospecto propone una cita en sábado o domingo.
+    """
+    if not esta_en_contexto_de_agendar_cita(history):
+        return False
+
+    fecha = obtener_fecha_relativa_cita(mensaje_usuario)
+
+    if not fecha:
+        return False
+
+    return not es_dia_laborable_para_visitas(fecha)
+    
+
 def detecta_pausa_o_cierre(mensaje: str) -> bool:
     """
     Detecta cuando el prospecto quiere pausar, revisar la información
@@ -649,6 +747,12 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
     Define con qué estado se debe RESPONDER el mensaje actual.
     """
     msg = (mensaje_usuario or "").lower().strip()
+
+    # ===== CITA EN DÍA NO LABORABLE =====
+    # Si el prospecto propone sábado/domingo, no se manda a admin.
+    # Se responde directamente pidiendo una opción de lunes a viernes.
+    if detecta_propuesta_cita_en_dia_no_laboral(mensaje_usuario, history):
+        return "CITA_DIA_NO_LABORAL"
 
     # ===== BLOQUEO COMERCIAL HASTA VALIDAR ZONA =====
     # Si el prospecto pregunta colegiatura/costos antes de confirmar zona,
@@ -950,6 +1054,9 @@ def determinar_estado_siguiente(estado_actual: str, mensaje_usuario: str) -> str
     """
     if estado_actual == "SALUDO_INICIAL":
         return "ESPERANDO_INTENCION"
+
+    if estado_actual == "CITA_DIA_NO_LABORAL":
+        return "ESPERANDO_PROPUESTA_CITA"
 
     if estado_actual == "ESPERANDO_INTENCION":
         return "ESPERANDO_REFERENCIA"
@@ -1481,6 +1588,10 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
         return respuesta, estado_respuesta, estado_siguiente
 
+    if estado_respuesta == "CITA_DIA_NO_LABORAL":
+        respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
+        return respuesta, estado_respuesta, estado_siguiente
+
     if estado_respuesta == "VALIDACION_ZONA_OBLIGATORIA":
         respuesta = generar_respuesta_predeterminada(mensaje_usuario, contact, estado_respuesta)
         return respuesta, estado_respuesta, estado_siguiente
@@ -1534,6 +1645,15 @@ def generar_respuesta_predeterminada(mensaje_usuario: str, contact, estado_actua
 
     if estado_actual == "SALUDO_INICIAL":
         return generar_saludo_inicial_contextual(mensaje_usuario)
+
+    if estado_actual == "CITA_DIA_NO_LABORAL":
+        return """Le ofrezco una disculpa, los sábados y domingos no recibimos visitas.
+
+Con gusto podemos agendarle de lunes a viernes, en un horario de 8:00 a.m. a 1:00 p.m.
+
+Si por cuestiones laborales requiere otro horario, podemos revisar una alternativa, máximo hasta las 4:00 p.m.
+
+¿Qué día de lunes a viernes le funcionaría mejor?"""
 
     if estado_actual == "ESPERANDO_INTENCION":
         return """Con gusto le orientamos,
@@ -2061,6 +2181,31 @@ def respuesta_admin_parece_incompleta(texto: str) -> bool:
         return True
 
     return False
+
+def normalizar_texto_para_deteccion(texto: str) -> str:
+    """
+    Normaliza texto para detectar intención sin depender de acentos,
+    mayúsculas o puntuación.
+    """
+    msg = (texto or "").lower().strip()
+
+    reemplazos = {
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ü": "u"
+    }
+
+    for origen, destino in reemplazos.items():
+        msg = msg.replace(origen, destino)
+
+    for caracter in [",", ".", "!", "¡", "?", "¿", ":", ";"]:
+        msg = msg.replace(caracter, " ")
+
+    return " ".join(msg.split())
+    
 
 def clasificar_respuesta_admin_cita_con_ia(texto_admin: str, tarea: AdminPendingTask = None) -> str:
     """
