@@ -379,11 +379,10 @@ def detecta_costos(mensaje: str) -> bool:
     terminos = ["costo", "costos", "precio", "precios", "colegiatura", "colegiaturas", "inscripción", "inscripcion"]
     return any(t in msg for t in terminos)
 
-def requiere_validacion_zona_antes_de_informes(estado_actual: str, mensaje_usuario: str) -> bool:
+def requiere_validacion_zona_antes_de_informes(estado_actual: str, mensaje_usuario: str, history=None) -> bool:
     """
     Bloquea información comercial sensible si todavía no se validó zona.
-    Aplica especialmente cuando el usuario pregunta costos, colegiaturas,
-    inscripción o precios antes de confirmar ubicación.
+    Pero si el mismo mensaje ya incluye una zona válida, NO bloquea.
     """
     estados_previos_a_zona = [
         "ESPERANDO_INTENCION",
@@ -394,11 +393,20 @@ def requiere_validacion_zona_antes_de_informes(estado_actual: str, mensaje_usuar
     if estado_actual not in estados_previos_a_zona:
         return False
 
-    if detecta_costos(mensaje_usuario):
-        return True
+    if not detecta_costos(mensaje_usuario):
+        return False
 
-    return False
+    # Si el mismo mensaje ya trae una zona válida por regla rápida, no bloqueamos.
+    if es_zona_valida(mensaje_usuario):
+        return False
 
+    # Si el mismo mensaje trae una zona externa o inválida, tampoco debe pasar a costos;
+    # se manejará por el clasificador de campus / zona.
+    if detecta_campus_externo(mensaje_usuario) or es_zona_invalida_probable(mensaje_usuario):
+        return False
+
+    # Si no hay zona clara, bloqueamos costos hasta validar ubicación.
+    return True
 def detectar_nivel_interes(mensaje: str) -> str:
     """
     Detecta el nivel o grado de interés mencionado por el prospecto.
@@ -645,7 +653,7 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
     # ===== BLOQUEO COMERCIAL HASTA VALIDAR ZONA =====
     # Si el prospecto pregunta colegiatura/costos antes de confirmar zona,
     # no se entrega información comercial ni se pregunta nivel todavía.
-    if requiere_validacion_zona_antes_de_informes(estado_actual, mensaje_usuario):
+    if requiere_validacion_zona_antes_de_informes(estado_actual, mensaje_usuario, history):
         return "VALIDACION_ZONA_OBLIGATORIA"
 
         # ===== SALUDO INICIAL PURO =====
@@ -704,16 +712,21 @@ def determinar_estado_respuesta(estado_actual: str, mensaje_usuario: str, histor
             mensaje_usuario=mensaje_usuario,
             history=history or [],
         )
-
+    
         if clasificacion == "ZONA_VALIDA":
+            # Si el usuario ya dio zona válida y además preguntó costos,
+            # no lo mandamos al discurso de método; respondemos sobre costos.
+            if detecta_costos(mensaje_usuario):
+                return "COSTOS_EN_ETAPA_AVANZADA"
+    
             return "RESPUESTA_SOBRE_METODO"
-
+    
         if clasificacion == "ZONA_INVALIDA":
             return "ZONA_INVALIDA_POTENCIAL_METEPEC"
-
+    
         if clasificacion in ["ZONA_DUDOSA", "AMBIGUO"]:
             return "VALIDACION_ZONA"
-
+        
     # ===== DESPUÉS DEL TEMA =====
     if estado_actual == "DESPUES_DEL_TEMA":
         clasificacion = clasificar_intencion_en_estado(
@@ -834,6 +847,8 @@ REGLAS:
 - Responde únicamente con una etiqueta.
 - No expliques nada.
 - No agregues puntuación.
+- Si el estado actual es VALIDACION_ZONA y el usuario menciona una zona válida, clasifica como ZONA_VALIDA aunque también pregunte por costos, inscripción, colegiatura, nivel educativo o cita.
+- Si el usuario menciona Capulhuac, Tlazala, Almaya, Santiago Tianguistenco, Tianguistenco, Xalatlaco, Almoloya, San Pedro, Buen Suceso o Santa Cruz Atizapán, clasifica como ZONA_VALIDA.
 - Si no está claro, responde AMBIGUO.
 """
 
