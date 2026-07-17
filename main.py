@@ -776,8 +776,9 @@ CONTRATO OBLIGATORIO:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt_analisis,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1400,
+                max_output_tokens=3000,
                 temperature=0.0,
+                response_mime_type="application/json",
             ),
             tarea="análisis estructurado del prospecto",
         )
@@ -1398,6 +1399,29 @@ def procesar_mensaje_prospecto_estructurado(
             contact=contact,
             history=history or [],
         )
+
+        analisis_fallo = (
+            analisis.get("intencion_principal") == "OTRO"
+            and analisis.get("confianza", 0.0) == 0.0
+            and not analisis.get("datos_detectados")
+            and not analisis.get("zona_mencionada")
+            and not analisis.get("nivel")
+        )
+        
+        if analisis_fallo:
+            decision_vacia = crear_decision_negocio_vacia()
+            decision_vacia["motivo"] = (
+                "Gemini no devolvió un análisis estructurado válido."
+            )
+        
+            return {
+                "version": "1.0",
+                "flujo": "estructurado",
+                "procesado": False,
+                "analisis": analisis,
+                "decision": decision_vacia,
+                "error": "ANALISIS_IA_INVALIDO",
+            }
 
         decision = aplicar_reglas_negocio_estructuradas(
             analisis=analisis,
