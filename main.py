@@ -915,10 +915,51 @@ def construir_datos_detectados_para_decision(
 
     return datos
 
+    def detectar_pausa_conversacion_simple(
+    mensaje: str
+) -> bool:
+    """
+    Detecta expresiones frecuentes con las que el prospecto
+    indica que revisará la información o responderá después.
+    """
+    texto = (mensaje or "").lower().strip()
+
+    frases_pausa = [
+        "después les aviso",
+        "despues les aviso",
+        "luego les aviso",
+        "más tarde les aviso",
+        "mas tarde les aviso",
+        "yo les aviso",
+        "les confirmo después",
+        "les confirmo despues",
+        "lo voy a revisar",
+        "lo revisaré",
+        "lo revisare",
+        "déjeme revisarlo",
+        "dejeme revisarlo",
+        "lo platico con",
+        "lo consultaré con",
+        "lo consultare con",
+        "lo veo con mi esposo",
+        "lo veo con mi esposa",
+        "lo veo con mi familia",
+        "lo reviso con mi esposo",
+        "lo reviso con mi esposa",
+        "por el momento no",
+        "más adelante",
+        "mas adelante",
+    ]
+
+    return any(
+        frase in texto
+        for frase in frases_pausa
+    )
 
 def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
     contact=None,
+    mensaje_usuario: str = "",
 ) -> Dict[str, Any]:
     """
     Aplica las reglas críticas del colegio sobre el análisis de Gemini.
@@ -1062,9 +1103,12 @@ def aplicar_reglas_negocio_estructuradas(
     # ========================================================
 
     if (
-        analisis_seguro.get("pausa_conversacion")
+    analisis_seguro.get("pausa_conversacion")
         or analisis_seguro.get("intencion_principal")
         == "PAUSAR_CONVERSACION"
+        or detectar_pausa_conversacion_simple(
+            mensaje_usuario
+        )
     ):
         decision.update({
             "accion": "SEGUIMIENTO",
@@ -1425,6 +1469,7 @@ def procesar_mensaje_prospecto_estructurado(
         decision = aplicar_reglas_negocio_estructuradas(
             analisis=analisis,
             contact=contact,
+            mensaje_usuario=mensaje,
         )
 
         resultado = {
