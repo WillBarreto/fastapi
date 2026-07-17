@@ -2681,6 +2681,128 @@ async def health_check(db: Session = Depends(get_db)):
         "twilio_configured": bool(os.getenv("TWILIO_API_KEY"))
     }
 
+# ============================================================
+# ENDPOINT AISLADO PARA PROBAR EL FLUJO ESTRUCTURADO
+# ============================================================
+
+class StructuredFlowTestRequest(BaseModel):
+    """
+    Datos permitidos para una prueba aislada del nuevo flujo.
+
+    phone_number es opcional. Si se proporciona y existe el contacto,
+    se utiliza su contexto real solamente para lectura.
+    """
+    message: str
+    phone_number: Optional[str] = None
+
+
+@app.post("/debug/structured-flow")
+async def debug_structured_flow(
+    payload: StructuredFlowTestRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Ejecuta el nuevo orquestador sin afectar la conversación productiva.
+
+    No:
+    - envía mensajes por Twilio;
+    - guarda mensajes;
+    - modifica el contacto;
+    - cambia FLOW_STATE;
+    - crea tareas de administrador;
+    - sustituye el webhook actual.
+    """
+    endpoint_habilitado = (
+        os.getenv(
+            "ENABLE_STRUCTURED_FLOW_TEST_ENDPOINT",
+            "false",
+        )
+        .strip()
+        .lower()
+        in ["true", "1", "yes", "si", "sí"]
+    )
+
+    if not endpoint_habilitado:
+        raise HTTPException(
+            status_code=404,
+            detail="Endpoint de prueba no habilitado.",
+        )
+
+    mensaje = (payload.message or "").strip()
+
+    if not mensaje:
+        raise HTTPException(
+            status_code=400,
+            detail="El campo message no puede estar vacío.",
+        )
+
+    contact = None
+    history = []
+
+    numero_recibido = (
+        payload.phone_number or ""
+    ).strip()
+
+    if numero_recibido:
+        variantes_numero = {
+            numero_recibido,
+        }
+
+        if numero_recibido.startswith("whatsapp:"):
+            variantes_numero.add(
+                numero_recibido.replace(
+                    "whatsapp:",
+                    "",
+                    1,
+                )
+            )
+        else:
+            variantes_numero.add(
+                f"whatsapp:{numero_recibido}"
+            )
+
+        contact = (
+            db.query(Contact)
+            .filter(
+                Contact.phone_number.in_(
+                    list(variantes_numero)
+                )
+            )
+            .first()
+        )
+
+        if contact is not None:
+            mensajes_recientes = (
+                db.query(Message)
+                .filter(
+                    Message.contact_id == contact.id
+                )
+                .order_by(
+                    Message.timestamp.desc()
+                )
+                .limit(8)
+                .all()
+            )
+
+            history = list(
+                reversed(mensajes_recientes)
+            )
+
+    resultado = procesar_mensaje_prospecto_estructurado(
+        mensaje_usuario=mensaje,
+        contact=contact,
+        history=history,
+    )
+
+    return {
+        "modo": "PRUEBA_AISLADA",
+        "sin_efectos_secundarios": True,
+        "contacto_encontrado": contact is not None,
+        "mensajes_de_contexto": len(history),
+        "resultado": resultado,
+    }
+    
+
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
