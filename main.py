@@ -25,6 +25,13 @@ prompt_manager = PromptManager()
 FLOW_STATE_PREFIX = "FLOW_STATE:"
 ADMIN_SELECTED_TASKS = {}
 
+USE_STRUCTURED_AI_FLOW = (
+    os.getenv("USE_STRUCTURED_AI_FLOW", "false")
+    .strip()
+    .lower()
+    in ["true", "1", "yes", "si", "sí"]
+)
+
 def obtener_modelos_gemini():
     """
     Devuelve el modelo principal + modelos de respaldo configurados en Railway.
