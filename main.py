@@ -915,8 +915,8 @@ def construir_datos_detectados_para_decision(
 
     return datos
 
-    def detectar_pausa_conversacion_simple(
-    mensaje: str
+def detectar_pausa_conversacion_simple(
+    mensaje: str,
 ) -> bool:
     """
     Detecta expresiones frecuentes con las que el prospecto
@@ -955,7 +955,7 @@ def construir_datos_detectados_para_decision(
         frase in texto
         for frase in frases_pausa
     )
-
+    
 def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
     contact=None,
