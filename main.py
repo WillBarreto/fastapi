@@ -1351,6 +1351,98 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     return decision
+
+def procesar_mensaje_prospecto_estructurado(
+    mensaje_usuario: str,
+    contact=None,
+    history=None,
+) -> Dict[str, Any]:
+    """
+    Ejecuta el núcleo del nuevo flujo estructurado.
+
+    Secuencia:
+    1. Gemini interpreta el mensaje y devuelve el contrato estructurado.
+    2. Python aplica las reglas deterministas del negocio.
+    3. Se devuelven ambos resultados para auditoría y pruebas.
+
+    Esta función todavía:
+    - No redacta respuestas.
+    - No envía mensajes por Twilio.
+    - No modifica contact.notes.
+    - No cambia el FLOW_STATE.
+    - No crea tareas para el administrador.
+    - No sustituye el flujo anterior.
+    """
+    mensaje = (mensaje_usuario or "").strip()
+
+    if not mensaje:
+        analisis_vacio = crear_analisis_mensaje_vacio()
+        decision_vacia = crear_decision_negocio_vacia()
+
+        decision_vacia["motivo"] = (
+            "El mensaje recibido está vacío."
+        )
+
+        return {
+            "version": "1.0",
+            "flujo": "estructurado",
+            "procesado": False,
+            "analisis": analisis_vacio,
+            "decision": decision_vacia,
+            "error": "MENSAJE_VACIO",
+        }
+
+    try:
+        analisis = analizar_mensaje_prospecto_con_ia(
+            mensaje_usuario=mensaje,
+            contact=contact,
+            history=history or [],
+        )
+
+        decision = aplicar_reglas_negocio_estructuradas(
+            analisis=analisis,
+            contact=contact,
+        )
+
+        resultado = {
+            "version": "1.0",
+            "flujo": "estructurado",
+            "procesado": True,
+            "analisis": analisis,
+            "decision": decision,
+            "error": "",
+        }
+
+        print(
+            "🧭 Resultado del orquestador estructurado: "
+            f"{json.dumps(resultado, ensure_ascii=False)}"
+        )
+
+        return resultado
+
+    except Exception as e:
+        print(
+            "⚠️ Error ejecutando el orquestador "
+            f"estructurado: {e}"
+        )
+
+        analisis_vacio = crear_analisis_mensaje_vacio()
+        decision_vacia = crear_decision_negocio_vacia()
+
+        decision_vacia["motivo"] = (
+            "Ocurrió un error interno durante el "
+            "procesamiento estructurado."
+        )
+
+        return {
+            "version": "1.0",
+            "flujo": "estructurado",
+            "procesado": False,
+            "analisis": analisis_vacio,
+            "decision": decision_vacia,
+            "error": str(e),
+        }
+        
         
 def descargar_media_twilio(media_url: str) -> bytes:
     """
