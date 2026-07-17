@@ -518,6 +518,310 @@ def extraer_texto_respuesta_gemini(response) -> str:
         return texto.strip()
     except Exception:
         return ""
+
+def extraer_json_de_texto(texto: str) -> Optional[Dict[str, Any]]:
+    """
+    Extrae un objeto JSON de una respuesta de Gemini.
+
+    Tolera:
+    - JSON directo.
+    - Bloques ```json ... ```.
+    - Texto adicional antes o después del objeto.
+    """
+    contenido = (texto or "").strip()
+
+    if not contenido:
+        return None
+
+    # Elimina cercas Markdown frecuentes.
+    if contenido.startswith("```"):
+        contenido = re.sub(
+            r"^```(?:json)?\s*",
+            "",
+            contenido,
+            flags=re.IGNORECASE,
+        )
+        contenido = re.sub(
+            r"\s*```$",
+            "",
+            contenido,
+        )
+        contenido = contenido.strip()
+
+    # Primer intento: todo el contenido es JSON.
+    try:
+        datos = json.loads(contenido)
+
+        if isinstance(datos, dict):
+            return datos
+
+    except json.JSONDecodeError:
+        pass
+
+    # Segundo intento: extraer desde la primera llave hasta la última.
+    inicio = contenido.find("{")
+    fin = contenido.rfind("}")
+
+    if inicio == -1 or fin == -1 or fin <= inicio:
+        return None
+
+    fragmento = contenido[inicio:fin + 1]
+
+    try:
+        datos = json.loads(fragmento)
+
+        if isinstance(datos, dict):
+            return datos
+
+    except json.JSONDecodeError:
+        return None
+
+    return None
+
+
+def analizar_mensaje_prospecto_con_ia(
+    mensaje_usuario: str,
+    contact=None,
+    history=None,
+) -> Dict[str, Any]:
+    """
+    Analiza integralmente el mensaje actual del prospecto con Gemini.
+
+    Esta función:
+    - Interpreta todas las intenciones presentes.
+    - Extrae datos útiles.
+    - Devuelve un JSON normalizado.
+    - No redacta una respuesta para el prospecto.
+    - No modifica la base de datos.
+    - No cambia el estado del flujo.
+    """
+    mensaje = (mensaje_usuario or "").strip()
+
+    if not mensaje:
+        print("⚠️ Análisis estructurado: mensaje vacío")
+        return crear_analisis_mensaje_vacio()
+
+    api_key = (
+        os.getenv("GOOGLE_AI_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+    )
+
+    if not api_key:
+        print(
+            "⚠️ No hay clave de Gemini disponible para "
+            "el análisis estructurado"
+        )
+        return crear_analisis_mensaje_vacio()
+
+    genai.configure(api_key=api_key)
+
+    historial_lineas = []
+
+    if history:
+        for item in history[-8:]:
+            direccion = getattr(item, "direction", "")
+            contenido = str(
+                getattr(item, "content", "") or ""
+            ).strip()
+
+            if not contenido:
+                continue
+
+            if direccion == "incoming":
+                emisor = "Prospecto"
+            elif direccion == "outgoing":
+                emisor = "Asistente"
+            else:
+                emisor = "Conversación"
+
+            historial_lineas.append(
+                f"{emisor}: {contenido}"
+            )
+
+    historial_texto = (
+        "\n".join(historial_lineas)
+        if historial_lineas
+        else "Sin historial reciente."
+    )
+
+    estado_actual = ""
+
+    if contact is not None:
+        try:
+            estado_actual = get_flow_state(contact)
+        except Exception:
+            estado_actual = ""
+
+    notas_contacto = str(
+        getattr(contact, "notes", "") or ""
+    ).strip() if contact is not None else ""
+
+    estatus_contacto = str(
+        getattr(contact, "status", "") or ""
+    ).strip() if contact is not None else ""
+
+    fecha_actual = datetime.now(LOCAL_TZ)
+
+    fecha_actual_texto = fecha_actual.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    contrato_json = json.dumps(
+        crear_analisis_mensaje_vacio(),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    prompt_analisis = f"""
+Eres el analizador semántico de un bot de admisiones del
+Colegio Valle de Filadelfia, Campus Santa Cruz Atizapán.
+
+Tu única tarea es interpretar el mensaje del prospecto y devolver
+un objeto JSON. No debes redactar una respuesta para el usuario.
+
+FECHA Y HORA LOCAL ACTUAL:
+{fecha_actual_texto}
+
+ESTADO CONVERSACIONAL ACTUAL:
+{estado_actual or "No disponible"}
+
+ESTATUS DEL CONTACTO:
+{estatus_contacto or "No disponible"}
+
+DATOS PREVIOS GUARDADOS:
+{notas_contacto or "Sin datos previos guardados."}
+
+HISTORIAL RECIENTE:
+{historial_texto}
+
+MENSAJE ACTUAL DEL PROSPECTO:
+{mensaje}
+
+REGLAS INSTITUCIONALES PARA INTERPRETACIÓN:
+
+1. Este canal atiende únicamente al Campus Santa Cruz Atizapán.
+
+2. Zonas válidas o cercanas:
+- Santa Cruz Atizapán
+- Santiago Tianguistenco
+- Tianguistenco
+- Capulhuac
+- Capulhuac de Mirafuentes
+- San Pedro
+- Xalatlaco
+- Almoloya
+- Buen Suceso
+- Tlazala
+- Almaya
+- localidades claramente cercanas a Santa Cruz Atizapán
+
+3. Campus o zonas externas:
+- Metepec
+- Toluca
+- Atlacomulco
+- cualquier otro campus del colegio
+
+4. Niveles oficiales:
+- Kínder
+- Primaria
+- Secundaria
+
+No clasifiques Maternal ni Pre-kínder como niveles oficiales.
+Cuando el alumno parezca demasiado pequeño, activa:
+"requiere_validar_pre_kinder": true
+
+5. Un mismo mensaje puede contener varias intenciones.
+Selecciona la más importante como "intencion_principal" y coloca
+las demás en "intenciones_secundarias".
+
+6. Si pregunta costo, colegiatura, inscripción o precio:
+"pide_costos": true
+
+7. Si pide visitar, conocer, agendar o tener una cita:
+"pide_cita": true
+
+8. Si menciona una fecha relativa como hoy, mañana o un día de la
+semana:
+- conserva la frase original en "fecha_cita_texto"
+- conviértela a YYYY-MM-DD en "fecha_cita_iso"
+
+9. Si menciona una hora:
+- conserva la frase en "hora_cita_texto"
+- conviértela a HH:MM en "hora_cita_24h" cuando sea inequívoca
+
+10. Las visitas sólo se realizan de lunes a viernes.
+Marca "dia_no_laboral": true cuando la fecha propuesta sea sábado
+o domingo.
+
+11. No inventes nombres, zonas, fechas, niveles, grados o edades.
+Cuando un dato no esté expresado ni pueda recuperarse claramente
+del historial, usa el valor vacío correspondiente.
+
+12. Los campos "clasificacion_zona", "dia_no_laboral" y
+"accion_recomendada" son orientativos. Posteriormente serán
+validados por código.
+
+13. "confianza" debe ser un número entre 0.0 y 1.0.
+
+14. Devuelve exclusivamente JSON válido.
+No uses Markdown.
+No agregues explicaciones.
+No escribas texto antes ni después del JSON.
+
+CONTRATO OBLIGATORIO:
+{contrato_json}
+"""
+
+    try:
+        response, modelo_usado = generar_con_gemini_con_fallback(
+            prompt_analisis,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=1400,
+                temperature=0.0,
+            ),
+            tarea="análisis estructurado del prospecto",
+        )
+
+        texto_respuesta = extraer_texto_respuesta_gemini(
+            response
+        )
+
+        datos_crudos = extraer_json_de_texto(
+            texto_respuesta
+        )
+
+        if datos_crudos is None:
+            print(
+                "⚠️ Gemini no devolvió JSON válido en el "
+                "análisis estructurado"
+            )
+            print(
+                f"📄 Respuesta cruda: "
+                f"{texto_respuesta[:1000]}"
+            )
+            return crear_analisis_mensaje_vacio()
+
+        analisis = normalizar_analisis_mensaje_ia(
+            datos_crudos
+        )
+
+        print(
+            f"✅ Análisis estructurado completado "
+            f"con {modelo_usado}"
+        )
+        print(
+            "🧠 Análisis normalizado: "
+            f"{json.dumps(analisis, ensure_ascii=False)}"
+        )
+
+        return analisis
+
+    except Exception as e:
+        print(
+            "⚠️ Error en análisis estructurado "
+            f"del prospecto: {e}"
+        )
+        return crear_analisis_mensaje_vacio()
         
 
 def descargar_media_twilio(media_url: str) -> bytes:
