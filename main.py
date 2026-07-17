@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional
 import os
 import google.generativeai as genai
 from twilio.rest import Client
@@ -31,6 +32,411 @@ USE_STRUCTURED_AI_FLOW = (
     .lower()
     in ["true", "1", "yes", "si", "sí"]
 )
+
+# ============================================================
+# CONTRATO DE ANÁLISIS ESTRUCTURADO DEL MENSAJE DEL PROSPECTO
+# ============================================================
+
+INTENCIONES_PRINCIPALES_VALIDAS = {
+    "SALUDO",
+    "PEDIR_INFORMES",
+    "PEDIR_COSTOS",
+    "PEDIR_CITA",
+    "PROPONER_FECHA_CITA",
+    "PROPONER_HORA_CITA",
+    "DAR_DATOS_CITA",
+    "PREGUNTAR_TEMA_EDUCATIVO",
+    "RESPONDER_ZONA",
+    "PAUSAR_CONVERSACION",
+    "CAMPUS_EXTERNO",
+    "OTRO",
+}
+
+CLASIFICACIONES_ZONA_VALIDAS = {
+    "VALIDA",
+    "FUERA_DE_ZONA",
+    "CAMPUS_EXTERNO",
+    "DUDOSA",
+    "NO_MENCIONADA",
+}
+
+NIVELES_OFICIALES_VALIDOS = {
+    "",
+    "Kínder",
+    "Primaria",
+    "Secundaria",
+}
+
+TEMAS_INTERES_VALIDOS = {
+    "",
+    "metodo_filadelfia",
+    "matematico",
+    "lectura",
+    "artistico_musical",
+    "motriz",
+    "inteligencia_emocional",
+    "pantallas_ipad",
+    "idiomas",
+    "costos",
+    "cita",
+    "otro",
+}
+
+ACCIONES_RECOMENDADAS_VALIDAS = {
+    "RESPONDER_SALUDO",
+    "PEDIR_ZONA",
+    "CONTINUAR_INFORMES",
+    "RESPONDER_TEMA",
+    "RESPONDER_COSTOS",
+    "INVITAR_CITA",
+    "PEDIR_FECHA_CITA",
+    "PEDIR_HORA_CITA",
+    "CONSULTAR_ADMIN",
+    "RECHAZAR_CAMPUS",
+    "ORIENTAR_PRE_KINDER",
+    "PEDIR_FECHA_NACIMIENTO",
+    "PEDIR_DATOS_CITA",
+    "REGISTRAR_DATOS_CITA",
+    "CITA_DIA_NO_LABORAL",
+    "SEGUIMIENTO",
+    "CONTINUAR_CONVERSACION",
+}
+
+
+class AnalisisMensajeProspecto(BaseModel):
+    """
+    Contrato interno del análisis estructurado producido por Gemini.
+
+    Esta clase no decide reglas críticas del negocio.
+    Solamente representa y valida la interpretación del mensaje.
+    """
+
+    version: str = "1.0"
+
+    saludo: bool = False
+    saludo_simple: bool = False
+
+    intencion_principal: str = "OTRO"
+    intenciones_secundarias: List[str] = Field(default_factory=list)
+
+    campus_mencionado: str = ""
+    campus_externo: bool = False
+
+    zona_mencionada: str = ""
+    clasificacion_zona: str = "NO_MENCIONADA"
+
+    nivel: str = ""
+    grado: str = ""
+
+    edad_alumno: Optional[int] = None
+    fecha_nacimiento_texto: str = ""
+    requiere_validar_pre_kinder: bool = False
+
+    tema_interes: str = ""
+
+    pide_costos: bool = False
+    pide_cita: bool = False
+
+    fecha_cita_texto: str = ""
+    hora_cita_texto: str = ""
+    fecha_cita_iso: str = ""
+    hora_cita_24h: str = ""
+    dia_no_laboral: bool = False
+
+    nombre_tutor: str = ""
+    nombre_alumno: str = ""
+
+    pausa_conversacion: bool = False
+
+    datos_detectados: List[str] = Field(default_factory=list)
+    datos_faltantes: List[str] = Field(default_factory=list)
+
+    accion_recomendada: str = "CONTINUAR_CONVERSACION"
+    confianza: float = 0.0
+
+
+def crear_analisis_mensaje_vacio() -> Dict[str, Any]:
+    """
+    Devuelve un análisis seguro con todos los campos y valores predeterminados.
+
+    Se utiliza como fallback cuando Gemini falla, devuelve texto inválido
+    o produce un JSON que no cumple el contrato.
+    """
+    return AnalisisMensajeProspecto().model_dump()
+
+
+def normalizar_lista_textos(valor: Any) -> List[str]:
+    """
+    Convierte un valor recibido en una lista limpia de textos.
+
+    Evita que Gemini entregue null, un string simple u otros tipos
+    donde el contrato espera una lista.
+    """
+    if valor is None:
+        return []
+
+    if isinstance(valor, list):
+        resultado = []
+
+        for elemento in valor:
+            texto = str(elemento or "").strip()
+
+            if texto and texto not in resultado:
+                resultado.append(texto)
+
+        return resultado
+
+    if isinstance(valor, str):
+        texto = valor.strip()
+        return [texto] if texto else []
+
+    return []
+
+
+def normalizar_booleano(valor: Any, predeterminado: bool = False) -> bool:
+    """
+    Normaliza booleanos aunque Gemini los entregue como texto o número.
+    """
+    if isinstance(valor, bool):
+        return valor
+
+    if isinstance(valor, int):
+        return valor == 1
+
+    if isinstance(valor, str):
+        texto = valor.strip().lower()
+
+        if texto in ["true", "1", "yes", "si", "sí", "verdadero"]:
+            return True
+
+        if texto in ["false", "0", "no", "falso"]:
+            return False
+
+    return predeterminado
+
+
+def normalizar_entero_opcional(valor: Any) -> Optional[int]:
+    """
+    Convierte una edad a entero cuando sea posible.
+    """
+    if valor is None or valor == "":
+        return None
+
+    try:
+        edad = int(valor)
+
+        if 0 <= edad <= 25:
+            return edad
+
+    except (TypeError, ValueError):
+        pass
+
+    return None
+
+
+def normalizar_confianza(valor: Any) -> float:
+    """
+    Garantiza que confianza quede entre 0.0 y 1.0.
+    """
+    try:
+        confianza = float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+
+    return max(0.0, min(confianza, 1.0))
+
+
+def normalizar_analisis_mensaje_ia(
+    datos_crudos: Any
+) -> Dict[str, Any]:
+    """
+    Limpia, completa y valida el JSON devuelto por Gemini.
+
+    Importante:
+    - No confía ciegamente en las etiquetas de la IA.
+    - Sustituye valores desconocidos por valores seguros.
+    - No aplica todavía las reglas críticas del negocio.
+    - Siempre devuelve un diccionario con el contrato completo.
+    """
+    base = crear_analisis_mensaje_vacio()
+
+    if not isinstance(datos_crudos, dict):
+        print(
+            "⚠️ El análisis IA no es un diccionario. "
+            "Se utilizará el contrato vacío."
+        )
+        return base
+
+    intencion_principal = str(
+        datos_crudos.get("intencion_principal", "OTRO") or "OTRO"
+    ).strip().upper()
+
+    if intencion_principal not in INTENCIONES_PRINCIPALES_VALIDAS:
+        intencion_principal = "OTRO"
+
+    intenciones_secundarias_crudas = normalizar_lista_textos(
+        datos_crudos.get("intenciones_secundarias")
+    )
+
+    intenciones_secundarias = []
+
+    for intencion in intenciones_secundarias_crudas:
+        intencion_normalizada = intencion.strip().upper()
+
+        if (
+            intencion_normalizada in INTENCIONES_PRINCIPALES_VALIDAS
+            and intencion_normalizada != intencion_principal
+            and intencion_normalizada not in intenciones_secundarias
+        ):
+            intenciones_secundarias.append(intencion_normalizada)
+
+    clasificacion_zona = str(
+        datos_crudos.get(
+            "clasificacion_zona",
+            "NO_MENCIONADA"
+        ) or "NO_MENCIONADA"
+    ).strip().upper()
+
+    if clasificacion_zona not in CLASIFICACIONES_ZONA_VALIDAS:
+        clasificacion_zona = "NO_MENCIONADA"
+
+    nivel = str(
+        datos_crudos.get("nivel", "") or ""
+    ).strip()
+
+    equivalencias_nivel = {
+        "kinder": "Kínder",
+        "kínder": "Kínder",
+        "preescolar": "Kínder",
+        "primaria": "Primaria",
+        "secundaria": "Secundaria",
+    }
+
+    nivel_normalizado = equivalencias_nivel.get(
+        nivel.lower(),
+        nivel
+    )
+
+    if nivel_normalizado not in NIVELES_OFICIALES_VALIDOS:
+        nivel_normalizado = ""
+
+    tema_interes = str(
+        datos_crudos.get("tema_interes", "") or ""
+    ).strip().lower()
+
+    if tema_interes not in TEMAS_INTERES_VALIDOS:
+        tema_interes = ""
+
+    accion_recomendada = str(
+        datos_crudos.get(
+            "accion_recomendada",
+            "CONTINUAR_CONVERSACION"
+        ) or "CONTINUAR_CONVERSACION"
+    ).strip().upper()
+
+    if accion_recomendada not in ACCIONES_RECOMENDADAS_VALIDAS:
+        accion_recomendada = "CONTINUAR_CONVERSACION"
+
+    analisis_normalizado = {
+        "version": "1.0",
+
+        "saludo": normalizar_booleano(
+            datos_crudos.get("saludo")
+        ),
+        "saludo_simple": normalizar_booleano(
+            datos_crudos.get("saludo_simple")
+        ),
+
+        "intencion_principal": intencion_principal,
+        "intenciones_secundarias": intenciones_secundarias,
+
+        "campus_mencionado": str(
+            datos_crudos.get("campus_mencionado", "") or ""
+        ).strip(),
+        "campus_externo": normalizar_booleano(
+            datos_crudos.get("campus_externo")
+        ),
+
+        "zona_mencionada": str(
+            datos_crudos.get("zona_mencionada", "") or ""
+        ).strip(),
+        "clasificacion_zona": clasificacion_zona,
+
+        "nivel": nivel_normalizado,
+        "grado": str(
+            datos_crudos.get("grado", "") or ""
+        ).strip(),
+
+        "edad_alumno": normalizar_entero_opcional(
+            datos_crudos.get("edad_alumno")
+        ),
+        "fecha_nacimiento_texto": str(
+            datos_crudos.get("fecha_nacimiento_texto", "") or ""
+        ).strip(),
+        "requiere_validar_pre_kinder": normalizar_booleano(
+            datos_crudos.get("requiere_validar_pre_kinder")
+        ),
+
+        "tema_interes": tema_interes,
+
+        "pide_costos": normalizar_booleano(
+            datos_crudos.get("pide_costos")
+        ),
+        "pide_cita": normalizar_booleano(
+            datos_crudos.get("pide_cita")
+        ),
+
+        "fecha_cita_texto": str(
+            datos_crudos.get("fecha_cita_texto", "") or ""
+        ).strip(),
+        "hora_cita_texto": str(
+            datos_crudos.get("hora_cita_texto", "") or ""
+        ).strip(),
+        "fecha_cita_iso": str(
+            datos_crudos.get("fecha_cita_iso", "") or ""
+        ).strip(),
+        "hora_cita_24h": str(
+            datos_crudos.get("hora_cita_24h", "") or ""
+        ).strip(),
+        "dia_no_laboral": normalizar_booleano(
+            datos_crudos.get("dia_no_laboral")
+        ),
+
+        "nombre_tutor": str(
+            datos_crudos.get("nombre_tutor", "") or ""
+        ).strip(),
+        "nombre_alumno": str(
+            datos_crudos.get("nombre_alumno", "") or ""
+        ).strip(),
+
+        "pausa_conversacion": normalizar_booleano(
+            datos_crudos.get("pausa_conversacion")
+        ),
+
+        "datos_detectados": normalizar_lista_textos(
+            datos_crudos.get("datos_detectados")
+        ),
+        "datos_faltantes": normalizar_lista_textos(
+            datos_crudos.get("datos_faltantes")
+        ),
+
+        "accion_recomendada": accion_recomendada,
+        "confianza": normalizar_confianza(
+            datos_crudos.get("confianza")
+        ),
+    }
+
+    try:
+        analisis_validado = AnalisisMensajeProspecto.model_validate(
+            analisis_normalizado
+        )
+
+        return analisis_validado.model_dump()
+
+    except Exception as e:
+        print(f"⚠️ Error validando contrato de análisis IA: {e}")
+        return base
+        
 
 def obtener_modelos_gemini():
     """
