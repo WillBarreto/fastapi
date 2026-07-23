@@ -987,7 +987,7 @@ def fecha_cita_es_no_laboral(
         6,
     }
 
-        def clasificar_horario_cita(
+def clasificar_horario_cita(
     hora_cita_24h: str,
 ) -> str:
     """
