@@ -3019,7 +3019,7 @@ async def debug_structured_flow(
         payload.phone_number or ""
     ).strip()
 
-    if numero_recibido:
+        if numero_recibido:
         variantes_numero = {
             numero_recibido,
         }
@@ -3064,53 +3064,57 @@ async def debug_structured_flow(
                 reversed(mensajes_recientes)
             )
 
-        resultado = procesar_mensaje_prospecto_estructurado(
-            mensaje_usuario=mensaje,
-            contact=contact,
-            history=history,
-        )
-    
-        resultado_persistencia = {
-            "persistido": False,
-            "campos_actualizados": [],
-            "error": "",
-        }
-    
-        if payload.persistir:
-            if not numero_recibido:
-                resultado_persistencia["error"] = (
-                    "PHONE_NUMBER_REQUERIDO"
+    resultado = procesar_mensaje_prospecto_estructurado(
+        mensaje_usuario=mensaje,
+        contact=contact,
+        history=history,
+    )
+
+    resultado_persistencia = {
+        "persistido": False,
+        "campos_actualizados": [],
+        "error": "",
+    }
+
+    if payload.persistir:
+        if not numero_recibido:
+            resultado_persistencia["error"] = (
+                "PHONE_NUMBER_REQUERIDO"
+            )
+
+        elif contact is None:
+            resultado_persistencia["error"] = (
+                "CONTACTO_NO_ENCONTRADO"
+            )
+
+        elif not resultado.get("procesado"):
+            resultado_persistencia["error"] = (
+                "RESULTADO_NO_PROCESADO"
+            )
+
+        else:
+            resultado_persistencia = (
+                persistir_resultado_estructurado(
+                    db=db,
+                    contact=contact,
+                    resultado=resultado,
                 )
-    
-            elif contact is None:
-                resultado_persistencia["error"] = (
-                    "CONTACTO_NO_ENCONTRADO"
-                )
-    
-            elif not resultado.get("procesado"):
-                resultado_persistencia["error"] = (
-                    "RESULTADO_NO_PROCESADO"
-                )
-    
-            else:
-                resultado_persistencia = (
-                    persistir_resultado_estructurado(
-                        db=db,
-                        contact=contact,
-                        resultado=resultado,
-                    )
-                )
-    
-        return {
-            "modo": "PRUEBA_AISLADA",
-            "sin_efectos_secundarios": not payload.persistir,
-            "persistencia_solicitada": payload.persistir,
-            "contacto_encontrado": contact is not None,
-            "mensajes_de_contexto": len(history),
-            "persistencia": resultado_persistencia,
-            "resultado": resultado,
-        }
-    
+            )
+
+    return {
+        "modo": "PRUEBA_AISLADA",
+        "sin_efectos_secundarios": (
+            not resultado_persistencia.get(
+                "persistido",
+                False,
+            )
+        ),
+        "persistencia_solicitada": payload.persistir,
+        "contacto_encontrado": contact is not None,
+        "mensajes_de_contexto": len(history),
+        "persistencia": resultado_persistencia,
+        "resultado": resultado,
+    }
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
