@@ -1095,7 +1095,20 @@ def aplicar_reglas_negocio_estructuradas(
     # 2. CITA EN SÁBADO O DOMINGO
     # ========================================================
 
-    if analisis_seguro.get("dia_no_laboral"):
+    fecha_cita_iso = str(
+        analisis_seguro.get(
+            "fecha_cita_iso",
+            "",
+        ) or ""
+    ).strip()
+
+    cita_en_dia_no_laboral = (
+        fecha_cita_es_no_laboral(
+            fecha_cita_iso
+        )
+    )
+
+    if cita_en_dia_no_laboral:
         decision.update({
             "accion": "CITA_DIA_NO_LABORAL",
             "motivo": (
@@ -1107,7 +1120,7 @@ def aplicar_reglas_negocio_estructuradas(
         })
 
         return decision
-
+        
     # ========================================================
     # 3. ALUMNO MENOR A KÍNDER
     # ========================================================
