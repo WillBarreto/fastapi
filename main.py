@@ -1097,15 +1097,17 @@ CONTRATO OBLIGATORIO:
             "estructurado fallaron."
         )
 
+        errores_analisis_texto = json.dumps(
+            resultado_analisis.get(
+                "errores",
+                [],
+            ),
+            ensure_ascii=False,
+        )
+
         print(
             "📋 Errores de análisis: "
-            f"{json.dumps(
-                resultado_analisis.get(
-                    'errores',
-                    [],
-                ),
-                ensure_ascii=False,
-            )}"
+            f"{errores_analisis_texto}"
         )
 
         return crear_analisis_mensaje_vacio()
@@ -1122,12 +1124,14 @@ CONTRATO OBLIGATORIO:
         f"{resultado_analisis.get('intentos_realizados')}"
     )
 
+    analisis_normalizado_texto = json.dumps(
+        analisis,
+        ensure_ascii=False,
+    )
+
     print(
         "🧠 Análisis normalizado: "
-        f"{json.dumps(
-            analisis,
-            ensure_ascii=False,
-        )}"
+        f"{analisis_normalizado_texto}"
     )
 
     return analisis
