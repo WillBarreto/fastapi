@@ -1632,6 +1632,213 @@ def set_flow_state(contact, estado: str):
     set_note_value(contact, "FLOW_STATE", estado)
 
 
+# ============================================================
+# PERSISTENCIA DEL NUEVO FLUJO ESTRUCTURADO
+# ============================================================
+
+def persistir_resultado_estructurado(
+    db: Session,
+    contact,
+    resultado: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Guarda en contact.notes los datos útiles detectados por el
+    nuevo flujo estructurado.
+
+    Principios:
+    - Guarda únicamente valores no vacíos.
+    - No borra información previa válida.
+    - No guarda mensajes de conversación.
+    - No envía mensajes por Twilio.
+    - No crea tareas administrativas.
+    - No modifica todavía FLOW_STATE.
+    - Realiza un solo commit al finalizar.
+    """
+    if contact is None:
+        return {
+            "persistido": False,
+            "campos_actualizados": [],
+            "error": "CONTACTO_NO_DISPONIBLE",
+        }
+
+    if not isinstance(resultado, dict):
+        return {
+            "persistido": False,
+            "campos_actualizados": [],
+            "error": "RESULTADO_INVALIDO",
+        }
+
+    analisis = resultado.get("analisis") or {}
+    decision = resultado.get("decision") or {}
+
+    if not isinstance(analisis, dict):
+        analisis = {}
+
+    if not isinstance(decision, dict):
+        decision = {}
+
+    campos_actualizados = []
+
+    def guardar_valor(
+        clave: str,
+        valor: Any,
+    ) -> None:
+        """
+        Guarda un valor únicamente cuando contiene información útil.
+        """
+        if valor is None:
+            return
+
+        if isinstance(valor, bool):
+            valor_texto = "true" if valor else "false"
+        else:
+            valor_texto = str(valor).strip()
+
+        if not valor_texto:
+            return
+
+        valor_anterior = get_note_value(
+            contact,
+            clave,
+        )
+
+        if valor_anterior == valor_texto:
+            return
+
+        set_note_value(
+            contact,
+            clave,
+            valor_texto,
+        )
+
+        campos_actualizados.append(clave)
+
+    try:
+        # ----------------------------------------------------
+        # DATOS DEL PROSPECTO Y DEL ALUMNO
+        # ----------------------------------------------------
+
+        guardar_valor(
+            "ZONA_INTERES",
+            analisis.get("zona_mencionada"),
+        )
+
+        guardar_valor(
+            "NIVEL_INTERES",
+            analisis.get("nivel"),
+        )
+
+        guardar_valor(
+            "GRADO_INTERES",
+            analisis.get("grado"),
+        )
+
+        guardar_valor(
+            "EDAD_ALUMNO",
+            analisis.get("edad_alumno"),
+        )
+
+        guardar_valor(
+            "FECHA_NACIMIENTO",
+            analisis.get("fecha_nacimiento_texto"),
+        )
+
+        guardar_valor(
+            "NOMBRE_TUTOR",
+            analisis.get("nombre_tutor"),
+        )
+
+        guardar_valor(
+            "NOMBRE_ALUMNO",
+            analisis.get("nombre_alumno"),
+        )
+
+        # ----------------------------------------------------
+        # DATOS DE CITA
+        # ----------------------------------------------------
+
+        guardar_valor(
+            "FECHA_CITA",
+            analisis.get("fecha_cita_iso")
+            or analisis.get("fecha_cita_texto"),
+        )
+
+        guardar_valor(
+            "HORA_CITA",
+            analisis.get("hora_cita_24h")
+            or analisis.get("hora_cita_texto"),
+        )
+
+        # ----------------------------------------------------
+        # DATOS DE ZONA Y CAMPUS
+        # ----------------------------------------------------
+
+        if decision.get("zona_validada") is True:
+            guardar_valor(
+                "ZONA_VALIDADA",
+                True,
+            )
+
+        if analisis.get("campus_externo") is True:
+            guardar_valor(
+                "CAMPUS_EXTERNO",
+                True,
+            )
+
+        if analisis.get(
+            "requiere_validar_pre_kinder"
+        ) is True:
+            guardar_valor(
+                "REQUIERE_VALIDAR_PRE_KINDER",
+                True,
+            )
+
+        # ----------------------------------------------------
+        # AUDITORÍA DEL NUEVO FLUJO
+        # ----------------------------------------------------
+
+        guardar_valor(
+            "ULTIMA_INTENCION_ESTRUCTURADA",
+            analisis.get("intencion_principal"),
+        )
+
+        guardar_valor(
+            "ULTIMA_ACCION_ESTRUCTURADA",
+            decision.get("accion"),
+        )
+
+        confianza = analisis.get("confianza")
+
+        if confianza is not None:
+            guardar_valor(
+                "ULTIMA_CONFIANZA_IA",
+                confianza,
+            )
+
+        if campos_actualizados:
+            db.commit()
+            db.refresh(contact)
+
+        return {
+            "persistido": True,
+            "campos_actualizados": campos_actualizados,
+            "error": "",
+        }
+
+    except Exception as e:
+        db.rollback()
+
+        print(
+            "⚠️ Error persistiendo resultado estructurado: "
+            f"{e}"
+        )
+
+        return {
+            "persistido": False,
+            "campos_actualizados": [],
+            "error": str(e),
+        }
+
 def es_zona_valida(mensaje: str) -> bool:
     msg = (mensaje or "").lower()
     zonas_validas = [
