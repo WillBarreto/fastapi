@@ -955,7 +955,38 @@ def detectar_pausa_conversacion_simple(
         frase in texto
         for frase in frases_pausa
     )
-    
+
+def fecha_cita_es_no_laboral(
+    fecha_cita_iso: str,
+) -> bool:
+    """
+    Determina mediante Python si una fecha de cita corresponde
+    a sábado o domingo.
+
+    Espera el formato YYYY-MM-DD.
+    Si la fecha está vacía o es inválida, devuelve False.
+    """
+    fecha_texto = str(
+        fecha_cita_iso or ""
+    ).strip()
+
+    if not fecha_texto:
+        return False
+
+    try:
+        fecha_cita = datetime.strptime(
+            fecha_texto,
+            "%Y-%m-%d",
+        ).date()
+    except ValueError:
+        return False
+
+    return fecha_cita.weekday() in {
+        5,
+        6,
+    }
+
+
 def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
     contact=None,
