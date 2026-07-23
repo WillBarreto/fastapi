@@ -98,6 +98,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "PEDIR_DATOS_CITA",
     "REGISTRAR_DATOS_CITA",
     "CITA_DIA_NO_LABORAL",
+    "CITA_FUERA_HORARIO",
     "SEGUIMIENTO",
     "CONTINUAR_CONVERSACION",
 }
@@ -986,6 +987,63 @@ def fecha_cita_es_no_laboral(
         6,
     }
 
+        def clasificar_horario_cita(
+    hora_cita_24h: str,
+) -> str:
+    """
+    Clasifica el horario propuesto para una visita.
+
+    REGULAR:
+    - De 08:00 a 13:00.
+
+    EVALUAR:
+    - Después de las 13:00 y hasta las 16:00.
+    - Requiere consulta con administración.
+
+    FUERA:
+    - Antes de las 08:00 o después de las 16:00.
+
+    INVALIDO:
+    - Hora vacía o con formato distinto de HH:MM.
+    """
+    hora_texto = str(
+        hora_cita_24h or ""
+    ).strip()
+
+    if not hora_texto:
+        return "INVALIDO"
+
+    try:
+        hora_cita = datetime.strptime(
+            hora_texto,
+            "%H:%M",
+        ).time()
+    except ValueError:
+        return "INVALIDO"
+
+    inicio_regular = datetime.strptime(
+        "08:00",
+        "%H:%M",
+    ).time()
+
+    fin_regular = datetime.strptime(
+        "13:00",
+        "%H:%M",
+    ).time()
+
+    fin_evaluable = datetime.strptime(
+        "16:00",
+        "%H:%M",
+    ).time()
+
+    if inicio_regular <= hora_cita <= fin_regular:
+        return "REGULAR"
+
+    if fin_regular < hora_cita <= fin_evaluable:
+        return "EVALUAR"
+
+    return "FUERA"
+
 
 def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
@@ -1303,12 +1361,58 @@ def aplicar_reglas_negocio_estructuradas(
 
             return decision
 
+        clasificacion_horario = (
+            clasificar_horario_cita(
+                hora_cita
+            )
+        )
+
+        if clasificacion_horario == "INVALIDO":
+            decision.update({
+                "accion": "PEDIR_HORA_CITA",
+                "motivo": (
+                    "El horario proporcionado no pudo "
+                    "interpretarse claramente."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+            })
+
+            return decision
+
+        if clasificacion_horario == "FUERA":
+            decision.update({
+                "accion": "CITA_FUERA_HORARIO",
+                "motivo": (
+                    "El horario solicitado está fuera del "
+                    "rango disponible para visitas."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+            })
+
+            return decision
+
+        if clasificacion_horario == "EVALUAR":
+            decision.update({
+                "accion": "CONSULTAR_ADMIN",
+                "motivo": (
+                    "El horario solicitado es posterior a "
+                    "las 13:00 y debe ser evaluado por "
+                    "administración."
+                ),
+                "requiere_admin": True,
+                "puede_compartir_costos": zona_validada,
+            })
+
+            return decision
+
         decision.update({
             "accion": "CONSULTAR_ADMIN",
             "motivo": (
-                "El prospecto proporcionó fecha y hora; "
-                "la disponibilidad debe confirmarla una "
-                "persona administradora."
+                "El prospecto proporcionó una fecha y un "
+                "horario regular; la disponibilidad debe "
+                "confirmarla una persona administradora."
             ),
             "requiere_admin": True,
             "puede_compartir_costos": zona_validada,
