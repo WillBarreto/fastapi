@@ -131,6 +131,12 @@ class AnalisisMensajeProspecto(BaseModel):
 
     edad_alumno: Optional[int] = None
     fecha_nacimiento_texto: str = ""
+    fecha_nacimiento_iso: str = ""
+
+    nivel_actual: str = ""
+    ultimo_grado_cursado: str = ""
+    grado_solicitado: str = ""
+
     requiere_validar_pre_kinder: bool = False
 
     tema_interes: str = ""
@@ -371,11 +377,46 @@ def normalizar_analisis_mensaje_ia(
         "edad_alumno": normalizar_entero_opcional(
             datos_crudos.get("edad_alumno")
         ),
+
         "fecha_nacimiento_texto": str(
-            datos_crudos.get("fecha_nacimiento_texto", "") or ""
+            datos_crudos.get(
+                "fecha_nacimiento_texto",
+                "",
+            ) or ""
         ).strip(),
+
+        "fecha_nacimiento_iso": str(
+            datos_crudos.get(
+                "fecha_nacimiento_iso",
+                "",
+            ) or ""
+        ).strip(),
+
+        "nivel_actual": str(
+            datos_crudos.get(
+                "nivel_actual",
+                "",
+            ) or ""
+        ).strip(),
+
+        "ultimo_grado_cursado": str(
+            datos_crudos.get(
+                "ultimo_grado_cursado",
+                "",
+            ) or ""
+        ).strip(),
+
+        "grado_solicitado": str(
+            datos_crudos.get(
+                "grado_solicitado",
+                "",
+            ) or ""
+        ).strip(),
+
         "requiere_validar_pre_kinder": normalizar_booleano(
-            datos_crudos.get("requiere_validar_pre_kinder")
+            datos_crudos.get(
+                "requiere_validar_pre_kinder"
+            )
         ),
 
         "tema_interes": tema_interes,
@@ -731,6 +772,33 @@ No clasifiques Maternal ni Pre-kínder como niveles oficiales.
 Cuando el alumno parezca demasiado pequeño, activa:
 "requiere_validar_pre_kinder": true
 
+Cuando se mencione una fecha de nacimiento:
+
+- conserva la expresión original en "fecha_nacimiento_texto";
+- conviértela al formato YYYY-MM-DD en "fecha_nacimiento_iso";
+- no inventes el día, mes o año cuando falte alguno;
+- si la fecha es ambigua, deja "fecha_nacimiento_iso" vacío.
+
+Cuando el prospecto mencione antecedentes escolares:
+
+- guarda el nivel en "nivel_actual";
+- guarda el último grado concluido en "ultimo_grado_cursado";
+- guarda el grado que desea cursar en "grado_solicitado".
+
+Ejemplos:
+
+"Actualmente cursa segundo de primaria"
+nivel_actual: "Primaria"
+
+"Terminó segundo de primaria"
+ultimo_grado_cursado: "2 de Primaria"
+
+"Busco tercero de primaria"
+grado_solicitado: "3 de Primaria"
+
+No determines automáticamente grados posteriores únicamente por edad.
+Para primaria y secundaria, considera también el antecedente escolar.
+
 5. Un mismo mensaje puede contener varias intenciones.
 Selecciona la más importante como "intencion_principal" y coloca
 las demás en "intenciones_secundarias".
@@ -900,6 +968,26 @@ def construir_datos_detectados_para_decision(
     if analisis.get("fecha_nacimiento_texto"):
         datos["fecha_nacimiento_texto"] = analisis[
             "fecha_nacimiento_texto"
+        ]
+
+    if analisis.get("fecha_nacimiento_iso"):
+        datos["fecha_nacimiento_iso"] = analisis[
+            "fecha_nacimiento_iso"
+        ]
+
+    if analisis.get("nivel_actual"):
+        datos["nivel_actual"] = analisis[
+            "nivel_actual"
+        ]
+
+    if analisis.get("ultimo_grado_cursado"):
+        datos["ultimo_grado_cursado"] = analisis[
+            "ultimo_grado_cursado"
+        ]
+
+    if analisis.get("grado_solicitado"):
+        datos["grado_solicitado"] = analisis[
+            "grado_solicitado"
         ]
 
     if analisis.get("nombre_tutor"):
@@ -1903,6 +1991,26 @@ def persistir_resultado_estructurado(
         guardar_valor(
             "FECHA_NACIMIENTO",
             analisis.get("fecha_nacimiento_texto"),
+        )
+        
+        guardar_valor(
+            "FECHA_NACIMIENTO_ISO",
+            analisis.get("fecha_nacimiento_iso"),
+        )
+
+        guardar_valor(
+            "NIVEL_ACTUAL",
+            analisis.get("nivel_actual"),
+        )
+
+        guardar_valor(
+            "ULTIMO_GRADO_CURSADO",
+            analisis.get("ultimo_grado_cursado"),
+        )
+
+        guardar_valor(
+            "GRADO_SOLICITADO",
+            analisis.get("grado_solicitado"),
         )
 
         guardar_valor(
