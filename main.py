@@ -1004,8 +1004,22 @@ def aplicar_reglas_negocio_estructuradas(
         False,
     )
 
+    zona_mencionada = str(
+        analisis_seguro.get(
+            "zona_mencionada",
+            "",
+        ) or ""
+    ).strip()
+
+    texto_para_validar_zona = " ".join(
+        [
+            mensaje_usuario or "",
+            zona_mencionada,
+        ]
+    ).strip()
+
     zona_valida_en_mensaje = (
-        clasificacion_zona == "VALIDA"
+        es_zona_valida(texto_para_validar_zona)
         and not campus_externo
     )
 
