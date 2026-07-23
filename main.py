@@ -1132,6 +1132,137 @@ def clasificar_horario_cita(
 
     return "FUERA"
 
+def obtener_anio_inicio_ciclo_escolar() -> int:
+    """
+    Obtiene el año de inicio del ciclo escolar.
+
+    Puede configurarse en Railway mediante:
+    CICLO_ESCOLAR_ANIO_INICIO=2026
+
+    Si la variable no existe o es inválida, utiliza el año local actual.
+    """
+    valor_configurado = str(
+        os.getenv(
+            "CICLO_ESCOLAR_ANIO_INICIO",
+            "",
+        ) or ""
+    ).strip()
+
+    if valor_configurado:
+        try:
+            anio = int(valor_configurado)
+
+            if 2020 <= anio <= 2100:
+                return anio
+        except ValueError:
+            pass
+
+    return datetime.now(LOCAL_TZ).year
+
+
+def clasificar_nivel_por_fecha_nacimiento(
+    fecha_nacimiento_iso: str,
+    anio_inicio_ciclo: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Clasifica el nivel sugerido con base en la edad que el alumno
+    tendrá al 31 de diciembre del año en que inicia el ciclo escolar.
+
+    Esta función solamente determina ingreso inicial por edad.
+
+    No asigna automáticamente grados posteriores de Primaria
+    o Secundaria, porque requieren antecedente escolar.
+    """
+    resultado = {
+        "clasificacion": "SIN_FECHA",
+        "edad_al_corte": None,
+        "fecha_corte": "",
+        "fecha_nacimiento_valida": False,
+        "requiere_antecedente_escolar": False,
+    }
+
+    fecha_texto = str(
+        fecha_nacimiento_iso or ""
+    ).strip()
+
+    if not fecha_texto:
+        return resultado
+
+    try:
+        fecha_nacimiento = datetime.strptime(
+            fecha_texto,
+            "%Y-%m-%d",
+        ).date()
+    except ValueError:
+        resultado["clasificacion"] = "FECHA_INVALIDA"
+        return resultado
+
+    if anio_inicio_ciclo is None:
+        anio_inicio_ciclo = (
+            obtener_anio_inicio_ciclo_escolar()
+        )
+
+    try:
+        fecha_corte = datetime(
+            anio_inicio_ciclo,
+            12,
+            31,
+        ).date()
+    except ValueError:
+        resultado["clasificacion"] = "ANIO_CICLO_INVALIDO"
+        return resultado
+
+    if fecha_nacimiento > fecha_corte:
+        resultado["clasificacion"] = "FECHA_INVALIDA"
+        return resultado
+
+    edad_al_corte = (
+        fecha_corte.year
+        - fecha_nacimiento.year
+        - (
+            (
+                fecha_corte.month,
+                fecha_corte.day,
+            )
+            < (
+                fecha_nacimiento.month,
+                fecha_nacimiento.day,
+            )
+        )
+    )
+
+    resultado.update({
+        "edad_al_corte": edad_al_corte,
+        "fecha_corte": fecha_corte.isoformat(),
+        "fecha_nacimiento_valida": True,
+    })
+
+    if edad_al_corte < 3:
+        resultado["clasificacion"] = "PRE_KINDER"
+        return resultado
+
+    if edad_al_corte == 3:
+        resultado["clasificacion"] = "KINDER_1"
+        return resultado
+
+    if edad_al_corte == 4:
+        resultado["clasificacion"] = "KINDER_2"
+        return resultado
+
+    if edad_al_corte == 5:
+        resultado["clasificacion"] = "KINDER_3"
+        return resultado
+
+    if edad_al_corte == 6:
+        resultado["clasificacion"] = "PRIMARIA_1"
+        return resultado
+
+    resultado.update({
+        "clasificacion": "REQUIERE_ANTECEDENTE_ESCOLAR",
+        "requiere_antecedente_escolar": True,
+    })
+
+    return resultado
 
 def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
@@ -1268,33 +1399,64 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
         
     # ========================================================
-    # 3. ALUMNO MENOR A KÍNDER
+    # 3. CLASIFICACIÓN DETERMINISTA POR EDAD
     # ========================================================
 
-    if analisis_seguro.get(
-        "requiere_validar_pre_kinder"
+    fecha_nacimiento_iso = str(
+        analisis_seguro.get(
+            "fecha_nacimiento_iso",
+            "",
+        ) or ""
+    ).strip()
+
+    edad_alumno = analisis_seguro.get(
+        "edad_alumno"
+    )
+
+    parece_menor_de_kinder = (
+        analisis_seguro.get(
+            "requiere_validar_pre_kinder"
+        )
+        or (
+            edad_alumno is not None
+            and edad_alumno < 3
+        )
+    )
+
+    if parece_menor_de_kinder and not fecha_nacimiento_iso:
+        decision.update({
+            "accion": "PEDIR_FECHA_NACIMIENTO",
+            "motivo": (
+                "Se requiere la fecha de nacimiento completa "
+                "para calcular la edad del alumno al corte "
+                "del ciclo escolar."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+        })
+
+        return decision
+
+    clasificacion_edad = (
+        clasificar_nivel_por_fecha_nacimiento(
+            fecha_nacimiento_iso
+        )
+    )
+
+    decision["datos_detectados"][
+        "clasificacion_edad"
+    ] = clasificacion_edad
+
+    if (
+        clasificacion_edad.get("clasificacion")
+        == "PRE_KINDER"
     ):
-        if not analisis_seguro.get(
-            "fecha_nacimiento_texto"
-        ):
-            decision.update({
-                "accion": "PEDIR_FECHA_NACIMIENTO",
-                "motivo": (
-                    "Se requiere la fecha de nacimiento para "
-                    "evaluar si el alumno puede ingresar a "
-                    "Pre-kínder no incorporado."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": False,
-            })
-
-            return decision
-
         decision.update({
             "accion": "ORIENTAR_PRE_KINDER",
             "motivo": (
-                "El alumno podría ser menor a la edad oficial "
-                "de ingreso a Kínder."
+                "De acuerdo con su fecha de nacimiento, "
+                "el alumno tendrá menos de 3 años al "
+                "31 de diciembre del año de inicio del ciclo."
             ),
             "requiere_admin": False,
             "puede_compartir_costos": False,
@@ -2012,6 +2174,33 @@ def persistir_resultado_estructurado(
             "GRADO_SOLICITADO",
             analisis.get("grado_solicitado"),
         )
+
+        clasificacion_edad = (
+            decision.get("datos_detectados", {})
+            .get("clasificacion_edad", {})
+        )
+
+        if isinstance(clasificacion_edad, dict):
+            guardar_valor(
+                "CLASIFICACION_EDAD",
+                clasificacion_edad.get(
+                    "clasificacion"
+                ),
+            )
+
+            guardar_valor(
+                "EDAD_AL_CORTE",
+                clasificacion_edad.get(
+                    "edad_al_corte"
+                ),
+            )
+
+            guardar_valor(
+                "FECHA_CORTE_ESCOLAR",
+                clasificacion_edad.get(
+                    "fecha_corte"
+                ),
+            )
 
         guardar_valor(
             "NOMBRE_TUTOR",
