@@ -3019,7 +3019,7 @@ async def debug_structured_flow(
         payload.phone_number or ""
     ).strip()
 
-        if numero_recibido:
+    if numero_recibido:
         variantes_numero = {
             numero_recibido,
         }
@@ -3115,6 +3115,7 @@ async def debug_structured_flow(
         "persistencia": resultado_persistencia,
         "resultado": resultado,
     }
+
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
