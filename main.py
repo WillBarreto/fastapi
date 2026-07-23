@@ -100,6 +100,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "CITA_DIA_NO_LABORAL",
     "CITA_FUERA_HORARIO",
     "SEGUIMIENTO",
+    "FALLBACK_CONVERSACIONAL",
     "CONTINUAR_CONVERSACION",
 }
 
@@ -620,6 +621,249 @@ def extraer_json_de_texto(texto: str) -> Optional[Dict[str, Any]]:
 
     return None
 
+def analisis_estructurado_contiene_informacion(
+    analisis: Dict[str, Any],
+) -> bool:
+    """
+    Determina si el análisis normalizado contiene información útil.
+
+    Evita aceptar como válido el contrato vacío que se utiliza
+    como respaldo cuando Gemini no devuelve un JSON aprovechable.
+    """
+    if not isinstance(analisis, dict):
+        return False
+
+    if (
+        analisis.get("intencion_principal")
+        and analisis.get("intencion_principal") != "OTRO"
+    ):
+        return True
+
+    campos_texto = [
+        "campus_mencionado",
+        "zona_mencionada",
+        "nivel",
+        "grado",
+        "fecha_nacimiento_texto",
+        "fecha_nacimiento_iso",
+        "nivel_actual",
+        "ultimo_grado_cursado",
+        "grado_solicitado",
+        "tema_interes",
+        "fecha_cita_texto",
+        "hora_cita_texto",
+        "fecha_cita_iso",
+        "hora_cita_24h",
+        "nombre_tutor",
+        "nombre_alumno",
+    ]
+
+    if any(
+        str(analisis.get(campo, "") or "").strip()
+        for campo in campos_texto
+    ):
+        return True
+
+    campos_booleanos = [
+        "saludo",
+        "saludo_simple",
+        "campus_externo",
+        "requiere_validar_pre_kinder",
+        "pide_costos",
+        "pide_cita",
+        "dia_no_laboral",
+        "pausa_conversacion",
+    ]
+
+    if any(
+        bool(analisis.get(campo))
+        for campo in campos_booleanos
+    ):
+        return True
+
+    if analisis.get("edad_alumno") is not None:
+        return True
+
+    if analisis.get("intenciones_secundarias"):
+        return True
+
+    if analisis.get("datos_detectados"):
+        return True
+
+    return False
+
+def ejecutar_analisis_estructurado_con_reintentos(
+    prompt_analisis: str,
+) -> Dict[str, Any]:
+    """
+    Ejecuta el análisis estructurado con recuperación automática.
+
+    Estrategia:
+    1. Intenta dos veces con el modelo principal.
+    2. Intenta una vez con cada modelo de respaldo.
+    3. Rechaza respuestas vacías, texto no JSON y contratos vacíos.
+    4. Devuelve información de auditoría sin lanzar el error
+       hacia el flujo conversacional.
+    """
+    modelos = obtener_modelos_gemini()
+
+    resultado_fallo = {
+        "exitoso": False,
+        "analisis": crear_analisis_mensaje_vacio(),
+        "modelo_usado": "",
+        "intentos_realizados": 0,
+        "errores": [],
+    }
+
+    if not modelos:
+        resultado_fallo["errores"].append(
+            "NO_HAY_MODELOS_CONFIGURADOS"
+        )
+        return resultado_fallo
+
+    instrucciones_reintento = """
+
+REINTENTO OBLIGATORIO:
+La respuesta anterior no pudo validarse.
+
+Devuelve exclusivamente un objeto JSON válido que cumpla
+exactamente el contrato solicitado.
+
+No uses Markdown.
+No agregues explicaciones.
+No dejes la respuesta vacía.
+"""
+
+    intentos_por_modelo = {}
+
+    for indice, model_name in enumerate(modelos):
+        intentos_permitidos = 2 if indice == 0 else 1
+        intentos_por_modelo[model_name] = intentos_permitidos
+
+    for model_name, intentos_permitidos in intentos_por_modelo.items():
+        for numero_intento in range(
+            1,
+            intentos_permitidos + 1,
+        ):
+            resultado_fallo["intentos_realizados"] += 1
+
+            prompt_intento = prompt_analisis
+
+            if numero_intento > 1:
+                prompt_intento += instrucciones_reintento
+
+            try:
+                print(
+                    "🧠 Análisis estructurado: "
+                    f"modelo={model_name}, "
+                    f"intento={numero_intento}"
+                )
+
+                model = genai.GenerativeModel(
+                    model_name
+                )
+
+                response = model.generate_content(
+                    prompt_intento,
+                    generation_config=(
+                        genai.types.GenerationConfig(
+                            max_output_tokens=3000,
+                            temperature=0.0,
+                        )
+                    ),
+                )
+
+                texto_respuesta = (
+                    extraer_texto_respuesta_gemini(
+                        response
+                    )
+                )
+
+                if not texto_respuesta:
+                    error = (
+                        f"{model_name}: intento "
+                        f"{numero_intento}: "
+                        "RESPUESTA_VACIA"
+                    )
+                    resultado_fallo["errores"].append(
+                        error
+                    )
+                    print(f"⚠️ {error}")
+                    continue
+
+                datos_crudos = extraer_json_de_texto(
+                    texto_respuesta
+                )
+
+                if datos_crudos is None:
+                    error = (
+                        f"{model_name}: intento "
+                        f"{numero_intento}: "
+                        "JSON_INVALIDO"
+                    )
+                    resultado_fallo["errores"].append(
+                        error
+                    )
+                    print(f"⚠️ {error}")
+                    continue
+
+                analisis = normalizar_analisis_mensaje_ia(
+                    datos_crudos
+                )
+
+                if not (
+                    analisis_estructurado_contiene_informacion(
+                        analisis
+                    )
+                ):
+                    error = (
+                        f"{model_name}: intento "
+                        f"{numero_intento}: "
+                        "CONTRATO_VACIO"
+                    )
+                    resultado_fallo["errores"].append(
+                        error
+                    )
+                    print(f"⚠️ {error}")
+                    continue
+
+                print(
+                    "✅ Análisis estructurado válido: "
+                    f"modelo={model_name}, "
+                    f"intento={numero_intento}"
+                )
+
+                return {
+                    "exitoso": True,
+                    "analisis": analisis,
+                    "modelo_usado": model_name,
+                    "intentos_realizados": (
+                        resultado_fallo[
+                            "intentos_realizados"
+                        ]
+                    ),
+                    "errores": (
+                        resultado_fallo["errores"]
+                    ),
+                }
+
+            except Exception as e:
+                error = (
+                    f"{model_name}: intento "
+                    f"{numero_intento}: {e}"
+                )
+
+                resultado_fallo["errores"].append(
+                    error
+                )
+
+                print(
+                    "⚠️ Error en análisis estructurado: "
+                    f"{error}"
+                )
+
+    return resultado_fallo
+    
 
 def analizar_mensaje_prospecto_con_ia(
     mensaje_usuario: str,
@@ -841,56 +1085,52 @@ CONTRATO OBLIGATORIO:
 {contrato_json}
 """
 
-    try:
-        response, modelo_usado = generar_con_gemini_con_fallback(
-            prompt_analisis,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=3000,
-                temperature=0.0,
-            ),
-            tarea="análisis estructurado del prospecto",
+    resultado_analisis = (
+        ejecutar_analisis_estructurado_con_reintentos(
+            prompt_analisis
         )
+    )
 
-        texto_respuesta = extraer_texto_respuesta_gemini(
-            response
-        )
-
-        datos_crudos = extraer_json_de_texto(
-            texto_respuesta
-        )
-
-        if datos_crudos is None:
-            print(
-                "⚠️ Gemini no devolvió JSON válido en el "
-                "análisis estructurado"
-            )
-            print(
-                f"📄 Respuesta cruda: "
-                f"{texto_respuesta[:1000]}"
-            )
-            return crear_analisis_mensaje_vacio()
-
-        analisis = normalizar_analisis_mensaje_ia(
-            datos_crudos
+    if not resultado_analisis.get("exitoso"):
+        print(
+            "⚠️ Todos los intentos del análisis "
+            "estructurado fallaron."
         )
 
         print(
-            f"✅ Análisis estructurado completado "
-            f"con {modelo_usado}"
-        )
-        print(
-            "🧠 Análisis normalizado: "
-            f"{json.dumps(analisis, ensure_ascii=False)}"
+            "📋 Errores de análisis: "
+            f"{json.dumps(
+                resultado_analisis.get(
+                    'errores',
+                    [],
+                ),
+                ensure_ascii=False,
+            )}"
         )
 
-        return analisis
-
-    except Exception as e:
-        print(
-            "⚠️ Error en análisis estructurado "
-            f"del prospecto: {e}"
-        )
         return crear_analisis_mensaje_vacio()
+
+    analisis = resultado_analisis.get(
+        "analisis",
+        crear_analisis_mensaje_vacio(),
+    )
+
+    print(
+        "✅ Análisis estructurado completado "
+        f"con {resultado_analisis.get('modelo_usado')}; "
+        f"intentos: "
+        f"{resultado_analisis.get('intentos_realizados')}"
+    )
+
+    print(
+        "🧠 Análisis normalizado: "
+        f"{json.dumps(
+            analisis,
+            ensure_ascii=False,
+        )}"
+    )
+
+    return analisis
         
 # ============================================================
 # REGLAS DETERMINISTAS DEL NUEVO FLUJO ESTRUCTURADO
@@ -1864,20 +2104,34 @@ def procesar_mensaje_prospecto_estructurado(
         )
         
         if analisis_fallo:
-            decision_vacia = crear_decision_negocio_vacia()
-            decision_vacia["motivo"] = (
-                "Gemini no devolvió un análisis estructurado válido."
+            decision_fallback = (
+                crear_decision_negocio_vacia()
             )
-        
+
+            decision_fallback.update({
+                "accion": "FALLBACK_CONVERSACIONAL",
+                "motivo": (
+                    "Gemini no devolvió un análisis válido "
+                    "después de los reintentos automáticos."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "zona_validada": False,
+                "debe_finalizar_conversacion": False,
+                "datos_detectados": {},
+            })
+
             return {
                 "version": "1.0",
                 "flujo": "estructurado",
-                "procesado": False,
+                "procesado": True,
                 "analisis": analisis,
-                "decision": decision_vacia,
-                "error": "ANALISIS_IA_INVALIDO",
+                "decision": decision_fallback,
+                "error": (
+                    "ANALISIS_IA_INVALIDO_RECUPERADO"
+                ),
             }
-
+            
         decision = aplicar_reglas_negocio_estructuradas(
             analisis=analisis,
             contact=contact,
