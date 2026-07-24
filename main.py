@@ -3058,9 +3058,116 @@ def aplicar_reglas_negocio_estructuradas(
     # 11. INFORMES GENERALES
     # ========================================================
 
-    if analisis_seguro.get(
-        "intencion_principal"
-    ) == "PEDIR_INFORMES":
+    intencion_principal = str(
+        analisis_seguro.get(
+            "intencion_principal",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    intenciones_secundarias = (
+        analisis_seguro.get(
+            "intenciones_secundarias",
+            [],
+        )
+    )
+
+    if not isinstance(
+        intenciones_secundarias,
+        list,
+    ):
+        intenciones_secundarias = []
+
+    mensaje_normalizado = (
+        normalizar_texto_geografico(
+            mensaje_usuario
+        )
+    )
+
+    nivel_detectado = str(
+        analisis_seguro.get(
+            "nivel",
+            "",
+        )
+        or ""
+    ).strip()
+
+    grado_detectado = str(
+        analisis_seguro.get(
+            "grado",
+            "",
+        )
+        or analisis_seguro.get(
+            "grado_solicitado",
+            "",
+        )
+        or ""
+    ).strip()
+
+    expresiones_solicitud_informes = [
+        "quiero informes",
+        "quisiera informes",
+        "solicito informes",
+        "necesito informes",
+        "me puede dar informes",
+        "me pueden dar informes",
+        "quiero informacion",
+        "quisiera informacion",
+        "necesito informacion",
+        "solicito informacion",
+        "conocer mas informacion",
+        "saber mas",
+        "me interesa el colegio",
+        "me interesa primaria",
+        "me interesa secundaria",
+        "me interesa kinder",
+        "informacion sobre primaria",
+        "informacion sobre secundaria",
+        "informacion sobre kinder",
+        "informacion de primaria",
+        "informacion de secundaria",
+        "informacion de kinder",
+    ]
+
+    solicitud_informes_por_texto = any(
+        expresion in mensaje_normalizado
+        for expresion
+        in expresiones_solicitud_informes
+    )
+
+    solicitud_informes_por_intencion = (
+        intencion_principal
+        == "PEDIR_INFORMES"
+        or "PEDIR_INFORMES"
+        in intenciones_secundarias
+    )
+
+    solicitud_informes_por_contexto = (
+        intencion_principal == "OTRO"
+        and bool(
+            nivel_detectado
+            or grado_detectado
+        )
+        and any(
+            palabra in mensaje_normalizado
+            for palabra in [
+                "informacion",
+                "informes",
+                "conocer",
+                "interesa",
+                "saber",
+            ]
+        )
+    )
+
+    solicita_informes_generales = (
+        solicitud_informes_por_intencion
+        or solicitud_informes_por_texto
+        or solicitud_informes_por_contexto
+    )
+
+    if solicita_informes_generales:
         if not zona_validada:
             decision.update({
                 "accion": "PEDIR_ZONA",
@@ -3087,7 +3194,6 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     return decision
-
 def construir_plan_respuesta_estructurada(
     analisis: Dict[str, Any],
     decision: Dict[str, Any],
