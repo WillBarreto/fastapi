@@ -6676,6 +6676,155 @@ def get_db():
     finally:
         db.close()
 
+# ============================================================
+# RECUPERACIÓN COMPLETA DEL HISTORIAL CONVERSACIONAL
+# ============================================================
+
+def obtener_historial_completo_contacto(
+    db: Session,
+    contact,
+) -> Dict[str, Any]:
+    """
+    Recupera la conversación completa de un contacto
+    en orden cronológico.
+
+    Esta función:
+    - solo consulta la base de datos;
+    - no modifica contactos;
+    - no modifica mensajes;
+    - no realiza commits;
+    - no consulta Gemini;
+    - no genera respuestas;
+    - no envía mensajes por Twilio.
+    """
+
+    resultado = {
+        "contacto_disponible": False,
+        "total_mensajes": 0,
+        "conversacion": [],
+        "texto_conversacion": "",
+        "error": "",
+    }
+
+    if contact is None:
+        resultado["error"] = "CONTACTO_NO_DISPONIBLE"
+        return resultado
+
+    try:
+        mensajes = (
+            db.query(Message)
+            .filter(
+                Message.contact_id == contact.id
+            )
+            .order_by(
+                Message.timestamp.asc(),
+                Message.id.asc(),
+            )
+            .all()
+        )
+
+    except Exception as e:
+        resultado["error"] = (
+            "ERROR_CONSULTANDO_HISTORIAL: "
+            f"{e}"
+        )
+        return resultado
+
+    conversacion = []
+    lineas_texto = []
+
+    for mensaje in mensajes:
+        direccion = str(
+            getattr(
+                mensaje,
+                "direction",
+                "",
+            )
+            or ""
+        ).strip().lower()
+
+        if direccion == "incoming":
+            emisor = "Prospecto"
+
+        elif direccion == "outgoing":
+            emisor = "Asistente"
+
+        else:
+            emisor = "Conversación"
+
+        contenido = str(
+            getattr(
+                mensaje,
+                "content",
+                "",
+            )
+            or ""
+        ).strip()
+
+        timestamp = getattr(
+            mensaje,
+            "timestamp",
+            None,
+        )
+
+        if timestamp is not None:
+            try:
+                fecha_iso = timestamp.isoformat()
+
+            except AttributeError:
+                fecha_iso = str(
+                    timestamp
+                ).strip()
+
+        else:
+            fecha_iso = ""
+
+        registro = {
+            "id": getattr(
+                mensaje,
+                "id",
+                None,
+            ),
+            "direccion": direccion,
+            "emisor": emisor,
+            "contenido": contenido,
+            "fecha": fecha_iso,
+        }
+
+        conversacion.append(
+            registro
+        )
+
+        if contenido:
+            if fecha_iso:
+                linea = (
+                    f"[{fecha_iso}] "
+                    f"{emisor}: {contenido}"
+                )
+
+            else:
+                linea = (
+                    f"{emisor}: {contenido}"
+                )
+
+            lineas_texto.append(
+                linea
+            )
+
+    resultado.update({
+        "contacto_disponible": True,
+        "total_mensajes": len(
+            conversacion
+        ),
+        "conversacion": conversacion,
+        "texto_conversacion": "\n".join(
+            lineas_texto
+        ),
+        "error": "",
+    })
+
+    return resultado
+
 # ================= APLICACIÓN FASTAPI =================
 app = FastAPI(title="WhatsApp Bot CRM", version="1.0.0")
 
