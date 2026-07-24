@@ -8175,6 +8175,17 @@ async def debug_commercial_context(
         )
     )
 
+    resultado_memoria_historica = (
+        extraer_memoria_historica_con_ia(
+            texto_conversacion=(
+                historial_completo.get(
+                    "texto_conversacion",
+                    "",
+                )
+            )
+        )
+    )
+
     return {
         "modo": "CONSULTA_AISLADA",
         "solo_lectura": True,
@@ -8215,6 +8226,9 @@ async def debug_commercial_context(
         ),
         "historial_completo": (
             historial_completo
+        ),
+        "memoria_historica_ia": (
+            resultado_memoria_historica
         ),
         "error": "",
     }
