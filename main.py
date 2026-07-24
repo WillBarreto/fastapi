@@ -3477,7 +3477,247 @@ def construir_plan_respuesta_estructurada(
     })
 
     return plan
-    
+
+def generar_respuesta_final_estructurada(
+    mensaje_usuario: str,
+    analisis: Dict[str, Any],
+    decision: Dict[str, Any],
+    plan_respuesta: Dict[str, Any],
+    history=None,
+) -> Dict[str, Any]:
+    """
+    Redacta una respuesta conversacional mediante Gemini a partir
+    del análisis, la decisión determinista y el plan de respuesta.
+
+    Esta función:
+    - no envía mensajes;
+    - no modifica la base de datos;
+    - no cambia FLOW_STATE;
+    - no crea tareas administrativas;
+    - no ejecuta reglas de negocio;
+    - no permite que Gemini altere la decisión tomada por Python.
+    """
+    resultado = {
+        "generada": False,
+        "respuesta": "",
+        "modelo_usado": "",
+        "error": "",
+    }
+
+    mensaje = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    analisis_seguro = (
+        analisis
+        if isinstance(analisis, dict)
+        else {}
+    )
+
+    decision_segura = (
+        decision
+        if isinstance(decision, dict)
+        else {}
+    )
+
+    plan_seguro = (
+        plan_respuesta
+        if isinstance(plan_respuesta, dict)
+        else {}
+    )
+
+    if not mensaje:
+        resultado["error"] = "MENSAJE_USUARIO_VACIO"
+        return resultado
+
+    api_key = (
+        os.getenv("GOOGLE_AI_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+    )
+
+    if not api_key:
+        resultado["error"] = (
+            "GOOGLE_AI_API_KEY_NO_CONFIGURADA"
+        )
+        return resultado
+
+    genai.configure(api_key=api_key)
+
+    historial_lineas = []
+
+    if history:
+        for item in history[-6:]:
+            direccion = str(
+                getattr(
+                    item,
+                    "direction",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            contenido = str(
+                getattr(
+                    item,
+                    "content",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not contenido:
+                continue
+
+            if direccion == "incoming":
+                emisor = "Prospecto"
+            elif direccion == "outgoing":
+                emisor = "Asistente"
+            else:
+                emisor = "Conversación"
+
+            historial_lineas.append(
+                f"{emisor}: {contenido}"
+            )
+
+    historial_texto = (
+        "\n".join(historial_lineas)
+        if historial_lineas
+        else "Sin historial previo disponible."
+    )
+
+    analisis_json = json.dumps(
+        analisis_seguro,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    decision_json = json.dumps(
+        decision_segura,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    plan_json = json.dumps(
+        plan_seguro,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    prompt_redaccion = f"""
+Eres el asistente de admisiones del Colegio Valle de Filadelfia,
+Campus Santa Cruz Atizapán.
+
+Debes redactar únicamente la respuesta que se enviaría al prospecto
+por WhatsApp.
+
+MENSAJE ACTUAL DEL PROSPECTO:
+{mensaje}
+
+HISTORIAL RECIENTE:
+{historial_texto}
+
+ANÁLISIS SEMÁNTICO:
+{analisis_json}
+
+DECISIÓN OBLIGATORIA TOMADA POR PYTHON:
+{decision_json}
+
+PLAN OBLIGATORIO DE RESPUESTA:
+{plan_json}
+
+REGLAS OBLIGATORIAS:
+
+1. La decisión de Python es definitiva. No debes modificarla,
+contradecirla ni reinterpretarla.
+
+2. Cumple exactamente el objetivo, "debe_incluir" y
+"no_debe_incluir" del plan de respuesta.
+
+3. No menciones:
+- nombres internos de acciones;
+- clasificaciones del sistema;
+- Google Places;
+- Google Routes;
+- coordenadas;
+- distancias;
+- límites en kilómetros;
+- reglas internas;
+- análisis de inteligencia artificial.
+
+4. No inventes costos, colegiaturas, promociones, fechas,
+disponibilidad, nombres, niveles ni datos institucionales.
+
+5. Cuando el plan permita compartir costos, solo podrás compartirlos
+si esos costos aparecen expresamente en el historial o en los datos
+proporcionados. Si no aparecen, continúa de forma natural sin
+inventarlos.
+
+6. Cuando la acción sea CONSULTAR_ADMIN:
+- informa amablemente que se realizará una revisión interna;
+- no prometas una respuesta inmediata;
+- no rechaces a la familia;
+- no compartas costos;
+- no expliques la distancia ni el motivo técnico.
+
+7. Cuando la acción sea RECHAZAR_CAMPUS:
+- explica únicamente que este canal atiende al Campus Santa Cruz
+  Atizapán;
+- no proporciones datos no confirmados de otros campus;
+- no insistas en vender el Campus Santa Cruz.
+
+8. Mantén un tono cordial, humano, breve y natural.
+
+9. Evita frases robóticas, explicaciones extensas y lenguaje técnico.
+
+10. No uses encabezados como "Respuesta:".
+
+11. Devuelve exclusivamente el texto final para WhatsApp.
+No uses JSON, Markdown ni bloques de código.
+"""
+
+    try:
+        response, modelo_usado = (
+            generar_con_gemini_con_fallback(
+                prompt_redaccion,
+                generation_config=(
+                    genai.types.GenerationConfig(
+                        max_output_tokens=500,
+                        temperature=0.3,
+                    )
+                ),
+                tarea=(
+                    "redacción de respuesta estructurada"
+                ),
+            )
+        )
+
+        respuesta = extraer_texto_respuesta_gemini(
+            response
+        ).strip()
+
+        if not respuesta:
+            resultado["error"] = (
+                "RESPUESTA_GENERADA_VACIA"
+            )
+            return resultado
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta,
+            "modelo_usado": modelo_usado,
+            "error": "",
+        })
+
+        return resultado
+
+    except Exception as e:
+        resultado["error"] = (
+            "ERROR_GENERANDO_RESPUESTA: "
+            f"{e}"
+        )
+
+        return resultado
+        
 
 def procesar_mensaje_prospecto_estructurado(
     mensaje_usuario: str,
@@ -3576,6 +3816,16 @@ def procesar_mensaje_prospecto_estructurado(
             )
         )
 
+        generacion_respuesta = (
+            generar_respuesta_final_estructurada(
+                mensaje_usuario=mensaje,
+                analisis=analisis,
+                decision=decision,
+                plan_respuesta=plan_respuesta,
+                history=history or [],
+            )
+        )
+
         resultado = {
             "version": "1.0",
             "flujo": "estructurado",
@@ -3583,6 +3833,13 @@ def procesar_mensaje_prospecto_estructurado(
             "analisis": analisis,
             "decision": decision,
             "plan_respuesta": plan_respuesta,
+            "generacion_respuesta": generacion_respuesta,
+            "respuesta_generada": (
+                generacion_respuesta.get(
+                    "respuesta",
+                    "",
+                )
+            ),
             "error": "",
         }
 
