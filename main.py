@@ -1358,7 +1358,242 @@ def texto_confirma_zona_ambigua(
         )
         for patron in patrones_geograficos
     )
-    
+
+
+def buscar_localidad_google_places(
+    localidad: str,
+) -> Dict[str, Any]:
+    """
+    Busca una localidad general mediante Google Places API (New).
+
+    Esta función:
+    - No solicita ni utiliza la ubicación exacta del prospecto.
+    - No calcula todavía la distancia al colegio.
+    - No modifica la base de datos.
+    - No altera el flujo conversacional.
+    - Devuelve una estructura segura incluso cuando la API falla.
+    """
+    resultado = {
+        "encontrado": False,
+        "consulta": "",
+        "nombre": "",
+        "direccion_formateada": "",
+        "place_id": "",
+        "latitud": None,
+        "longitud": None,
+        "error": "",
+    }
+
+    localidad_limpia = str(
+        localidad or ""
+    ).strip()
+
+    if not localidad_limpia:
+        resultado["error"] = "LOCALIDAD_VACIA"
+        return resultado
+
+    api_key = str(
+        os.getenv(
+            "GOOGLE_MAPS_API_KEY",
+            "",
+        ) or ""
+    ).strip()
+
+    if not api_key:
+        resultado["error"] = "GOOGLE_MAPS_API_KEY_NO_CONFIGURADA"
+        return resultado
+
+    consulta = (
+        f"{localidad_limpia}, "
+        "Estado de México, México"
+    )
+
+    resultado["consulta"] = consulta
+
+    url = (
+        "https://places.googleapis.com/"
+        "v1/places:searchText"
+    )
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": (
+            "places.id,"
+            "places.displayName,"
+            "places.formattedAddress,"
+            "places.location"
+        ),
+    }
+
+    payload = {
+        "textQuery": consulta,
+        "languageCode": "es",
+        "regionCode": "MX",
+        "pageSize": 1,
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=10,
+        )
+
+    except requests.RequestException as e:
+        resultado["error"] = (
+            "ERROR_CONEXION_GOOGLE_PLACES: "
+            f"{e}"
+        )
+
+        return resultado
+
+    if response.status_code != 200:
+        detalle_error = ""
+
+        try:
+            respuesta_error = response.json()
+
+            detalle_error = str(
+                respuesta_error.get(
+                    "error",
+                    {},
+                ).get(
+                    "message",
+                    "",
+                )
+                or ""
+            ).strip()
+
+        except (ValueError, TypeError, AttributeError):
+            detalle_error = str(
+                response.text or ""
+            ).strip()
+
+        resultado["error"] = (
+            "GOOGLE_PLACES_HTTP_"
+            f"{response.status_code}"
+        )
+
+        if detalle_error:
+            resultado["error"] += (
+                f": {detalle_error[:300]}"
+            )
+
+        return resultado
+
+    try:
+        datos = response.json()
+
+    except ValueError:
+        resultado["error"] = (
+            "RESPUESTA_GOOGLE_PLACES_NO_JSON"
+        )
+
+        return resultado
+
+    lugares = datos.get(
+        "places",
+        [],
+    )
+
+    if not isinstance(lugares, list) or not lugares:
+        resultado["error"] = (
+            "LOCALIDAD_NO_ENCONTRADA"
+        )
+
+        return resultado
+
+    lugar = lugares[0]
+
+    if not isinstance(lugar, dict):
+        resultado["error"] = (
+            "FORMATO_LUGAR_INVALIDO"
+        )
+
+        return resultado
+
+    display_name = lugar.get(
+        "displayName",
+        {},
+    )
+
+    if isinstance(display_name, dict):
+        nombre = str(
+            display_name.get(
+                "text",
+                "",
+            )
+            or ""
+        ).strip()
+    else:
+        nombre = ""
+
+    location = lugar.get(
+        "location",
+        {},
+    )
+
+    if not isinstance(location, dict):
+        location = {}
+
+    latitud = location.get(
+        "latitude"
+    )
+
+    longitud = location.get(
+        "longitude"
+    )
+
+    try:
+        latitud = (
+            float(latitud)
+            if latitud is not None
+            else None
+        )
+
+        longitud = (
+            float(longitud)
+            if longitud is not None
+            else None
+        )
+
+    except (TypeError, ValueError):
+        latitud = None
+        longitud = None
+
+    resultado.update({
+        "encontrado": bool(
+            lugar.get("id")
+            and latitud is not None
+            and longitud is not None
+        ),
+        "nombre": nombre,
+        "direccion_formateada": str(
+            lugar.get(
+                "formattedAddress",
+                "",
+            )
+            or ""
+        ).strip(),
+        "place_id": str(
+            lugar.get(
+                "id",
+                "",
+            )
+            or ""
+        ).strip(),
+        "latitud": latitud,
+        "longitud": longitud,
+    })
+
+    if not resultado["encontrado"]:
+        resultado["error"] = (
+            "RESULTADO_SIN_COORDENADAS_COMPLETAS"
+        )
+
+    return resultado
 
 def clasificar_zona_determinista(
     mensaje_usuario: str = "",
