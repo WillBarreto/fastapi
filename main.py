@@ -1897,6 +1897,103 @@ def calcular_ruta_google_routes(
 
     return resultado
 
+def validar_zona_desconocida_con_google(
+    localidad: str,
+) -> Dict[str, Any]:
+    """
+    Resuelve una zona desconocida mediante Google Places
+    y Google Routes.
+
+    Reglas:
+    - Hasta el límite configurado: zona válida por ruta.
+    - Por encima del límite: requiere revisión humana.
+    - Si Google falla: requiere revisión humana.
+    - No rechaza automáticamente ninguna localidad.
+    - No modifica base de datos ni flujo conversacional.
+    """
+    resultado = {
+        "clasificacion": "ZONA_REQUIERE_REVISION",
+        "zona_validada": False,
+        "requiere_admin": True,
+        "localidad_consultada": "",
+        "places": None,
+        "ruta": None,
+        "motivo": "",
+    }
+
+    localidad_limpia = str(
+        localidad or ""
+    ).strip()
+
+    resultado["localidad_consultada"] = (
+        localidad_limpia
+    )
+
+    if not localidad_limpia:
+        resultado["motivo"] = (
+            "No existe una localidad suficiente para "
+            "realizar la validación geográfica."
+        )
+        return resultado
+
+    resultado_places = (
+        buscar_localidad_google_places(
+            localidad_limpia
+        )
+    )
+
+    resultado["places"] = resultado_places
+
+    if not resultado_places.get("encontrado"):
+        resultado["motivo"] = (
+            "Google Places no pudo localizar la zona; "
+            "debe revisarla una persona administradora."
+        )
+        return resultado
+
+    resultado_ruta = calcular_ruta_google_routes(
+        latitud_origen=resultado_places.get(
+            "latitud"
+        ),
+        longitud_origen=resultado_places.get(
+            "longitud"
+        ),
+    )
+
+    resultado["ruta"] = resultado_ruta
+
+    if not resultado_ruta.get(
+        "ruta_encontrada"
+    ):
+        resultado["motivo"] = (
+            "Google Routes no pudo calcular la ruta; "
+            "debe revisarla una persona administradora."
+        )
+        return resultado
+
+    if resultado_ruta.get(
+        "dentro_del_limite"
+    ) is True:
+        resultado.update({
+            "clasificacion": "ZONA_VALIDA_POR_RUTA",
+            "zona_validada": True,
+            "requiere_admin": False,
+            "motivo": (
+                "La localidad se encuentra dentro del "
+                "límite máximo de distancia por carretera."
+            ),
+        })
+
+        return resultado
+
+    resultado["motivo"] = (
+        "La localidad supera el límite configurado de "
+        "distancia por carretera y requiere revisión "
+        "administrativa; no debe rechazarse automáticamente."
+    )
+
+    return resultado
+
 
 def clasificar_zona_determinista(
     mensaje_usuario: str = "",
@@ -2435,6 +2532,42 @@ def aplicar_reglas_negocio_estructuradas(
         "clasificacion_zona_determinista"
     ] = clasificacion_zona_determinista
 
+    validacion_geografica = None
+
+    if clasificacion_zona_determinista.get(
+        "requiere_validacion_geografica",
+        False,
+    ):
+        localidad_para_validar = (
+            zona_mencionada
+            or campus_mencionado
+        )
+
+        validacion_geografica = (
+            validar_zona_desconocida_con_google(
+                localidad_para_validar
+            )
+        )
+
+        decision["datos_detectados"][
+            "validacion_geografica_google"
+        ] = validacion_geografica
+
+        if validacion_geografica.get(
+            "zona_validada"
+        ):
+            clasificacion_zona_determinista[
+                "clasificacion"
+            ] = "ZONA_VALIDA_POR_RUTA"
+
+            clasificacion_zona_determinista[
+                "es_zona_validada"
+            ] = True
+
+            clasificacion_zona_determinista[
+                "requiere_validacion_geografica"
+            ] = False
+
     zona_valida_en_mensaje = bool(
         clasificacion_zona_determinista.get(
             "es_zona_validada",
@@ -2489,6 +2622,31 @@ def aplicar_reglas_negocio_estructuradas(
         })
 
         return decision
+
+    if (
+        validacion_geografica
+        and validacion_geografica.get(
+            "clasificacion"
+        ) == "ZONA_REQUIERE_REVISION"
+    ):
+        decision.update({
+            "accion": "CONSULTAR_ADMIN",
+            "motivo": (
+                validacion_geografica.get(
+                    "motivo"
+                )
+                or (
+                    "La zona requiere revisión "
+                    "administrativa."
+                )
+            ),
+            "requiere_admin": True,
+            "puede_compartir_costos": False,
+            "zona_validada": False,
+            "debe_finalizar_conversacion": False,
+        })
+
+        return decision    
 
     # ========================================================
     # 2. CITA EN SÁBADO O DOMINGO
