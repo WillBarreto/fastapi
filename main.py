@@ -848,6 +848,776 @@ def extraer_json_de_texto(texto: str) -> Optional[Dict[str, Any]]:
 
     return None
 
+# ============================================================
+# EXTRACCIÓN IA DE MEMORIA HISTÓRICA
+# ============================================================
+
+def normalizar_memoria_historica_ia(
+    datos_crudos: Any,
+) -> Dict[str, Any]:
+    """
+    Limpia y valida la memoria histórica producida por Gemini.
+
+    No modifica contactos.
+    No guarda información.
+    No cambia FLOW_STATE.
+    """
+
+    base = crear_memoria_historica_vacia()
+
+    if not isinstance(datos_crudos, dict):
+        return base
+
+    etapa_sugerida = str(
+        datos_crudos.get(
+            "etapa_conversacional_sugerida",
+            "CONTACTO_INICIAL",
+        )
+        or "CONTACTO_INICIAL"
+    ).strip().upper()
+
+    if etapa_sugerida not in ETAPAS_CONVERSACIONALES_VALIDAS:
+        etapa_sugerida = "CONTACTO_INICIAL"
+
+    estado_sugerido = str(
+        datos_crudos.get(
+            "estado_comercial_sugerido",
+            "PROSPECTO_NUEVO",
+        )
+        or "PROSPECTO_NUEVO"
+    ).strip().upper()
+
+    if estado_sugerido not in ESTADOS_COMERCIALES_VALIDOS:
+        estado_sugerido = "PROSPECTO_NUEVO"
+
+    hitos_crudos = normalizar_lista_textos(
+        datos_crudos.get(
+            "hitos_comerciales"
+        )
+    )
+
+    hitos_validos = []
+
+    for hito in hitos_crudos:
+        hito_normalizado = str(
+            hito or ""
+        ).strip().upper()
+
+        if (
+            hito_normalizado
+            in HITOS_COMERCIALES_VALIDOS
+            and hito_normalizado
+            not in hitos_validos
+        ):
+            hitos_validos.append(
+                hito_normalizado
+            )
+
+    niveles_crudos = normalizar_lista_textos(
+        datos_crudos.get(
+            "niveles_interes"
+        )
+    )
+
+    equivalencias_nivel = {
+        "kinder": "Kínder",
+        "kínder": "Kínder",
+        "preescolar": "Kínder",
+        "primaria": "Primaria",
+        "secundaria": "Secundaria",
+    }
+
+    niveles_validos = []
+
+    for nivel in niveles_crudos:
+        nivel_limpio = str(
+            nivel or ""
+        ).strip()
+
+        nivel_normalizado = (
+            equivalencias_nivel.get(
+                nivel_limpio.lower(),
+                nivel_limpio,
+            )
+        )
+
+        if (
+            nivel_normalizado
+            in NIVELES_OFICIALES_VALIDOS
+            and nivel_normalizado
+            and nivel_normalizado
+            not in niveles_validos
+        ):
+            niveles_validos.append(
+                nivel_normalizado
+            )
+
+    alumnos_crudos = datos_crudos.get(
+        "alumnos",
+        [],
+    )
+
+    alumnos_normalizados = []
+
+    if isinstance(alumnos_crudos, list):
+        for alumno in alumnos_crudos:
+            if not isinstance(alumno, dict):
+                continue
+
+            nombre = str(
+                alumno.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            nivel = str(
+                alumno.get(
+                    "nivel_interes",
+                    alumno.get(
+                        "nivel",
+                        "",
+                    ),
+                )
+                or ""
+            ).strip()
+
+            nivel = equivalencias_nivel.get(
+                nivel.lower(),
+                nivel,
+            )
+
+            if (
+                nivel
+                not in NIVELES_OFICIALES_VALIDOS
+            ):
+                nivel = ""
+
+            registro_alumno = {
+                "nombre": nombre,
+                "nivel_interes": nivel,
+                "grado_interes": str(
+                    alumno.get(
+                        "grado_interes",
+                        alumno.get(
+                            "grado",
+                            "",
+                        ),
+                    )
+                    or ""
+                ).strip(),
+                "edad": normalizar_entero_opcional(
+                    alumno.get(
+                        "edad"
+                    )
+                ),
+                "fecha_nacimiento": str(
+                    alumno.get(
+                        "fecha_nacimiento",
+                        "",
+                    )
+                    or ""
+                ).strip(),
+            }
+
+            if any(
+                valor not in [
+                    "",
+                    None,
+                    [],
+                ]
+                for valor in (
+                    registro_alumno.values()
+                )
+            ):
+                alumnos_normalizados.append(
+                    registro_alumno
+                )
+
+    memoria_normalizada = {
+        "version": "1.0",
+
+        "nombre_tutor": str(
+            datos_crudos.get(
+                "nombre_tutor",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "alumnos": alumnos_normalizados,
+
+        "zona_interes": str(
+            datos_crudos.get(
+                "zona_interes",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "referencia_colegio": str(
+            datos_crudos.get(
+                "referencia_colegio",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "niveles_interes": niveles_validos,
+
+        "grados_interes": (
+            normalizar_lista_textos(
+                datos_crudos.get(
+                    "grados_interes"
+                )
+            )
+        ),
+
+        "areas_interes": (
+            normalizar_lista_textos(
+                datos_crudos.get(
+                    "areas_interes"
+                )
+            )
+        ),
+
+        "temas_explicados": (
+            normalizar_lista_textos(
+                datos_crudos.get(
+                    "temas_explicados"
+                )
+            )
+        ),
+
+        "objeciones_detectadas": (
+            normalizar_lista_textos(
+                datos_crudos.get(
+                    "objeciones_detectadas"
+                )
+            )
+        ),
+
+        "hitos_comerciales": hitos_validos,
+
+        "solicito_costos": normalizar_booleano(
+            datos_crudos.get(
+                "solicito_costos"
+            )
+        ),
+
+        "costos_presentados": normalizar_booleano(
+            datos_crudos.get(
+                "costos_presentados"
+            )
+        ),
+
+        "acepto_visita": normalizar_booleano(
+            datos_crudos.get(
+                "acepto_visita"
+            )
+        ),
+
+        "cita_solicitada": normalizar_booleano(
+            datos_crudos.get(
+                "cita_solicitada"
+            )
+        ),
+
+        "cita_confirmada": normalizar_booleano(
+            datos_crudos.get(
+                "cita_confirmada"
+            )
+        ),
+
+        "fecha_cita_texto": str(
+            datos_crudos.get(
+                "fecha_cita_texto",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "fecha_cita_iso": str(
+            datos_crudos.get(
+                "fecha_cita_iso",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "hora_cita_texto": str(
+            datos_crudos.get(
+                "hora_cita_texto",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "hora_cita_24h": str(
+            datos_crudos.get(
+                "hora_cita_24h",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "ultimo_mensaje_prospecto": str(
+            datos_crudos.get(
+                "ultimo_mensaje_prospecto",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "ultima_respuesta_asistente": str(
+            datos_crudos.get(
+                "ultima_respuesta_asistente",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "etapa_conversacional_sugerida": (
+            etapa_sugerida
+        ),
+
+        "estado_comercial_sugerido": (
+            estado_sugerido
+        ),
+
+        "resumen_relacion": str(
+            datos_crudos.get(
+                "resumen_relacion",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "datos_confirmados": (
+            normalizar_lista_textos(
+                datos_crudos.get(
+                    "datos_confirmados"
+                )
+            )
+        ),
+
+        "datos_inciertos": (
+            normalizar_lista_textos(
+                datos_crudos.get(
+                    "datos_inciertos"
+                )
+            )
+        ),
+
+        "confianza": normalizar_confianza(
+            datos_crudos.get(
+                "confianza"
+            )
+        ),
+    }
+
+    try:
+        memoria_validada = (
+            MemoriaHistoricaConversacion.model_validate(
+                memoria_normalizada
+            )
+        )
+
+        return memoria_validada.model_dump()
+
+    except Exception as e:
+        print(
+            "⚠️ Error validando memoria histórica: "
+            f"{e}"
+        )
+
+        return base
+
+
+def memoria_historica_contiene_informacion(
+    memoria: Dict[str, Any],
+) -> bool:
+    """
+    Determina si la memoria histórica contiene datos útiles.
+    """
+
+    if not isinstance(memoria, dict):
+        return False
+
+    campos_texto = [
+        "nombre_tutor",
+        "zona_interes",
+        "referencia_colegio",
+        "fecha_cita_texto",
+        "fecha_cita_iso",
+        "hora_cita_texto",
+        "hora_cita_24h",
+        "ultimo_mensaje_prospecto",
+        "ultima_respuesta_asistente",
+        "resumen_relacion",
+    ]
+
+    if any(
+        str(
+            memoria.get(
+                campo,
+                "",
+            )
+            or ""
+        ).strip()
+        for campo in campos_texto
+    ):
+        return True
+
+    campos_lista = [
+        "alumnos",
+        "niveles_interes",
+        "grados_interes",
+        "areas_interes",
+        "temas_explicados",
+        "objeciones_detectadas",
+        "hitos_comerciales",
+        "datos_confirmados",
+        "datos_inciertos",
+    ]
+
+    if any(
+        memoria.get(
+            campo
+        )
+        for campo in campos_lista
+    ):
+        return True
+
+    campos_booleanos = [
+        "solicito_costos",
+        "costos_presentados",
+        "acepto_visita",
+        "cita_solicitada",
+        "cita_confirmada",
+    ]
+
+    return any(
+        bool(
+            memoria.get(
+                campo
+            )
+        )
+        for campo in campos_booleanos
+    )
+
+
+def extraer_memoria_historica_con_ia(
+    texto_conversacion: str,
+) -> Dict[str, Any]:
+    """
+    Analiza el historial completo con Gemini y devuelve
+    una memoria histórica validada.
+
+    Esta función:
+    - no modifica la base de datos;
+    - no guarda notes;
+    - no cambia contact.status;
+    - no cambia FLOW_STATE;
+    - no envía mensajes;
+    - no crea tareas administrativas.
+    """
+
+    resultado_fallo = {
+        "exitoso": False,
+        "memoria": (
+            crear_memoria_historica_vacia()
+        ),
+        "modelo_usado": "",
+        "intentos_realizados": 0,
+        "errores": [],
+    }
+
+    historial = str(
+        texto_conversacion or ""
+    ).strip()
+
+    if not historial:
+        resultado_fallo["errores"].append(
+            "HISTORIAL_VACIO"
+        )
+        return resultado_fallo
+
+    api_key = (
+        os.getenv(
+            "GOOGLE_AI_API_KEY"
+        )
+        or os.getenv(
+            "GEMINI_API_KEY"
+        )
+    )
+
+    if not api_key:
+        resultado_fallo["errores"].append(
+            "GEMINI_API_KEY_NO_CONFIGURADA"
+        )
+        return resultado_fallo
+
+    genai.configure(
+        api_key=api_key
+    )
+
+    contrato_json = json.dumps(
+        crear_memoria_historica_vacia(),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    prompt_base = f"""
+Eres un analizador de memoria comercial para el proceso de admisiones
+del Colegio Valle de Filadelfia, Campus Santa Cruz Atizapán.
+
+Tu tarea es leer el historial completo de una conversación y extraer
+exclusivamente información explícita o razonablemente confirmada.
+
+No debes redactar una respuesta para el prospecto.
+
+REGLAS OBLIGATORIAS:
+
+1. No inventes nombres, edades, grados, fechas ni zonas.
+
+2. Distingue entre lo dicho por el prospecto y lo dicho por el asistente.
+
+3. Una pregunta del asistente no confirma un dato.
+
+4. Una afirmación del prospecto sí puede confirmar un dato.
+
+5. "costos_presentados" solamente será true cuando el asistente haya
+compartido efectivamente una cantidad, colegiatura, inscripción u otra
+información económica concreta.
+
+6. "cita_confirmada" solamente será true cuando exista una confirmación
+explícita de disponibilidad. Una frase como "permítame verificar" no
+confirma la cita.
+
+7. "cita_solicitada" será true cuando el prospecto ya haya proporcionado
+o propuesto fecha u hora para una visita.
+
+8. Los niveles oficiales son:
+- Kínder
+- Primaria
+- Secundaria
+
+9. Las etapas conversacionales permitidas son:
+{json.dumps(
+    sorted(
+        ETAPAS_CONVERSACIONALES_VALIDAS
+    ),
+    ensure_ascii=False
+)}
+
+10. Los estados comerciales permitidos son:
+{json.dumps(
+    sorted(
+        ESTADOS_COMERCIALES_VALIDOS
+    ),
+    ensure_ascii=False
+)}
+
+11. Los hitos comerciales permitidos son:
+{json.dumps(
+    sorted(
+        HITOS_COMERCIALES_VALIDOS
+    ),
+    ensure_ascii=False
+)}
+
+12. En "datos_confirmados" incluye únicamente hechos claramente
+respaldados por la conversación.
+
+13. En "datos_inciertos" incluye información ambigua, incompleta o
+pendiente de confirmación.
+
+14. "confianza" debe ser un número entre 0.0 y 1.0.
+
+15. Devuelve exclusivamente un objeto JSON válido.
+
+No uses Markdown.
+No agregues explicaciones.
+No escribas texto antes ni después del JSON.
+
+CONTRATO OBLIGATORIO:
+{contrato_json}
+
+HISTORIAL COMPLETO:
+{historial}
+"""
+
+    modelos = obtener_modelos_gemini()
+
+    if not modelos:
+        resultado_fallo["errores"].append(
+            "NO_HAY_MODELOS_CONFIGURADOS"
+        )
+        return resultado_fallo
+
+    instrucciones_reintento = """
+
+REINTENTO OBLIGATORIO:
+
+La respuesta anterior no pudo validarse.
+
+Devuelve exclusivamente JSON válido.
+Respeta exactamente el contrato.
+No uses Markdown.
+No agregues explicaciones.
+"""
+
+    for indice, model_name in enumerate(
+        modelos
+    ):
+        intentos_permitidos = (
+            2
+            if indice == 0
+            else 1
+        )
+
+        for numero_intento in range(
+            1,
+            intentos_permitidos + 1,
+        ):
+            resultado_fallo[
+                "intentos_realizados"
+            ] += 1
+
+            prompt_intento = prompt_base
+
+            if numero_intento > 1:
+                prompt_intento += (
+                    instrucciones_reintento
+                )
+
+            try:
+                print(
+                    "🧠 Memoria histórica IA: "
+                    f"modelo={model_name}, "
+                    f"intento={numero_intento}"
+                )
+
+                model = genai.GenerativeModel(
+                    model_name
+                )
+
+                response = model.generate_content(
+                    prompt_intento,
+                    generation_config=(
+                        genai.types.GenerationConfig(
+                            max_output_tokens=4000,
+                            temperature=0.0,
+                        )
+                    ),
+                )
+
+                texto_respuesta = (
+                    extraer_texto_respuesta_gemini(
+                        response
+                    )
+                )
+
+                if not texto_respuesta:
+                    error = (
+                        f"{model_name}: "
+                        f"intento {numero_intento}: "
+                        "RESPUESTA_VACIA"
+                    )
+
+                    resultado_fallo[
+                        "errores"
+                    ].append(
+                        error
+                    )
+
+                    continue
+
+                datos_crudos = (
+                    extraer_json_de_texto(
+                        texto_respuesta
+                    )
+                )
+
+                if datos_crudos is None:
+                    error = (
+                        f"{model_name}: "
+                        f"intento {numero_intento}: "
+                        "JSON_INVALIDO"
+                    )
+
+                    resultado_fallo[
+                        "errores"
+                    ].append(
+                        error
+                    )
+
+                    continue
+
+                memoria = (
+                    normalizar_memoria_historica_ia(
+                        datos_crudos
+                    )
+                )
+
+                if not (
+                    memoria_historica_contiene_informacion(
+                        memoria
+                    )
+                ):
+                    error = (
+                        f"{model_name}: "
+                        f"intento {numero_intento}: "
+                        "MEMORIA_VACIA"
+                    )
+
+                    resultado_fallo[
+                        "errores"
+                    ].append(
+                        error
+                    )
+
+                    continue
+
+                return {
+                    "exitoso": True,
+                    "memoria": memoria,
+                    "modelo_usado": model_name,
+                    "intentos_realizados": (
+                        resultado_fallo[
+                            "intentos_realizados"
+                        ]
+                    ),
+                    "errores": (
+                        resultado_fallo[
+                            "errores"
+                        ]
+                    ),
+                }
+
+            except Exception as e:
+                error = (
+                    f"{model_name}: "
+                    f"intento {numero_intento}: "
+                    f"{e}"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    "⚠️ Error memoria histórica IA: "
+                    f"{error}"
+                )
+
+    return resultado_fallo
+    
+
 def analisis_estructurado_contiene_informacion(
     analisis: Dict[str, Any],
 ) -> bool:
