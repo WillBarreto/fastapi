@@ -1595,6 +1595,309 @@ def buscar_localidad_google_places(
 
     return resultado
 
+def calcular_ruta_google_routes(
+    latitud_origen: Any,
+    longitud_origen: Any,
+) -> Dict[str, Any]:
+    """
+    Calcula una ruta en automóvil desde una localidad
+    hasta el Colegio Valle de Filadelfia Campus Santa Cruz.
+
+    Esta función:
+    - utiliza coordenadas aproximadas de una localidad;
+    - no solicita la dirección exacta del prospecto;
+    - no modifica la base de datos;
+    - no cambia decisiones del flujo;
+    - no envía mensajes;
+    - devuelve una estructura segura cuando ocurre un error.
+    """
+    resultado = {
+        "ruta_encontrada": False,
+        "latitud_origen": None,
+        "longitud_origen": None,
+        "latitud_destino": None,
+        "longitud_destino": None,
+        "distancia_metros": None,
+        "distancia_km": None,
+        "duracion_segundos": None,
+        "duracion_minutos": None,
+        "limite_km": None,
+        "dentro_del_limite": None,
+        "error": "",
+    }
+
+    api_key = str(
+        os.getenv(
+            "GOOGLE_MAPS_API_KEY",
+            "",
+        ) or ""
+    ).strip()
+
+    if not api_key:
+        resultado["error"] = (
+            "GOOGLE_MAPS_API_KEY_NO_CONFIGURADA"
+        )
+        return resultado
+
+    try:
+        latitud_origen_float = float(
+            latitud_origen
+        )
+
+        longitud_origen_float = float(
+            longitud_origen
+        )
+
+    except (TypeError, ValueError):
+        resultado["error"] = (
+            "COORDENADAS_ORIGEN_INVALIDAS"
+        )
+        return resultado
+
+    try:
+        latitud_destino = float(
+            os.getenv(
+                "COLEGIO_LATITUD",
+                "",
+            )
+        )
+
+        longitud_destino = float(
+            os.getenv(
+                "COLEGIO_LONGITUD",
+                "",
+            )
+        )
+
+    except (TypeError, ValueError):
+        resultado["error"] = (
+            "COORDENADAS_COLEGIO_NO_CONFIGURADAS"
+        )
+        return resultado
+
+    try:
+        limite_km = float(
+            os.getenv(
+                "GOOGLE_MAPS_MAX_ROUTE_KM",
+                "15",
+            )
+        )
+
+    except (TypeError, ValueError):
+        limite_km = 15.0
+
+    if not (
+        -90 <= latitud_origen_float <= 90
+        and -180 <= longitud_origen_float <= 180
+    ):
+        resultado["error"] = (
+            "COORDENADAS_ORIGEN_FUERA_DE_RANGO"
+        )
+        return resultado
+
+    if not (
+        -90 <= latitud_destino <= 90
+        and -180 <= longitud_destino <= 180
+    ):
+        resultado["error"] = (
+            "COORDENADAS_COLEGIO_FUERA_DE_RANGO"
+        )
+        return resultado
+
+    resultado.update({
+        "latitud_origen": latitud_origen_float,
+        "longitud_origen": longitud_origen_float,
+        "latitud_destino": latitud_destino,
+        "longitud_destino": longitud_destino,
+        "limite_km": limite_km,
+    })
+
+    url = (
+        "https://routes.googleapis.com/"
+        "directions/v2:computeRoutes"
+    )
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": (
+            "routes.distanceMeters,"
+            "routes.duration"
+        ),
+    }
+
+    payload = {
+        "origin": {
+            "location": {
+                "latLng": {
+                    "latitude": latitud_origen_float,
+                    "longitude": longitud_origen_float,
+                }
+            }
+        },
+        "destination": {
+            "location": {
+                "latLng": {
+                    "latitude": latitud_destino,
+                    "longitude": longitud_destino,
+                }
+            }
+        },
+        "travelMode": "DRIVE",
+        "routingPreference": "TRAFFIC_AWARE",
+        "computeAlternativeRoutes": False,
+        "routeModifiers": {
+            "avoidTolls": False,
+            "avoidHighways": False,
+            "avoidFerries": False,
+        },
+        "languageCode": "es-MX",
+        "units": "METRIC",
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
+
+    except requests.RequestException as e:
+        resultado["error"] = (
+            "ERROR_CONEXION_GOOGLE_ROUTES: "
+            f"{e}"
+        )
+        return resultado
+
+    if response.status_code != 200:
+        detalle_error = ""
+
+        try:
+            respuesta_error = response.json()
+
+            detalle_error = str(
+                respuesta_error.get(
+                    "error",
+                    {},
+                ).get(
+                    "message",
+                    "",
+                )
+                or ""
+            ).strip()
+
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+        ):
+            detalle_error = str(
+                response.text or ""
+            ).strip()
+
+        resultado["error"] = (
+            "GOOGLE_ROUTES_HTTP_"
+            f"{response.status_code}"
+        )
+
+        if detalle_error:
+            resultado["error"] += (
+                f": {detalle_error[:300]}"
+            )
+
+        return resultado
+
+    try:
+        datos = response.json()
+
+    except ValueError:
+        resultado["error"] = (
+            "RESPUESTA_GOOGLE_ROUTES_NO_JSON"
+        )
+        return resultado
+
+    rutas = datos.get(
+        "routes",
+        [],
+    )
+
+    if not isinstance(rutas, list) or not rutas:
+        resultado["error"] = (
+            "RUTA_NO_ENCONTRADA"
+        )
+        return resultado
+
+    ruta = rutas[0]
+
+    if not isinstance(ruta, dict):
+        resultado["error"] = (
+            "FORMATO_RUTA_INVALIDO"
+        )
+        return resultado
+
+    distancia_metros = ruta.get(
+        "distanceMeters"
+    )
+
+    duracion_texto = str(
+        ruta.get(
+            "duration",
+            "",
+        )
+        or ""
+    ).strip()
+
+    try:
+        distancia_metros = int(
+            distancia_metros
+        )
+
+    except (TypeError, ValueError):
+        resultado["error"] = (
+            "DISTANCIA_RUTA_INVALIDA"
+        )
+        return resultado
+
+    duracion_segundos = None
+
+    if duracion_texto.endswith("s"):
+        try:
+            duracion_segundos = float(
+                duracion_texto[:-1]
+            )
+
+        except (TypeError, ValueError):
+            duracion_segundos = None
+
+    distancia_km = round(
+        distancia_metros / 1000,
+        3,
+    )
+
+    duracion_minutos = (
+        round(
+            duracion_segundos / 60,
+            1,
+        )
+        if duracion_segundos is not None
+        else None
+    )
+
+    resultado.update({
+        "ruta_encontrada": True,
+        "distancia_metros": distancia_metros,
+        "distancia_km": distancia_km,
+        "duracion_segundos": duracion_segundos,
+        "duracion_minutos": duracion_minutos,
+        "dentro_del_limite": (
+            distancia_km <= limite_km
+        ),
+    })
+
+    return resultado
+
+
 def clasificar_zona_determinista(
     mensaje_usuario: str = "",
     zona_mencionada: str = "",
