@@ -3667,13 +3667,12 @@ def generar_respuesta_final_estructurada(
             "Con gusto le atendemos. ¿Podría compartirme un poco "
             "más sobre la información que necesita?"
         )
-
     def validar_respuesta_generada(
         texto: str,
     ) -> Dict[str, Any]:
         """
-        Verifica que el texto parezca una respuesta final de WhatsApp
-        y no contenido interno, técnico o incompleto.
+        Verifica que el texto sea una respuesta completa,
+        coherente y adecuada para enviarse por WhatsApp.
         """
         respuesta_limpia = str(
             texto or ""
@@ -3691,10 +3690,14 @@ def generar_respuesta_final_estructurada(
             }
 
         if len(respuesta_limpia) < 20:
-            errores.append("RESPUESTA_DEMASIADO_CORTA")
+            errores.append(
+                "RESPUESTA_DEMASIADO_CORTA"
+            )
 
         if len(respuesta_limpia) > 1200:
-            errores.append("RESPUESTA_DEMASIADO_LARGA")
+            errores.append(
+                "RESPUESTA_DEMASIADO_LARGA"
+            )
 
         texto_normalizado = (
             normalizar_texto_geografico(
@@ -3722,6 +3725,20 @@ def generar_respuesta_final_estructurada(
             "distancia por carretera",
             "como modelo de lenguaje",
             "no puedo cumplir",
+            "optional but good",
+            "the plan says",
+            "according to the plan",
+            "based on the plan",
+            "brief and natural",
+            "breve y natural",
+            "tono cordial",
+            "refine the response",
+            "internal rules",
+            "final answer",
+            "the user wants",
+            "the prospect wants",
+            "should include",
+            "must include",
         ]
 
         for frase in frases_prohibidas:
@@ -3731,7 +3748,9 @@ def generar_respuesta_final_estructurada(
                 )
 
         if "```" in respuesta_limpia:
-            errores.append("BLOQUE_MARKDOWN")
+            errores.append(
+                "BLOQUE_MARKDOWN"
+            )
 
         if re.search(
             r"^\s*(?:\*+:?|#+|\d+[.)])\s*",
@@ -3753,10 +3772,213 @@ def generar_respuesta_final_estructurada(
             respuesta_limpia.startswith("{")
             or respuesta_limpia.startswith("[")
         ):
-            errores.append("FORMATO_JSON_O_LISTA")
+            errores.append(
+                "FORMATO_JSON_O_LISTA"
+            )
 
         if respuesta_limpia.count("**") >= 2:
-            errores.append("MARKDOWN_EN_RESPUESTA")
+            errores.append(
+                "MARKDOWN_EN_RESPUESTA"
+            )
+
+        if re.search(
+            r"[*)]\s*:",
+            respuesta_limpia,
+        ):
+            errores.append(
+                "FORMATO_INTERNO_ANOMALO"
+            )
+
+        if respuesta_limpia.startswith(
+            (
+                "*",
+                "#",
+                ":",
+                ")",
+                "]",
+                "}",
+            )
+        ):
+            errores.append(
+                "INICIO_ANOMALO"
+            )
+
+        palabras_ingles_internas = [
+            "optional",
+            "though",
+            "plan",
+            "should",
+            "must",
+            "response",
+            "user",
+            "prospect",
+            "rules",
+            "refine",
+            "brief",
+            "natural",
+            "according",
+            "include",
+        ]
+
+        cantidad_ingles_interno = sum(
+            1
+            for palabra in palabras_ingles_internas
+            if re.search(
+                rf"\b{re.escape(palabra)}\b",
+                respuesta_limpia,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        if cantidad_ingles_interno >= 2:
+            errores.append(
+                "CONTENIDO_INTERNO_EN_INGLES"
+            )
+
+        palabras_finales_incompletas = {
+            "a",
+            "al",
+            "ante",
+            "bajo",
+            "con",
+            "contra",
+            "de",
+            "del",
+            "desde",
+            "durante",
+            "e",
+            "el",
+            "en",
+            "entre",
+            "hacia",
+            "hasta",
+            "la",
+            "las",
+            "lo",
+            "los",
+            "mediante",
+            "o",
+            "para",
+            "pero",
+            "por",
+            "porque",
+            "que",
+            "segun",
+            "sin",
+            "sobre",
+            "su",
+            "sus",
+            "tras",
+            "tu",
+            "un",
+            "una",
+            "y",
+            "claro",
+            "nuestra",
+            "nuestro",
+            "correspondiente",
+            "informacion sobre",
+        }
+
+        texto_sin_signos_finales = re.sub(
+            r"[.!?¡¿…,:;]+$",
+            "",
+            respuesta_limpia,
+        ).strip()
+
+        palabras_respuesta = re.findall(
+            r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+",
+            texto_sin_signos_finales,
+        )
+
+        ultima_palabra = (
+            normalizar_texto_geografico(
+                palabras_respuesta[-1]
+            )
+            if palabras_respuesta
+            else ""
+        )
+
+        ultimas_dos_palabras = (
+            normalizar_texto_geografico(
+                " ".join(
+                    palabras_respuesta[-2:]
+                )
+            )
+            if len(palabras_respuesta) >= 2
+            else ultima_palabra
+        )
+
+        if (
+            ultima_palabra
+            in palabras_finales_incompletas
+            or ultimas_dos_palabras
+            in palabras_finales_incompletas
+        ):
+            errores.append(
+                "RESPUESTA_TERMINA_INCOMPLETA"
+            )
+
+        tiene_puntuacion_final = bool(
+            re.search(
+                r"[.!?…]$",
+                respuesta_limpia,
+            )
+        )
+
+        if not tiene_puntuacion_final:
+            errores.append(
+                "RESPUESTA_SIN_CIERRE"
+            )
+
+        acciones_que_requieren_pregunta = {
+            "PEDIR_ZONA",
+            "PEDIR_FECHA_NACIMIENTO",
+            "PEDIR_FECHA_CITA",
+            "PEDIR_HORA_CITA",
+        }
+
+        if (
+            accion
+            in acciones_que_requieren_pregunta
+            and "?" not in respuesta_limpia
+        ):
+            errores.append(
+                "ACCION_REQUIERE_PREGUNTA"
+            )
+
+        if accion == "RESPONDER_SALUDO":
+            palabras_respuesta_saludo = (
+                respuesta_limpia.split()
+            )
+
+            if len(
+                palabras_respuesta_saludo
+            ) > 15:
+                errores.append(
+                    "SALUDO_DEMASIADO_EXTENSO"
+                )
+
+            expresiones_no_permitidas_saludo = [
+                "costos",
+                "colegiatura",
+                "inscripcion",
+                "cita",
+                "visita",
+                "primaria",
+                "secundaria",
+                "kinder",
+                "informacion sobre",
+            ]
+
+            for expresion in (
+                expresiones_no_permitidas_saludo
+            ):
+                if expresion in texto_normalizado:
+                    errores.append(
+                        "SALUDO_AGREGA_INFORMACION:"
+                        f"{expresion}"
+                    )
 
         if accion == "CONSULTAR_ADMIN":
             palabras_requeridas = [
@@ -3785,7 +4007,9 @@ def generar_respuesta_final_estructurada(
                 "no es posible atender",
             ]
 
-            for palabra in palabras_prohibidas_admin:
+            for palabra in (
+                palabras_prohibidas_admin
+            ):
                 if palabra in texto_normalizado:
                     errores.append(
                         "INCUMPLE_CONSULTAR_ADMIN:"
@@ -3794,7 +4018,8 @@ def generar_respuesta_final_estructurada(
 
         if accion == "RECHAZAR_CAMPUS":
             if (
-                "campus santa cruz" not in texto_normalizado
+                "campus santa cruz"
+                not in texto_normalizado
                 and "santa cruz atizapan"
                 not in texto_normalizado
             ):
@@ -3803,14 +4028,172 @@ def generar_respuesta_final_estructurada(
                 )
 
         if accion == "PEDIR_ZONA":
+            palabras_zona = [
+                "localidad",
+                "municipio",
+                "zona",
+                "donde",
+            ]
+
+            if not any(
+                palabra in texto_normalizado
+                for palabra in palabras_zona
+            ):
+                errores.append(
+                    "NO_SOLICITA_LOCALIDAD"
+                )
+
+            datos_exactos_prohibidos = [
+                "direccion exacta",
+                "calle",
+                "numero exterior",
+                "ubicacion gps",
+                "coordenadas",
+                "compartir ubicacion",
+            ]
+
+            for expresion in (
+                datos_exactos_prohibidos
+            ):
+                if expresion in texto_normalizado:
+                    errores.append(
+                        "PIDE_UBICACION_EXACTA:"
+                        f"{expresion}"
+                    )
+
+        if accion == "PEDIR_FECHA_NACIMIENTO":
+            palabras_fecha_nacimiento = [
+                "fecha de nacimiento",
+                "dia mes y año",
+                "dia mes y ano",
+                "nacimiento completa",
+            ]
+
+            if not any(
+                expresion in texto_normalizado
+                for expresion in (
+                    palabras_fecha_nacimiento
+                )
+            ):
+                errores.append(
+                    "NO_SOLICITA_FECHA_NACIMIENTO"
+                )
+
+        if accion == "PEDIR_FECHA_CITA":
+            palabras_fecha_cita = [
+                "que dia",
+                "que fecha",
+                "cuando",
+                "lunes a viernes",
+                "dia le gustaria",
+            ]
+
+            if not any(
+                expresion in texto_normalizado
+                for expresion in palabras_fecha_cita
+            ):
+                errores.append(
+                    "NO_SOLICITA_FECHA_CITA"
+                )
+
+        if accion == "PEDIR_HORA_CITA":
+            palabras_hora = [
+                "hora",
+                "horario",
+                "a que hora",
+            ]
+
+            if not any(
+                expresion in texto_normalizado
+                for expresion in palabras_hora
+            ):
+                errores.append(
+                    "NO_SOLICITA_HORA_CITA"
+                )
+
+        if accion == "CITA_DIA_NO_LABORAL":
+            menciona_dias_laborales = (
+                "lunes a viernes"
+                in texto_normalizado
+                or "entre semana"
+                in texto_normalizado
+            )
+
+            if not menciona_dias_laborales:
+                errores.append(
+                    "NO_ACLARA_DIAS_DE_VISITA"
+                )
+
             if "?" not in respuesta_limpia:
                 errores.append(
-                    "NO_FORMULA_PREGUNTA_DE_ZONA"
+                    "NO_SOLICITA_OTRA_FECHA"
+                )
+
+        if accion == "SEGUIMIENTO":
+            palabras_retorno = [
+                "cuando guste",
+                "cuando lo desee",
+                "cuando lo considere",
+                "retomar",
+                "escribirnos",
+                "contactarnos",
+                "aqui estaremos",
+                "aquí estaremos",
+            ]
+
+            if not any(
+                expresion in texto_normalizado
+                for expresion in palabras_retorno
+            ):
+                errores.append(
+                    "NO_PERMITE_RETOMAR_CONVERSACION"
+                )
+
+        if accion == "ORIENTAR_PRE_KINDER":
+            palabras_edad = [
+                "edad",
+                "años",
+                "anos",
+                "kinder",
+                "nivel",
+                "ciclo",
+            ]
+
+            if not any(
+                palabra in texto_normalizado
+                for palabra in palabras_edad
+            ):
+                errores.append(
+                    "NO_ORIENTA_POR_EDAD"
+                )
+
+        if accion == "RESPONDER_COSTOS":
+            inicio_incompleto_costos = [
+                "claro",
+                "con gusto",
+                "que gusto saludarte claro",
+            ]
+
+            if (
+                len(respuesta_limpia) < 55
+                and any(
+                    texto_normalizado.endswith(
+                        expresion
+                    )
+                    for expresion in (
+                        inicio_incompleto_costos
+                    )
+                )
+            ):
+                errores.append(
+                    "RESPUESTA_COSTOS_INCOMPLETA"
                 )
 
         return {
             "valida": not errores,
-            "respuesta_limpia": respuesta_limpia,
+            "respuesta_limpia": (
+                respuesta_limpia
+            ),
             "errores": errores,
         }
 
