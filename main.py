@@ -105,6 +105,131 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "CONTINUAR_CONVERSACION",
 }
 
+# ============================================================
+# CONTRATO COMERCIAL Y CONVERSACIONAL DEL NUEVO FLUJO
+# ============================================================
+
+ETAPAS_CONVERSACIONALES_VALIDAS = {
+    "CONTACTO_INICIAL",
+    "REFERENCIA_COLEGIO",
+    "VALIDACION_ZONA",
+    "PRESENTACION_VALOR",
+    "EXPLICACION_METODO",
+    "IDENTIFICACION_INTERES",
+    "PROFUNDIZACION_INTERES",
+    "INVITACION_VISITA",
+    "NEGOCIACION_CITA",
+    "ESPERANDO_CONFIRMACION_ADMIN",
+    "ESPERANDO_DATOS_CITA",
+    "VISITA_CONFIRMADA",
+    "SEGUIMIENTO_VISITA",
+    "POST_VISITA_COSTOS",
+    "SEGUIMIENTO_INSCRIPCION",
+    "CIERRE_INSCRIPCION",
+    "SEGUIMIENTO",
+}
+
+
+ESTADOS_COMERCIALES_VALIDOS = {
+    "PROSPECTO_NUEVO",
+    "EN_CALIFICACION",
+    "PROSPECTO_INFORMADO",
+    "PENDIENTE_DE_AGENDAR",
+    "CITA_PENDIENTE_CONFIRMACION",
+    "VISITA_CONFIRMADA",
+    "VISITA_REALIZADA",
+    "VISITA_NO_ASISTIO",
+    "COSTOS_PRESENTADOS",
+    "INSCRIPCION_PENDIENTE",
+    "INSCRITO",
+    "NO_INSCRITO",
+    "DESCARTADO",
+    "COMPETENCIA",
+    "ALUMNO_ACTIVO",
+    "ALUMNO_INACTIVO",
+    "EX_ALUMNO",
+}
+
+
+HITOS_COMERCIALES_VALIDOS = {
+    "PIDIO_INFORMES",
+    "RESPONDIO_REFERENCIA",
+    "ZONA_VALIDADA",
+    "RECIBIO_PRESENTACION_VALOR",
+    "RECIBIO_EXPLICACION_METODO",
+    "EXPRESO_AREA_INTERES",
+    "RECIBIO_RESPUESTA_PERSONALIZADA",
+    "INSISTIO_COSTOS",
+    "ACEPTO_VISITA",
+    "PROPUSO_FECHA_CITA",
+    "PROPUSO_HORA_CITA",
+    "CITA_SOLICITADA",
+    "CITA_CONFIRMADA",
+    "VISITA_REALIZADA",
+    "VISITA_NO_ASISTIO",
+    "RECIBIO_COSTOS",
+    "RECIBIO_OPCIONES_PAGO",
+    "INICIO_INSCRIPCION",
+    "SE_INSCRIBIO",
+    "SEGUIMIENTO_PROGRAMADO",
+    "SEGUIMIENTO_SIN_RESPUESTA",
+}
+
+
+class ContextoComercialConversacion(BaseModel):
+    """
+    Representa la posición comercial y conversacional de una familia.
+
+    Este contrato no genera respuestas, no modifica la base de datos
+    y no ejecuta transiciones. Solamente establece una estructura
+    común para las siguientes fases del nuevo flujo.
+    """
+
+    version: str = "1.0"
+
+    etapa_conversacional: str = "CONTACTO_INICIAL"
+    estado_comercial: str = "PROSPECTO_NUEVO"
+
+    hitos_comerciales: List[str] = Field(
+        default_factory=list
+    )
+
+    nombre_tutor: str = ""
+    zona_interes: str = ""
+
+    alumnos: List[Dict[str, Any]] = Field(
+        default_factory=list
+    )
+
+    referencia_colegio: str = ""
+
+    temas_explicados: List[str] = Field(
+        default_factory=list
+    )
+
+    areas_interes: List[str] = Field(
+        default_factory=list
+    )
+
+    objeciones_detectadas: List[str] = Field(
+        default_factory=list
+    )
+
+    fecha_ultima_interaccion: str = ""
+    resumen_relacion: str = ""
+
+    historial_completo_disponible: bool = False
+
+
+def crear_contexto_comercial_vacio() -> Dict[str, Any]:
+    """
+    Devuelve un contexto comercial seguro con valores iniciales.
+
+    No consulta la base de datos.
+    No modifica contactos.
+    No altera FLOW_STATE.
+    """
+    return ContextoComercialConversacion().model_dump()
 
 class AnalisisMensajeProspecto(BaseModel):
     """
