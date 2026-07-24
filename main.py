@@ -15,6 +15,7 @@ import requests
 import json
 import base64
 import re
+import unicodedata
 
 from sqlalchemy.dialects.postgresql import ENUM
 from prompt_manager import PromptManager
@@ -1157,7 +1158,257 @@ def crear_decision_negocio_vacia() -> Dict[str, Any]:
         "datos_detectados": {},
     }
 
+# ============================================================
+# CATÁLOGO GEOGRÁFICO DEL FLUJO ESTRUCTURADO
+# ============================================================
 
+ZONAS_VALIDAS_DIRECTAS = {
+    "santa cruz atizapan",
+    "santiago tianguistenco",
+    "tianguistenco",
+    "santiago",
+    "capulhuac",
+    "capulhuac de mirafuentes",
+    "san pedro tlatizapan",
+    "san padro"
+    "tlaltizapan"
+    "xalatlaco",
+    "almoloya",
+    "almoloya del rio",
+    "buen suceso",
+    "tlazala",
+    "almaya",
+}
+
+
+ZONAS_VALIDAS_POR_CONECTIVIDAD = {
+    "mixicaltzingo",
+    "mexicaltzingo",
+    "mixcalcingo",
+    "calimaya",
+    "san andres ocotlan",
+    "rancho el meson",
+    "el meson",
+    "tenango",
+    "tenango del valle",
+    "san antonio la isla",
+    "ocoyoacac",
+    "jajalpa",
+    "los encinos",
+}
+
+
+ZONAS_EXTERNAS_CONOCIDAS = {
+    "metepec",
+    "toluca",
+    "atlacomulco",
+}
+
+
+REFERENCIAS_CAMPUS_EXTERNOS = {
+    "campus metepec",
+    "campus de metepec",
+    "campus toluca",
+    "campus de toluca",
+    "campus atlacomulco",
+    "campus de atlacomulco",
+    "otro campus",
+    "otro plantel",
+    "campus diferente",
+    "plantel diferente",
+}
+
+
+def normalizar_texto_geografico(
+    valor: Any,
+) -> str:
+    """
+    Normaliza texto para comparar nombres geográficos.
+
+    - Convierte a minúsculas.
+    - Elimina acentos.
+    - Sustituye signos por espacios.
+    - Elimina espacios repetidos.
+    """
+    texto = str(valor or "").strip().lower()
+
+    if not texto:
+        return ""
+
+    texto = unicodedata.normalize(
+        "NFD",
+        texto,
+    )
+
+    texto = "".join(
+        caracter
+        for caracter in texto
+        if unicodedata.category(caracter) != "Mn"
+    )
+
+    texto = re.sub(
+        r"[^a-z0-9ñ]+",
+        " ",
+        texto,
+    )
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto,
+    )
+
+    return texto.strip()
+
+
+def texto_contiene_alias_geografico(
+    texto_normalizado: str,
+    aliases: set,
+) -> bool:
+    """
+    Busca nombres geográficos completos, evitando coincidencias
+    parciales dentro de otras palabras.
+    """
+    if not texto_normalizado:
+        return False
+
+    texto_delimitado = (
+        f" {texto_normalizado} "
+    )
+
+    aliases_ordenados = sorted(
+        aliases,
+        key=len,
+        reverse=True,
+    )
+
+    for alias in aliases_ordenados:
+        alias_normalizado = (
+            normalizar_texto_geografico(alias)
+        )
+
+        if not alias_normalizado:
+            continue
+
+        if (
+            f" {alias_normalizado} "
+            in texto_delimitado
+        ):
+            return True
+
+    return False
+
+
+def clasificar_zona_determinista(
+    mensaje_usuario: str = "",
+    zona_mencionada: str = "",
+    campus_mencionado: str = "",
+) -> Dict[str, Any]:
+    """
+    Clasifica la ubicación mediante catálogos institucionales.
+
+    Esta función no consulta Gemini ni servicios externos.
+
+    Prioridad:
+    1. Campus externo explícito.
+    2. Zona externa conocida.
+    3. Zona válida directa.
+    4. Zona válida por conectividad.
+    5. Zona desconocida pendiente de validación geográfica.
+    6. Sin zona mencionada.
+    """
+    texto_completo = " ".join(
+        [
+            str(mensaje_usuario or ""),
+            str(zona_mencionada or ""),
+            str(campus_mencionado or ""),
+        ]
+    )
+
+    texto_normalizado = (
+        normalizar_texto_geografico(
+            texto_completo
+        )
+    )
+
+    zona_normalizada = (
+        normalizar_texto_geografico(
+            zona_mencionada
+        )
+    )
+
+    campus_normalizado = (
+        normalizar_texto_geografico(
+            campus_mencionado
+        )
+    )
+
+    resultado = {
+        "clasificacion": "NO_MENCIONADA",
+        "zona_normalizada": zona_normalizada,
+        "campus_normalizado": campus_normalizado,
+        "requiere_validacion_geografica": False,
+        "es_zona_validada": False,
+        "es_zona_externa": False,
+        "es_campus_externo": False,
+    }
+
+    if texto_contiene_alias_geografico(
+        texto_normalizado,
+        REFERENCIAS_CAMPUS_EXTERNOS,
+    ):
+        resultado.update({
+            "clasificacion": "CAMPUS_EXTERNO",
+            "es_campus_externo": True,
+        })
+
+        return resultado
+
+    if texto_contiene_alias_geografico(
+        texto_normalizado,
+        ZONAS_EXTERNAS_CONOCIDAS,
+    ):
+        resultado.update({
+            "clasificacion": "ZONA_EXTERNA",
+            "es_zona_externa": True,
+        })
+
+        return resultado
+
+    if texto_contiene_alias_geografico(
+        texto_normalizado,
+        ZONAS_VALIDAS_DIRECTAS,
+    ):
+        resultado.update({
+            "clasificacion": "ZONA_VALIDA_DIRECTA",
+            "es_zona_validada": True,
+        })
+
+        return resultado
+
+    if texto_contiene_alias_geografico(
+        texto_normalizado,
+        ZONAS_VALIDAS_POR_CONECTIVIDAD,
+    ):
+        resultado.update({
+            "clasificacion": (
+                "ZONA_VALIDA_POR_CONECTIVIDAD"
+            ),
+            "es_zona_validada": True,
+        })
+
+        return resultado
+
+    if zona_normalizada or campus_normalizado:
+        resultado.update({
+            "clasificacion": "ZONA_DESCONOCIDA",
+            "requiere_validacion_geografica": True,
+        })
+
+        return resultado
+
+    return resultado
+        
 def zona_previamente_validada_en_flujo(contact=None) -> bool:
     """
     Determina si la conversación ya superó la validación de zona.
@@ -1546,16 +1797,6 @@ def aplicar_reglas_negocio_estructuradas(
         )
     )
 
-    clasificacion_zona = analisis_seguro.get(
-        "clasificacion_zona",
-        "NO_MENCIONADA",
-    )
-
-    campus_externo = analisis_seguro.get(
-        "campus_externo",
-        False,
-    )
-
     zona_mencionada = str(
         analisis_seguro.get(
             "zona_mencionada",
@@ -1563,20 +1804,36 @@ def aplicar_reglas_negocio_estructuradas(
         ) or ""
     ).strip()
 
-    texto_para_validar_zona = " ".join(
-        [
-            mensaje_usuario or "",
-            zona_mencionada,
-        ]
+    campus_mencionado = str(
+        analisis_seguro.get(
+            "campus_mencionado",
+            "",
+        ) or ""
     ).strip()
 
-    zona_valida_en_mensaje = (
-        es_zona_valida(texto_para_validar_zona)
-        and not campus_externo
+    clasificacion_zona_determinista = (
+        clasificar_zona_determinista(
+            mensaje_usuario=mensaje_usuario,
+            zona_mencionada=zona_mencionada,
+            campus_mencionado=campus_mencionado,
+        )
+    )
+
+    decision["datos_detectados"][
+        "clasificacion_zona_determinista"
+    ] = clasificacion_zona_determinista
+
+    zona_valida_en_mensaje = bool(
+        clasificacion_zona_determinista.get(
+            "es_zona_validada",
+            False,
+        )
     )
 
     zona_valida_previamente = (
-        zona_previamente_validada_en_flujo(contact)
+        zona_previamente_validada_en_flujo(
+            contact
+        )
     )
 
     zona_validada = (
@@ -1584,20 +1841,29 @@ def aplicar_reglas_negocio_estructuradas(
         or zona_valida_previamente
     )
 
-    decision["zona_validada"] = zona_validada
+    campus_externo_determinista = bool(
+        clasificacion_zona_determinista.get(
+            "es_campus_externo",
+            False,
+        )
+    )
 
+    zona_externa_determinista = bool(
+        clasificacion_zona_determinista.get(
+            "es_zona_externa",
+            False,
+        )
+    )
+
+    decision["zona_validada"] = zona_validada
+    
     # ========================================================
     # 1. CAMPUS EXTERNO O ZONA NO ATENDIDA
     # ========================================================
 
     if (
-        campus_externo
-        or clasificacion_zona in {
-            "CAMPUS_EXTERNO",
-            "FUERA_DE_ZONA",
-        }
-        or analisis_seguro.get("intencion_principal")
-        == "CAMPUS_EXTERNO"
+        campus_externo_determinista
+        or zona_externa_determinista
     ):
         decision.update({
             "accion": "RECHAZAR_CAMPUS",
