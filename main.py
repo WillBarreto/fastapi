@@ -7297,6 +7297,13 @@ async def debug_commercial_context(
         )
     )
 
+    historial_completo = (
+        obtener_historial_completo_contacto(
+            db=db,
+            contact=contact,
+        )
+    )
+
     return {
         "modo": "CONSULTA_AISLADA",
         "solo_lectura": True,
@@ -7334,6 +7341,9 @@ async def debug_commercial_context(
         },
         "contexto_comercial": (
             contexto_comercial
+        ),
+        "historial_completo": (
+            historial_completo
         ),
         "error": "",
     }
