@@ -4168,10 +4168,59 @@ def generar_respuesta_final_estructurada(
                 )
 
         if accion == "RESPONDER_COSTOS":
-            inicio_incompleto_costos = [
+            palabras_costos = [
+                "costo",
+                "costos",
+                "colegiatura",
+                "colegiaturas",
+                "inscripcion",
+                "mensualidad",
+                "precio",
+                "importe",
+                "informacion de costos",
+            ]
+
+            menciona_costos = any(
+                expresion in texto_normalizado
+                for expresion in palabras_costos
+            )
+
+            if not menciona_costos:
+                errores.append(
+                    "NO_RESPONDE_SOBRE_COSTOS"
+                )
+
+            respuestas_saludo_sin_contenido = [
+                "hola",
+                "que gusto saludarte",
+                "mucho gusto",
+                "buenos dias",
+                "buenas tardes",
+                "buenas noches",
+            ]
+
+            solo_saluda = (
+                len(respuesta_limpia.split()) <= 12
+                and any(
+                    expresion in texto_normalizado
+                    for expresion
+                    in respuestas_saludo_sin_contenido
+                )
+                and not menciona_costos
+            )
+
+            if solo_saluda:
+                errores.append(
+                    "RESPUESTA_COSTOS_SOLO_SALUDA"
+                )
+
+            inicios_incompletos_costos = [
                 "claro",
                 "con gusto",
                 "que gusto saludarte claro",
+                "con gusto le comparto",
+                "con gusto te comparto",
+                "informacion sobre nuestra",
             ]
 
             if (
@@ -4180,15 +4229,13 @@ def generar_respuesta_final_estructurada(
                     texto_normalizado.endswith(
                         expresion
                     )
-                    for expresion in (
-                        inicio_incompleto_costos
-                    )
+                    for expresion
+                    in inicios_incompletos_costos
                 )
             ):
                 errores.append(
                     "RESPUESTA_COSTOS_INCOMPLETA"
                 )
-
         return {
             "valida": not errores,
             "respuesta_limpia": (
