@@ -4252,6 +4252,65 @@ async def health_check(db: Session = Depends(get_db)):
 # ENDPOINT AISLADO PARA PROBAR EL FLUJO ESTRUCTURADO
 # ============================================================
 
+class GooglePlacesTestRequest(BaseModel):
+    """
+    Datos permitidos para probar de forma aislada
+    la búsqueda de una localidad en Google Places.
+    """
+    localidad: str
+
+
+@app.post("/debug/google-places")
+def debug_google_places(
+    payload: GooglePlacesTestRequest,
+):
+    """
+    Prueba buscar_localidad_google_places() sin afectar:
+
+    - conversaciones;
+    - contactos;
+    - mensajes;
+    - FLOW_STATE;
+    - tareas de administrador;
+    - webhook productivo.
+    """
+    endpoint_habilitado = (
+        os.getenv(
+            "ENABLE_STRUCTURED_FLOW_TEST_ENDPOINT",
+            "false",
+        )
+        .strip()
+        .lower()
+        in ["true", "1", "yes", "si", "sí"]
+    )
+
+    if not endpoint_habilitado:
+        raise HTTPException(
+            status_code=404,
+            detail="Endpoint de prueba no habilitado.",
+        )
+
+    localidad = str(
+        payload.localidad or ""
+    ).strip()
+
+    if not localidad:
+        raise HTTPException(
+            status_code=400,
+            detail="Debes proporcionar una localidad.",
+        )
+
+    resultado = buscar_localidad_google_places(
+        localidad
+    )
+
+    return {
+        "modo": "PRUEBA_GOOGLE_PLACES",
+        "sin_efectos_secundarios": True,
+        "localidad_recibida": localidad,
+        "resultado": resultado,
+    }
+
 class StructuredFlowTestRequest(BaseModel):
     """
     Datos permitidos para una prueba aislada del nuevo flujo.
