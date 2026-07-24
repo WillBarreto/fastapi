@@ -1166,12 +1166,11 @@ ZONAS_VALIDAS_DIRECTAS = {
     "santa cruz atizapan",
     "santiago tianguistenco",
     "tianguistenco",
-    "santiago",
     "capulhuac",
     "capulhuac de mirafuentes",
     "san pedro tlatizapan",
-    "san padro",
-    "tlaltizapan",
+    "san pedro",
+    "tlatizapan",
     "xalatlaco",
     "almoloya",
     "almoloya del rio",
@@ -1180,6 +1179,10 @@ ZONAS_VALIDAS_DIRECTAS = {
     "almaya",
 }
 
+
+ZONAS_VALIDAS_AMBIGUAS = {
+    "santiago",
+}
 
 ZONAS_VALIDAS_POR_CONECTIVIDAD = {
     "mixicaltzingo",
@@ -1298,6 +1301,64 @@ def texto_contiene_alias_geografico(
 
     return False
 
+def texto_confirma_zona_ambigua(
+    mensaje_usuario: str,
+    zona_mencionada: str,
+    alias: str,
+) -> bool:
+    """
+    Confirma un alias geográfico ambiguo, como "Santiago".
+
+    El alias se acepta cuando:
+    1. Gemini lo extrajo expresamente como zona; o
+    2. Aparece en el mensaje acompañado de una expresión
+       claramente geográfica.
+
+    No se acepta solamente porque aparezca como nombre personal.
+    """
+    mensaje_normalizado = normalizar_texto_geografico(
+        mensaje_usuario
+    )
+
+    zona_normalizada = normalizar_texto_geografico(
+        zona_mencionada
+    )
+
+    alias_normalizado = normalizar_texto_geografico(
+        alias
+    )
+
+    if not alias_normalizado:
+        return False
+
+    if zona_normalizada == alias_normalizado:
+        return True
+
+    patrones_geograficos = [
+        rf"\bsoy de {re.escape(alias_normalizado)}\b",
+        rf"\bsomos de {re.escape(alias_normalizado)}\b",
+        rf"\bvivo en {re.escape(alias_normalizado)}\b",
+        rf"\bvivimos en {re.escape(alias_normalizado)}\b",
+        rf"\bradico en {re.escape(alias_normalizado)}\b",
+        rf"\bradicamos en {re.escape(alias_normalizado)}\b",
+        rf"\bresido en {re.escape(alias_normalizado)}\b",
+        rf"\bresidimos en {re.escape(alias_normalizado)}\b",
+        rf"\bvenimos de {re.escape(alias_normalizado)}\b",
+        rf"\bestoy en {re.escape(alias_normalizado)}\b",
+        rf"\bestamos en {re.escape(alias_normalizado)}\b",
+        rf"\bnuestra zona es {re.escape(alias_normalizado)}\b",
+        rf"\bnuestra localidad es {re.escape(alias_normalizado)}\b",
+        rf"\bnuestra comunidad es {re.escape(alias_normalizado)}\b",
+    ]
+
+    return any(
+        re.search(
+            patron,
+            mensaje_normalizado,
+        )
+        for patron in patrones_geograficos
+    )
+    
 
 def clasificar_zona_determinista(
     mensaje_usuario: str = "",
@@ -1386,6 +1447,19 @@ def clasificar_zona_determinista(
 
         return resultado
 
+    for alias_ambiguo in ZONAS_VALIDAS_AMBIGUAS:
+        if texto_confirma_zona_ambigua(
+            mensaje_usuario=mensaje_usuario,
+            zona_mencionada=zona_mencionada,
+            alias=alias_ambiguo,
+        ):
+            resultado.update({
+                "clasificacion": "ZONA_VALIDA_DIRECTA",
+                "es_zona_validada": True,
+            })
+
+            return resultado
+            
     if texto_contiene_alias_geografico(
         texto_normalizado,
         ZONAS_VALIDAS_POR_CONECTIVIDAD,
