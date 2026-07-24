@@ -7025,6 +7025,170 @@ async def debug_structured_flow(
         "resultado": resultado,
     }
 
+# ============================================================
+# ENDPOINT AISLADO DE CONTEXTO COMERCIAL
+# ============================================================
+
+class CommercialContextTestRequest(BaseModel):
+    """
+    Datos permitidos para consultar el contexto comercial
+    de un contacto existente.
+
+    Este endpoint es exclusivamente de lectura.
+    """
+    phone_number: str
+
+
+@app.post("/debug/commercial-context")
+async def debug_commercial_context(
+    payload: CommercialContextTestRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Construye y devuelve el contexto comercial de un contacto.
+
+    No:
+    - crea contactos;
+    - modifica contactos;
+    - guarda mensajes;
+    - modifica notes;
+    - cambia contact.status;
+    - cambia FLOW_STATE;
+    - realiza commits;
+    - consulta Gemini;
+    - envía mensajes por Twilio;
+    - crea tareas administrativas;
+    - sustituye el webhook productivo.
+    """
+
+    endpoint_habilitado = (
+        os.getenv(
+            "ENABLE_STRUCTURED_FLOW_TEST_ENDPOINT",
+            "false",
+        )
+        .strip()
+        .lower()
+        in ["true", "1", "yes", "si", "sí"]
+    )
+
+    if not endpoint_habilitado:
+        raise HTTPException(
+            status_code=404,
+            detail="Endpoint de prueba no habilitado.",
+        )
+
+    numero_recibido = str(
+        payload.phone_number or ""
+    ).strip()
+
+    if not numero_recibido:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El campo phone_number "
+                "no puede estar vacío."
+            ),
+        )
+
+    variantes_numero = {
+        numero_recibido,
+    }
+
+    if numero_recibido.startswith(
+        "whatsapp:"
+    ):
+        variantes_numero.add(
+            numero_recibido.replace(
+                "whatsapp:",
+                "",
+                1,
+            )
+        )
+
+    else:
+        variantes_numero.add(
+            f"whatsapp:{numero_recibido}"
+        )
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.phone_number.in_(
+                list(variantes_numero)
+            )
+        )
+        .first()
+    )
+
+    if contact is None:
+        return {
+            "modo": "CONSULTA_AISLADA",
+            "solo_lectura": True,
+            "contacto_encontrado": False,
+            "phone_number_recibido": (
+                numero_recibido
+            ),
+            "contexto_comercial": (
+                crear_contexto_comercial_vacio()
+            ),
+            "error": "CONTACTO_NO_ENCONTRADO",
+        }
+
+    total_mensajes_db = (
+        db.query(Message)
+        .filter(
+            Message.contact_id == contact.id
+        )
+        .count()
+    )
+
+    contexto_comercial = (
+        construir_contexto_comercial_desde_contacto(
+            contact
+        )
+    )
+
+    return {
+        "modo": "CONSULTA_AISLADA",
+        "solo_lectura": True,
+        "contacto_encontrado": True,
+        "phone_number_recibido": (
+            numero_recibido
+        ),
+        "contacto": {
+            "id": contact.id,
+            "phone_number": (
+                contact.phone_number
+            ),
+            "status": (
+                contact.status
+            ),
+            "first_contact": (
+                contact.first_contact.isoformat()
+                if contact.first_contact
+                else ""
+            ),
+            "last_contact": (
+                contact.last_contact.isoformat()
+                if contact.last_contact
+                else ""
+            ),
+            "total_messages_registrado": (
+                contact.total_messages
+            ),
+            "total_messages_db": (
+                total_mensajes_db
+            ),
+            "is_competitor": (
+                contact.is_competitor
+            ),
+        },
+        "contexto_comercial": (
+            contexto_comercial
+        ),
+        "error": "",
+    }
+    
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
