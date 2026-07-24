@@ -4964,6 +4964,391 @@ def set_flow_state(contact, estado: str):
     """
     set_note_value(contact, "FLOW_STATE", estado)
 
+def construir_contexto_comercial_desde_contacto(
+    contact,
+) -> Dict[str, Any]:
+    """
+    Construye el contexto comercial y conversacional utilizando
+    únicamente información ya guardada en el contacto.
+
+    Esta función:
+    - no modifica la base de datos;
+    - no realiza commits;
+    - no cambia FLOW_STATE;
+    - no cambia contact.status;
+    - no consulta Gemini;
+    - no genera respuestas;
+    - no elimina información existente.
+    """
+
+    contexto = crear_contexto_comercial_vacio()
+
+    if contact is None:
+        return contexto
+
+    def leer_nota(
+        *claves: str,
+    ) -> str:
+        """
+        Devuelve el primer valor no vacío encontrado entre varias
+        claves compatibles.
+        """
+        for clave in claves:
+            valor = str(
+                get_note_value(
+                    contact,
+                    clave,
+                )
+                or ""
+            ).strip()
+
+            if valor:
+                return valor
+
+        return ""
+
+    def leer_lista_nota(
+        *claves: str,
+    ) -> List[str]:
+        """
+        Lee una lista guardada como JSON, texto separado por comas
+        o texto separado por barras verticales.
+        """
+        valor = leer_nota(*claves)
+
+        if not valor:
+            return []
+
+        try:
+            datos = json.loads(valor)
+
+            if isinstance(datos, list):
+                resultado = []
+
+                for elemento in datos:
+                    texto = str(
+                        elemento or ""
+                    ).strip()
+
+                    if (
+                        texto
+                        and texto not in resultado
+                    ):
+                        resultado.append(texto)
+
+                return resultado
+
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
+            pass
+
+        separador = (
+            "|"
+            if "|" in valor
+            else ","
+        )
+
+        resultado = []
+
+        for elemento in valor.split(separador):
+            texto = str(
+                elemento or ""
+            ).strip()
+
+            if (
+                texto
+                and texto not in resultado
+            ):
+                resultado.append(texto)
+
+        return resultado
+
+    # --------------------------------------------------------
+    # ESTADO COMERCIAL
+    # --------------------------------------------------------
+
+    estado_comercial = str(
+        getattr(
+            contact,
+            "status",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        estado_comercial
+        not in ESTADOS_COMERCIALES_VALIDOS
+    ):
+        estado_comercial = "PROSPECTO_NUEVO"
+
+    contexto[
+        "estado_comercial"
+    ] = estado_comercial
+
+    # --------------------------------------------------------
+    # ETAPA CONVERSACIONAL
+    # --------------------------------------------------------
+
+    etapa_guardada = leer_nota(
+        "ETAPA_CONVERSACIONAL",
+    ).upper()
+
+    if (
+        etapa_guardada
+        in ETAPAS_CONVERSACIONALES_VALIDAS
+    ):
+        etapa_conversacional = etapa_guardada
+
+    else:
+        flow_state_actual = str(
+            get_flow_state(contact)
+            or ""
+        ).strip().upper()
+
+        equivalencias_flow_state = {
+            "SALUDO_INICIAL": "CONTACTO_INICIAL",
+            "ESPERANDO_INTENCION": "REFERENCIA_COLEGIO",
+            "ESPERANDO_REFERENCIA": "REFERENCIA_COLEGIO",
+            "VALIDACION_ZONA": "VALIDACION_ZONA",
+            "VALIDACION_ZONA_OBLIGATORIA": (
+                "VALIDACION_ZONA"
+            ),
+            "ZONA_INVALIDA_POTENCIAL_METEPEC": (
+                "VALIDACION_ZONA"
+            ),
+            "PRESENTACION_VALOR": (
+                "PRESENTACION_VALOR"
+            ),
+            "EXPLICACION_METODO": (
+                "EXPLICACION_METODO"
+            ),
+            "ESPERANDO_AREA_INTERES": (
+                "IDENTIFICACION_INTERES"
+            ),
+            "PROFUNDIZACION_INTERES": (
+                "PROFUNDIZACION_INTERES"
+            ),
+            "INVITACION_CITA": (
+                "INVITACION_VISITA"
+            ),
+            "ESPERANDO_FECHA_CITA": (
+                "NEGOCIACION_CITA"
+            ),
+            "ESPERANDO_HORA_CITA": (
+                "NEGOCIACION_CITA"
+            ),
+            "CONSULTA_ADMIN_PENDIENTE": (
+                "ESPERANDO_CONFIRMACION_ADMIN"
+            ),
+            "ESPERANDO_CONFIRMACION_ADMIN": (
+                "ESPERANDO_CONFIRMACION_ADMIN"
+            ),
+            "ESPERANDO_DATOS_CITA": (
+                "ESPERANDO_DATOS_CITA"
+            ),
+            "CITA_DATOS_COMPLETOS": (
+                "VISITA_CONFIRMADA"
+            ),
+            "VISITA_AGENDADA": (
+                "VISITA_CONFIRMADA"
+            ),
+            "SEGUIMIENTO_ACORDADO": (
+                "SEGUIMIENTO"
+            ),
+        }
+
+        etapa_conversacional = (
+            equivalencias_flow_state.get(
+                flow_state_actual,
+                "CONTACTO_INICIAL",
+            )
+        )
+
+    contexto[
+        "etapa_conversacional"
+    ] = etapa_conversacional
+
+    # --------------------------------------------------------
+    # DATOS DE LA FAMILIA
+    # --------------------------------------------------------
+
+    contexto["nombre_tutor"] = leer_nota(
+        "NOMBRE_TUTOR",
+        "NOMBRE_PADRE",
+        "NOMBRE_MADRE",
+    )
+
+    contexto["zona_interes"] = leer_nota(
+        "ZONA_INTERES",
+        "ZONA",
+    )
+
+    contexto["referencia_colegio"] = leer_nota(
+        "REFERENCIA_COLEGIO",
+        "REFERENCIA",
+    )
+
+    # --------------------------------------------------------
+    # DATOS DEL ALUMNO
+    # --------------------------------------------------------
+
+    nombre_alumno = leer_nota(
+        "NOMBRE_ALUMNO",
+    )
+
+    nivel_interes = leer_nota(
+        "NIVEL_INTERES",
+        "NIVEL",
+    )
+
+    grado_interes = leer_nota(
+        "GRADO_INTERES",
+        "GRADO_SOLICITADO",
+        "ULTIMO_GRADO_CURSADO",
+    )
+
+    edad_alumno = leer_nota(
+        "EDAD_ALUMNO",
+        "EDAD_AL_CORTE",
+    )
+
+    fecha_nacimiento = leer_nota(
+        "FECHA_NACIMIENTO_ISO",
+        "FECHA_NACIMIENTO",
+    )
+
+    if any(
+        [
+            nombre_alumno,
+            nivel_interes,
+            grado_interes,
+            edad_alumno,
+            fecha_nacimiento,
+        ]
+    ):
+        alumno = {
+            "nombre": nombre_alumno,
+            "nivel_interes": nivel_interes,
+            "grado_interes": grado_interes,
+            "edad": edad_alumno,
+            "fecha_nacimiento": fecha_nacimiento,
+        }
+
+        contexto["alumnos"] = [
+            alumno
+        ]
+
+    # --------------------------------------------------------
+    # MEMORIA COMERCIAL YA DISPONIBLE
+    # --------------------------------------------------------
+
+    contexto[
+        "hitos_comerciales"
+    ] = [
+        hito
+        for hito in leer_lista_nota(
+            "HITOS_COMERCIALES",
+        )
+        if hito in HITOS_COMERCIALES_VALIDOS
+    ]
+
+    contexto[
+        "temas_explicados"
+    ] = leer_lista_nota(
+        "TEMAS_EXPLICADOS",
+    )
+
+    contexto[
+        "areas_interes"
+    ] = leer_lista_nota(
+        "AREAS_INTERES",
+        "AREA_INTERES",
+    )
+
+    contexto[
+        "objeciones_detectadas"
+    ] = leer_lista_nota(
+        "OBJECIONES_DETECTADAS",
+        "OBJECIONES",
+    )
+
+    contexto[
+        "resumen_relacion"
+    ] = leer_nota(
+        "RESUMEN_RELACION",
+        "RESUMEN_COMERCIAL",
+    )
+
+    # --------------------------------------------------------
+    # ACTIVIDAD HISTÓRICA DEL CONTACTO
+    # --------------------------------------------------------
+
+    ultima_interaccion = getattr(
+        contact,
+        "last_contact",
+        None,
+    )
+
+    if ultima_interaccion is not None:
+        try:
+            contexto[
+                "fecha_ultima_interaccion"
+            ] = ultima_interaccion.isoformat()
+
+        except AttributeError:
+            contexto[
+                "fecha_ultima_interaccion"
+            ] = str(
+                ultima_interaccion
+            ).strip()
+
+    total_mensajes = getattr(
+        contact,
+        "total_messages",
+        0,
+    )
+
+    try:
+        total_mensajes = int(
+            total_mensajes or 0
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        total_mensajes = 0
+
+    contexto[
+        "historial_completo_disponible"
+    ] = total_mensajes > 0
+
+    # --------------------------------------------------------
+    # VALIDACIÓN FINAL DEL CONTRATO
+    # --------------------------------------------------------
+
+    try:
+        contexto_validado = (
+            ContextoComercialConversacion
+            .model_validate(
+                contexto
+            )
+        )
+
+        return contexto_validado.model_dump()
+
+    except Exception as e:
+        print(
+            "⚠️ Error construyendo contexto comercial: "
+            f"{e}"
+        )
+
+        return crear_contexto_comercial_vacio()
+        
 
 # ============================================================
 # PERSISTENCIA DEL NUEVO FLUJO ESTRUCTURADO
