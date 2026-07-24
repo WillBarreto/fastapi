@@ -231,6 +231,107 @@ def crear_contexto_comercial_vacio() -> Dict[str, Any]:
     """
     return ContextoComercialConversacion().model_dump()
 
+# ============================================================
+# CONTRATO DE MEMORIA HISTÓRICA DE LA CONVERSACIÓN
+# ============================================================
+
+class MemoriaHistoricaConversacion(BaseModel):
+    """
+    Representa la información comercial recuperada a partir
+    del historial completo de una familia.
+
+    Este contrato:
+    - no genera respuestas;
+    - no modifica contactos;
+    - no modifica mensajes;
+    - no cambia FLOW_STATE;
+    - no guarda información;
+    - solamente valida una extracción estructurada.
+    """
+
+    version: str = "1.0"
+
+    nombre_tutor: str = ""
+
+    alumnos: List[Dict[str, Any]] = Field(
+        default_factory=list
+    )
+
+    zona_interes: str = ""
+    referencia_colegio: str = ""
+
+    niveles_interes: List[str] = Field(
+        default_factory=list
+    )
+
+    grados_interes: List[str] = Field(
+        default_factory=list
+    )
+
+    areas_interes: List[str] = Field(
+        default_factory=list
+    )
+
+    temas_explicados: List[str] = Field(
+        default_factory=list
+    )
+
+    objeciones_detectadas: List[str] = Field(
+        default_factory=list
+    )
+
+    hitos_comerciales: List[str] = Field(
+        default_factory=list
+    )
+
+    solicito_costos: bool = False
+    costos_presentados: bool = False
+
+    acepto_visita: bool = False
+    cita_solicitada: bool = False
+    cita_confirmada: bool = False
+
+    fecha_cita_texto: str = ""
+    fecha_cita_iso: str = ""
+
+    hora_cita_texto: str = ""
+    hora_cita_24h: str = ""
+
+    ultimo_mensaje_prospecto: str = ""
+    ultima_respuesta_asistente: str = ""
+
+    etapa_conversacional_sugerida: str = (
+        "CONTACTO_INICIAL"
+    )
+
+    estado_comercial_sugerido: str = (
+        "PROSPECTO_NUEVO"
+    )
+
+    resumen_relacion: str = ""
+
+    datos_confirmados: List[str] = Field(
+        default_factory=list
+    )
+
+    datos_inciertos: List[str] = Field(
+        default_factory=list
+    )
+
+    confianza: float = 0.0
+
+
+def crear_memoria_historica_vacia() -> Dict[str, Any]:
+    """
+    Devuelve una memoria histórica segura y vacía.
+
+    No consulta la base de datos.
+    No llama a Gemini.
+    No modifica contactos.
+    No guarda información.
+    """
+    return MemoriaHistoricaConversacion().model_dump()
+
 class AnalisisMensajeProspecto(BaseModel):
     """
     Contrato interno del análisis estructurado producido por Gemini.
