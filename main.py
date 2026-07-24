@@ -4614,6 +4614,91 @@ def debug_google_places(
         "resultado": resultado,
     }
 
+@app.post("/debug/google-route-by-locality")
+def debug_google_route_by_locality(
+    payload: GooglePlacesTestRequest,
+):
+    """
+    Busca una localidad mediante Google Places y después
+    calcula la ruta en automóvil hasta el colegio.
+
+    Este endpoint no:
+
+    - modifica contactos;
+    - guarda mensajes;
+    - cambia FLOW_STATE;
+    - crea tareas de administrador;
+    - envía mensajes por Twilio;
+    - sustituye el webhook productivo.
+    """
+    endpoint_habilitado = (
+        os.getenv(
+            "ENABLE_STRUCTURED_FLOW_TEST_ENDPOINT",
+            "false",
+        )
+        .strip()
+        .lower()
+        in ["true", "1", "yes", "si", "sí"]
+    )
+
+    if not endpoint_habilitado:
+        raise HTTPException(
+            status_code=404,
+            detail="Endpoint de prueba no habilitado.",
+        )
+
+    localidad = str(
+        payload.localidad or ""
+    ).strip()
+
+    if not localidad:
+        raise HTTPException(
+            status_code=400,
+            detail="Debes proporcionar una localidad.",
+        )
+
+    resultado_places = (
+        buscar_localidad_google_places(
+            localidad
+        )
+    )
+
+    if not resultado_places.get("encontrado"):
+        return {
+            "modo": "PRUEBA_GOOGLE_ROUTE_POR_LOCALIDAD",
+            "sin_efectos_secundarios": True,
+            "localidad_recibida": localidad,
+            "places": resultado_places,
+            "ruta": None,
+            "error": (
+                "No fue posible localizar la localidad "
+                "mediante Google Places."
+            ),
+        }
+
+    latitud = resultado_places.get(
+        "latitud"
+    )
+
+    longitud = resultado_places.get(
+        "longitud"
+    )
+
+    resultado_ruta = calcular_ruta_google_routes(
+        latitud_origen=latitud,
+        longitud_origen=longitud,
+    )
+
+    return {
+        "modo": "PRUEBA_GOOGLE_ROUTE_POR_LOCALIDAD",
+        "sin_efectos_secundarios": True,
+        "localidad_recibida": localidad,
+        "places": resultado_places,
+        "ruta": resultado_ruta,
+        "error": "",
+    }
+
+
 class StructuredFlowTestRequest(BaseModel):
     """
     Datos permitidos para una prueba aislada del nuevo flujo.
