@@ -3486,21 +3486,27 @@ def generar_respuesta_final_estructurada(
     history=None,
 ) -> Dict[str, Any]:
     """
-    Redacta una respuesta conversacional mediante Gemini a partir
-    del análisis, la decisión determinista y el plan de respuesta.
+    Redacta y valida una respuesta conversacional mediante Gemini.
+
+    Si la primera respuesta no cumple las condiciones mínimas:
+    1. realiza un segundo intento con instrucciones reforzadas;
+    2. si vuelve a fallar, utiliza una respuesta segura
+       determinada por Python.
 
     Esta función:
     - no envía mensajes;
     - no modifica la base de datos;
     - no cambia FLOW_STATE;
     - no crea tareas administrativas;
-    - no ejecuta reglas de negocio;
-    - no permite que Gemini altere la decisión tomada por Python.
+    - no altera la decisión tomada por Python.
     """
     resultado = {
         "generada": False,
         "respuesta": "",
         "modelo_usado": "",
+        "intentos": 0,
+        "uso_fallback_seguro": False,
+        "errores_validacion": [],
         "error": "",
     }
 
@@ -3526,6 +3532,38 @@ def generar_respuesta_final_estructurada(
         else {}
     )
 
+    accion = str(
+        decision_segura.get(
+            "accion",
+            "CONTINUAR_CONVERSACION",
+        )
+        or "CONTINUAR_CONVERSACION"
+    ).strip().upper()
+
+    zona_mencionada = str(
+        plan_seguro.get(
+            "zona_mencionada",
+            "",
+        )
+        or analisis_seguro.get(
+            "zona_mencionada",
+            "",
+        )
+        or ""
+    ).strip()
+
+    nivel = str(
+        plan_seguro.get(
+            "nivel",
+            "",
+        )
+        or analisis_seguro.get(
+            "nivel",
+            "",
+        )
+        or ""
+    ).strip()
+
     if not mensaje:
         resultado["error"] = "MENSAJE_USUARIO_VACIO"
         return resultado
@@ -3542,6 +3580,239 @@ def generar_respuesta_final_estructurada(
         return resultado
 
     genai.configure(api_key=api_key)
+
+    def construir_fallback_seguro() -> str:
+        """
+        Devuelve una respuesta segura controlada por Python.
+        """
+        if accion == "CONSULTAR_ADMIN":
+            if zona_mencionada:
+                return (
+                    "Con gusto. Permítame revisar internamente "
+                    f"la atención desde {zona_mencionada}. "
+                    "En cuanto tenga la confirmación, le comparto "
+                    "la información correspondiente."
+                )
+
+            return (
+                "Con gusto. Permítame revisar internamente su "
+                "solicitud. En cuanto tenga la confirmación, "
+                "le comparto la información correspondiente."
+            )
+
+        if accion == "RECHAZAR_CAMPUS":
+            return (
+                "Este canal brinda atención exclusivamente para "
+                "el Colegio Valle de Filadelfia Campus Santa Cruz "
+                "Atizapán."
+            )
+
+        if accion == "PEDIR_ZONA":
+            return (
+                "¿Desde qué localidad o municipio se comunica?"
+            )
+
+        if accion == "RESPONDER_SALUDO":
+            return "¡Hola! Con gusto le atendemos."
+
+        if accion == "PEDIR_FECHA_NACIMIENTO":
+            return (
+                "¿Me comparte, por favor, la fecha de nacimiento "
+                "completa del alumno, incluyendo día, mes y año?"
+            )
+
+        if accion == "PEDIR_FECHA_CITA":
+            return (
+                "¿Qué día de lunes a viernes le gustaría visitar "
+                "el colegio?"
+            )
+
+        if accion == "PEDIR_HORA_CITA":
+            return (
+                "¿En qué horario le gustaría realizar la visita?"
+            )
+
+        if accion == "CITA_DIA_NO_LABORAL":
+            return (
+                "Las visitas se realizan de lunes a viernes. "
+                "¿Qué otro día le resultaría conveniente?"
+            )
+
+        if accion == "SEGUIMIENTO":
+            return (
+                "Con gusto. Puede retomar la conversación cuando "
+                "lo considere conveniente y continuamos apoyándole."
+            )
+
+        if accion == "ORIENTAR_PRE_KINDER":
+            return (
+                "Por la edad del alumno, necesitamos revisar el "
+                "nivel que le correspondería para el próximo ciclo "
+                "escolar."
+            )
+
+        if accion == "RESPONDER_COSTOS":
+            if nivel:
+                return (
+                    "Con gusto le compartimos la información de "
+                    f"costos correspondiente a {nivel}."
+                )
+
+            return (
+                "Con gusto le compartimos la información de costos. "
+                "¿Para qué nivel escolar la requiere?"
+            )
+
+        return (
+            "Con gusto le atendemos. ¿Podría compartirme un poco "
+            "más sobre la información que necesita?"
+        )
+
+    def validar_respuesta_generada(
+        texto: str,
+    ) -> Dict[str, Any]:
+        """
+        Verifica que el texto parezca una respuesta final de WhatsApp
+        y no contenido interno, técnico o incompleto.
+        """
+        respuesta_limpia = str(
+            texto or ""
+        ).strip()
+
+        errores = []
+
+        if not respuesta_limpia:
+            errores.append("RESPUESTA_VACIA")
+
+            return {
+                "valida": False,
+                "respuesta_limpia": "",
+                "errores": errores,
+            }
+
+        if len(respuesta_limpia) < 20:
+            errores.append("RESPUESTA_DEMASIADO_CORTA")
+
+        if len(respuesta_limpia) > 1200:
+            errores.append("RESPUESTA_DEMASIADO_LARGA")
+
+        texto_normalizado = (
+            normalizar_texto_geografico(
+                respuesta_limpia
+            )
+        )
+
+        frases_prohibidas = [
+            "refinar segun reglas",
+            "analisis semantico",
+            "decision obligatoria",
+            "plan obligatorio",
+            "reglas obligatorias",
+            "razonamiento",
+            "respuesta sugerida",
+            "respuesta final",
+            "accion consultar admin",
+            "consultar admin",
+            "zona requiere revision",
+            "zona valida por ruta",
+            "google places",
+            "google routes",
+            "coordenadas",
+            "limite configurado",
+            "distancia por carretera",
+            "como modelo de lenguaje",
+            "no puedo cumplir",
+        ]
+
+        for frase in frases_prohibidas:
+            if frase in texto_normalizado:
+                errores.append(
+                    f"CONTENIDO_INTERNO:{frase}"
+                )
+
+        if "```" in respuesta_limpia:
+            errores.append("BLOQUE_MARKDOWN")
+
+        if re.search(
+            r"^\s*(?:\*+:?|#+|\d+[.)])\s*",
+            respuesta_limpia,
+        ):
+            errores.append(
+                "INICIO_CON_FORMATO_INTERNO"
+            )
+
+        if re.search(
+            r"\n\s*\d+[.)]\s+",
+            respuesta_limpia,
+        ):
+            errores.append(
+                "LISTA_NUMERADA_INTERNA"
+            )
+
+        if (
+            respuesta_limpia.startswith("{")
+            or respuesta_limpia.startswith("[")
+        ):
+            errores.append("FORMATO_JSON_O_LISTA")
+
+        if respuesta_limpia.count("**") >= 2:
+            errores.append("MARKDOWN_EN_RESPUESTA")
+
+        if accion == "CONSULTAR_ADMIN":
+            palabras_requeridas = [
+                "revis",
+                "confirm",
+                "consult",
+            ]
+
+            if not any(
+                palabra in texto_normalizado
+                for palabra in palabras_requeridas
+            ):
+                errores.append(
+                    "NO_COMUNICA_REVISION_INTERNA"
+                )
+
+            palabras_prohibidas_admin = [
+                "costo",
+                "colegiatura",
+                "inscripcion",
+                "mensualidad",
+                "kilometro",
+                "lejos",
+                "fuera de zona",
+                "no podemos atender",
+                "no es posible atender",
+            ]
+
+            for palabra in palabras_prohibidas_admin:
+                if palabra in texto_normalizado:
+                    errores.append(
+                        "INCUMPLE_CONSULTAR_ADMIN:"
+                        f"{palabra}"
+                    )
+
+        if accion == "RECHAZAR_CAMPUS":
+            if (
+                "campus santa cruz" not in texto_normalizado
+                and "santa cruz atizapan"
+                not in texto_normalizado
+            ):
+                errores.append(
+                    "NO_ACLARA_CANAL_SANTA_CRUZ"
+                )
+
+        if accion == "PEDIR_ZONA":
+            if "?" not in respuesta_limpia:
+                errores.append(
+                    "NO_FORMULA_PREGUNTA_DE_ZONA"
+                )
+
+        return {
+            "valida": not errores,
+            "respuesta_limpia": respuesta_limpia,
+            "errores": errores,
+        }
 
     historial_lineas = []
 
@@ -3603,121 +3874,160 @@ def generar_respuesta_final_estructurada(
         indent=2,
     )
 
-    prompt_redaccion = f"""
+    prompt_base = f"""
 Eres el asistente de admisiones del Colegio Valle de Filadelfia,
 Campus Santa Cruz Atizapán.
 
-Debes redactar únicamente la respuesta que se enviaría al prospecto
+Redacta únicamente el mensaje final que se enviaría al prospecto
 por WhatsApp.
 
-MENSAJE ACTUAL DEL PROSPECTO:
+MENSAJE DEL PROSPECTO:
 {mensaje}
 
 HISTORIAL RECIENTE:
 {historial_texto}
 
-ANÁLISIS SEMÁNTICO:
+ANÁLISIS:
 {analisis_json}
 
-DECISIÓN OBLIGATORIA TOMADA POR PYTHON:
+DECISIÓN DEFINITIVA DE PYTHON:
 {decision_json}
 
-PLAN OBLIGATORIO DE RESPUESTA:
+PLAN DE RESPUESTA:
 {plan_json}
 
-REGLAS OBLIGATORIAS:
+INSTRUCCIONES:
 
-1. La decisión de Python es definitiva. No debes modificarla,
-contradecirla ni reinterpretarla.
-
-2. Cumple exactamente el objetivo, "debe_incluir" y
-"no_debe_incluir" del plan de respuesta.
-
-3. No menciones:
-- nombres internos de acciones;
-- clasificaciones del sistema;
-- Google Places;
-- Google Routes;
-- coordenadas;
-- distancias;
-- límites en kilómetros;
-- reglas internas;
-- análisis de inteligencia artificial.
-
-4. No inventes costos, colegiaturas, promociones, fechas,
-disponibilidad, nombres, niveles ni datos institucionales.
-
-5. Cuando el plan permita compartir costos, solo podrás compartirlos
-si esos costos aparecen expresamente en el historial o en los datos
-proporcionados. Si no aparecen, continúa de forma natural sin
-inventarlos.
-
-6. Cuando la acción sea CONSULTAR_ADMIN:
-- informa amablemente que se realizará una revisión interna;
-- no prometas una respuesta inmediata;
-- no rechaces a la familia;
-- no compartas costos;
-- no expliques la distancia ni el motivo técnico.
-
-7. Cuando la acción sea RECHAZAR_CAMPUS:
-- explica únicamente que este canal atiende al Campus Santa Cruz
-  Atizapán;
-- no proporciones datos no confirmados de otros campus;
-- no insistas en vender el Campus Santa Cruz.
-
-8. Mantén un tono cordial, humano, breve y natural.
-
-9. Evita frases robóticas, explicaciones extensas y lenguaje técnico.
-
-10. No uses encabezados como "Respuesta:".
-
-11. Devuelve exclusivamente el texto final para WhatsApp.
-No uses JSON, Markdown ni bloques de código.
+- Respeta la decisión de Python.
+- Cumple el objetivo y las restricciones del plan.
+- Escribe una sola respuesta breve, cordial y natural.
+- No muestres análisis, pasos, listas ni razonamientos.
+- No uses encabezados.
+- No uses Markdown.
+- No uses numeraciones.
+- No menciones acciones o clasificaciones internas.
+- No menciones Google, rutas, coordenadas ni distancias.
+- No inventes costos, fechas, disponibilidad ni datos.
+- Devuelve exclusivamente el texto para WhatsApp.
 """
 
-    try:
-        response, modelo_usado = (
-            generar_con_gemini_con_fallback(
-                prompt_redaccion,
-                generation_config=(
-                    genai.types.GenerationConfig(
-                        max_output_tokens=500,
-                        temperature=0.3,
-                    )
-                ),
-                tarea=(
-                    "redacción de respuesta estructurada"
-                ),
+    ultimo_modelo = ""
+    errores_acumulados = []
+
+    for numero_intento in range(1, 3):
+        resultado["intentos"] = numero_intento
+
+        prompt_intento = prompt_base
+
+        if numero_intento == 2:
+            prompt_intento += """
+
+SEGUNDO INTENTO OBLIGATORIO:
+
+La respuesta anterior fue rechazada porque parecía contenido
+interno, incompleto o con formato incorrecto.
+
+Genera de nuevo una sola respuesta final para WhatsApp.
+
+No escribas pasos.
+No escribas listas.
+No escribas análisis.
+No escribas encabezados.
+No utilices asteriscos, numeración ni Markdown.
+Comienza directamente con el mensaje dirigido a la familia.
+"""
+
+        try:
+            response, modelo_usado = (
+                generar_con_gemini_con_fallback(
+                    prompt_intento,
+                    generation_config=(
+                        genai.types.GenerationConfig(
+                            max_output_tokens=300,
+                            temperature=0.2,
+                        )
+                    ),
+                    tarea=(
+                        "redacción de respuesta "
+                        f"estructurada intento {numero_intento}"
+                    ),
+                )
             )
-        )
 
-        respuesta = extraer_texto_respuesta_gemini(
-            response
-        ).strip()
+            ultimo_modelo = modelo_usado
 
-        if not respuesta:
-            resultado["error"] = (
-                "RESPUESTA_GENERADA_VACIA"
+            respuesta_cruda = (
+                extraer_texto_respuesta_gemini(
+                    response
+                ).strip()
             )
-            return resultado
 
-        resultado.update({
-            "generada": True,
-            "respuesta": respuesta,
-            "modelo_usado": modelo_usado,
-            "error": "",
-        })
+            validacion = validar_respuesta_generada(
+                respuesta_cruda
+            )
 
-        return resultado
+            if validacion["valida"]:
+                resultado.update({
+                    "generada": True,
+                    "respuesta": validacion[
+                        "respuesta_limpia"
+                    ],
+                    "modelo_usado": modelo_usado,
+                    "uso_fallback_seguro": False,
+                    "errores_validacion": (
+                        errores_acumulados
+                    ),
+                    "error": "",
+                })
 
-    except Exception as e:
-        resultado["error"] = (
-            "ERROR_GENERANDO_RESPUESTA: "
-            f"{e}"
-        )
+                return resultado
 
-        return resultado
-        
+            errores_intento = [
+                (
+                    f"INTENTO_{numero_intento}:"
+                    f"{error}"
+                )
+                for error in validacion["errores"]
+            ]
+
+            errores_acumulados.extend(
+                errores_intento
+            )
+
+            print(
+                "⚠️ Respuesta estructurada rechazada: "
+                f"intento={numero_intento}, "
+                f"errores={errores_intento}, "
+                f"respuesta={repr(respuesta_cruda)}"
+            )
+
+        except Exception as e:
+            error_intento = (
+                f"INTENTO_{numero_intento}:"
+                f"ERROR_GENERACION:{e}"
+            )
+
+            errores_acumulados.append(
+                error_intento
+            )
+
+            print(
+                "⚠️ Error generando respuesta "
+                f"estructurada: {error_intento}"
+            )
+
+    respuesta_fallback = construir_fallback_seguro()
+
+    resultado.update({
+        "generada": True,
+        "respuesta": respuesta_fallback,
+        "modelo_usado": ultimo_modelo,
+        "uso_fallback_seguro": True,
+        "errores_validacion": errores_acumulados,
+        "error": "",
+    })
+
+    return resultado        
 
 def procesar_mensaje_prospecto_estructurado(
     mensaje_usuario: str,
