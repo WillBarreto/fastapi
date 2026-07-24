@@ -1170,8 +1170,8 @@ ZONAS_VALIDAS_DIRECTAS = {
     "capulhuac",
     "capulhuac de mirafuentes",
     "san pedro tlatizapan",
-    "san padro"
-    "tlaltizapan"
+    "san padro",
+    "tlaltizapan",
     "xalatlaco",
     "almoloya",
     "almoloya del rio",
