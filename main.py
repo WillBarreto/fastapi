@@ -3088,6 +3088,397 @@ def aplicar_reglas_negocio_estructuradas(
 
     return decision
 
+def construir_plan_respuesta_estructurada(
+    analisis: Dict[str, Any],
+    decision: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Traduce una decisión determinista en instrucciones de redacción.
+
+    Esta función:
+    - no llama a Gemini;
+    - no redacta el mensaje final;
+    - no consulta servicios externos;
+    - no modifica la base de datos;
+    - no envía mensajes;
+    - no crea tareas administrativas.
+    """
+    analisis_seguro = (
+        analisis
+        if isinstance(analisis, dict)
+        else {}
+    )
+
+    decision_segura = (
+        decision
+        if isinstance(decision, dict)
+        else {}
+    )
+
+    accion = str(
+        decision_segura.get(
+            "accion",
+            "CONTINUAR_CONVERSACION",
+        )
+        or "CONTINUAR_CONVERSACION"
+    ).strip().upper()
+
+    datos_detectados = decision_segura.get(
+        "datos_detectados",
+        {},
+    )
+
+    if not isinstance(datos_detectados, dict):
+        datos_detectados = {}
+
+    zona_mencionada = str(
+        analisis_seguro.get(
+            "zona_mencionada",
+            "",
+        )
+        or datos_detectados.get(
+            "zona_mencionada",
+            "",
+        )
+        or ""
+    ).strip()
+
+    nivel = str(
+        analisis_seguro.get(
+            "nivel",
+            "",
+        )
+        or datos_detectados.get(
+            "nivel",
+            "",
+        )
+        or ""
+    ).strip()
+
+    plan = {
+        "accion": accion,
+        "objetivo": (
+            "Continuar la conversación de manera natural."
+        ),
+        "debe_incluir": [],
+        "no_debe_incluir": [
+            "Nombres internos de acciones o clasificaciones.",
+            "Detalles técnicos de Google Places o Google Routes.",
+            "Distancias, coordenadas, límites internos o cálculos.",
+            "Explicaciones sobre reglas internas del sistema.",
+        ],
+        "tono": (
+            "Cordial, natural, breve y orientado a admisiones."
+        ),
+        "requiere_admin": bool(
+            decision_segura.get(
+                "requiere_admin",
+                False,
+            )
+        ),
+        "puede_compartir_costos": bool(
+            decision_segura.get(
+                "puede_compartir_costos",
+                False,
+            )
+        ),
+        "debe_finalizar_conversacion": bool(
+            decision_segura.get(
+                "debe_finalizar_conversacion",
+                False,
+            )
+        ),
+        "zona_mencionada": zona_mencionada,
+        "nivel": nivel,
+    }
+
+    if accion == "RESPONDER_SALUDO":
+        plan.update({
+            "objetivo": (
+                "Responder únicamente el saludo de manera "
+                "natural y contextual."
+            ),
+            "debe_incluir": [
+                "Un saludo acorde con el mensaje recibido.",
+            ],
+        })
+
+        return plan
+
+    if accion == "PEDIR_ZONA":
+        plan.update({
+            "objetivo": (
+                "Solicitar la localidad o municipio desde "
+                "donde se comunica la familia."
+            ),
+            "debe_incluir": [
+                (
+                    "Una pregunta sencilla para conocer la "
+                    "localidad o municipio de la familia."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Costos o colegiaturas antes de validar la zona.",
+                    "Solicitud de dirección exacta, calle o ubicación GPS.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "RESPONDER_COSTOS":
+        plan.update({
+            "objetivo": (
+                "Compartir la información de costos que "
+                "corresponda al nivel solicitado."
+            ),
+            "debe_incluir": [
+                (
+                    "Los costos institucionales correspondientes "
+                    "al nivel, utilizando únicamente la información "
+                    "oficial disponible."
+                ),
+                (
+                    "Una continuación natural de la conversación "
+                    "después de proporcionar los costos."
+                ),
+            ],
+        })
+
+        return plan
+
+    if accion == "CONSULTAR_ADMIN":
+        validacion_google = datos_detectados.get(
+            "validacion_geografica_google",
+            {},
+        )
+
+        if not isinstance(validacion_google, dict):
+            validacion_google = {}
+
+        es_revision_geografica = (
+            validacion_google.get(
+                "clasificacion"
+            )
+            == "ZONA_REQUIERE_REVISION"
+        )
+
+        if es_revision_geografica:
+            plan.update({
+                "objetivo": (
+                    "Informar que se revisará internamente la "
+                    "posibilidad de atender a la familia desde "
+                    "la zona indicada."
+                ),
+                "debe_incluir": [
+                    (
+                        "Una confirmación amable de que se "
+                        "revisará la zona con el equipo del colegio."
+                    ),
+                    (
+                        "Indicar que se dará respuesta en cuanto "
+                        "se tenga la confirmación."
+                    ),
+                ],
+                "no_debe_incluir": (
+                    plan["no_debe_incluir"]
+                    + [
+                        "Rechazar automáticamente a la familia.",
+                        "Compartir costos antes de la revisión.",
+                        "Decir que la familia vive demasiado lejos.",
+                    ]
+                ),
+            })
+
+            return plan
+
+        plan.update({
+            "objetivo": (
+                "Informar que la solicitud debe ser confirmada "
+                "por una persona administradora."
+            ),
+            "debe_incluir": [
+                (
+                    "Una confirmación amable de que se consultará "
+                    "la disponibilidad o solicitud con administración."
+                ),
+                (
+                    "Indicar que se responderá al obtener la confirmación."
+                ),
+            ],
+        })
+
+        return plan
+
+    if accion == "RECHAZAR_CAMPUS":
+        plan.update({
+            "objetivo": (
+                "Explicar amablemente que este canal atiende "
+                "únicamente al Campus Santa Cruz Atizapán."
+            ),
+            "debe_incluir": [
+                (
+                    "Aclarar que la atención de este chat corresponde "
+                    "exclusivamente al Campus Santa Cruz Atizapán."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Insistir en proporcionar información de Santa Cruz.",
+                    "Compartir costos del Campus Santa Cruz.",
+                    "Afirmar información de otros campus que no esté confirmada.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "CITA_DIA_NO_LABORAL":
+        plan.update({
+            "objetivo": (
+                "Explicar que las visitas se realizan de lunes "
+                "a viernes y solicitar otra fecha."
+            ),
+            "debe_incluir": [
+                "Que las visitas se reciben de lunes a viernes.",
+                "Una pregunta para elegir otra fecha.",
+            ],
+        })
+
+        return plan
+
+    if accion == "PEDIR_FECHA_CITA":
+        plan.update({
+            "objetivo": (
+                "Solicitar el día de lunes a viernes en que "
+                "la familia desea visitar el colegio."
+            ),
+            "debe_incluir": [
+                "Una pregunta concreta para conocer la fecha deseada.",
+            ],
+        })
+
+        return plan
+
+    if accion == "PEDIR_HORA_CITA":
+        plan.update({
+            "objetivo": (
+                "Solicitar el horario en que la familia desea "
+                "realizar la visita."
+            ),
+            "debe_incluir": [
+                "Una pregunta concreta para conocer el horario deseado.",
+            ],
+        })
+
+        return plan
+
+    if accion == "PEDIR_FECHA_NACIMIENTO":
+        plan.update({
+            "objetivo": (
+                "Solicitar la fecha de nacimiento completa del alumno."
+            ),
+            "debe_incluir": [
+                (
+                    "Una pregunta para conocer día, mes y año "
+                    "de nacimiento."
+                ),
+            ],
+        })
+
+        return plan
+
+    if accion == "ORIENTAR_PRE_KINDER":
+        plan.update({
+            "objetivo": (
+                "Explicar con sensibilidad que, por la edad del "
+                "alumno, todavía no corresponde a Kínder."
+            ),
+            "debe_incluir": [
+                (
+                    "Una explicación amable basada en la edad "
+                    "al inicio del ciclo escolar."
+                ),
+            ],
+        })
+
+        return plan
+
+    if accion == "SEGUIMIENTO":
+        plan.update({
+            "objetivo": (
+                "Cerrar temporalmente la conversación de forma amable."
+            ),
+            "debe_incluir": [
+                (
+                    "Confirmar que la familia puede retomar "
+                    "la conversación posteriormente."
+                ),
+            ],
+        })
+
+        return plan
+
+    if accion == "FALLBACK_CONVERSACIONAL":
+        plan.update({
+            "objetivo": (
+                "Responder de forma segura y pedir una aclaración breve."
+            ),
+            "debe_incluir": [
+                (
+                    "Una pregunta sencilla para entender qué "
+                    "información necesita la familia."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Inventar datos o asumir la intención del prospecto.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion in [
+        "CONTINUAR_INFORMES",
+        "RESPONDER_TEMA",
+        "INVITAR_CITA",
+        "CONTINUAR_CONVERSACION",
+    ]:
+        plan.update({
+            "objetivo": (
+                "Continuar atendiendo la intención del prospecto "
+                "con información institucional pertinente."
+            ),
+            "debe_incluir": [
+                (
+                    "Una respuesta directa a la solicitud actual "
+                    "y una continuación natural de la conversación."
+                ),
+            ],
+        })
+
+        return plan
+
+    plan.update({
+        "objetivo": (
+            "Continuar la conversación sin inventar información."
+        ),
+        "debe_incluir": [
+            (
+                "Una respuesta coherente con la información "
+                "detectada y la decisión de negocio."
+            ),
+        ],
+    })
+
+    return plan
+    
+
 def procesar_mensaje_prospecto_estructurado(
     mensaje_usuario: str,
     contact=None,
@@ -3178,12 +3569,20 @@ def procesar_mensaje_prospecto_estructurado(
             mensaje_usuario=mensaje,
         )
 
+        plan_respuesta = (
+            construir_plan_respuesta_estructurada(
+                analisis=analisis,
+                decision=decision,
+            )
+        )
+
         resultado = {
             "version": "1.0",
             "flujo": "estructurado",
             "procesado": True,
             "analisis": analisis,
             "decision": decision,
+            "plan_respuesta": plan_respuesta,
             "error": "",
         }
 
