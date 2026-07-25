@@ -1510,13 +1510,10 @@ No agregues explicaciones.
                         genai.types.GenerationConfig(
                             max_output_tokens=4000,
                             temperature=0.0,
-                            response_mime_type=(
-                                "application/json"
-                            ),
                         )
                     ),
                 )
-
+                
                 texto_respuesta = (
                     extraer_texto_respuesta_gemini(
                         response
