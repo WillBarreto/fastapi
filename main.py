@@ -6258,7 +6258,254 @@ def construir_contexto_comercial_desde_contacto(
         )
 
         return crear_contexto_comercial_vacio()
-        
+
+def enriquecer_contexto_comercial_con_memoria(
+    contexto_comercial: Dict[str, Any],
+    resultado_memoria: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Combina el contexto estructurado guardado en el contacto
+    con la memoria histórica recuperada por Gemini.
+
+    Esta función:
+    - no modifica la base de datos;
+    - no modifica contact.notes;
+    - no cambia contact.status;
+    - no cambia FLOW_STATE;
+    - no realiza commits;
+    - no envía mensajes;
+    - no elimina información estructurada existente.
+    """
+
+    if not isinstance(
+        contexto_comercial,
+        dict,
+    ):
+        contexto_base = (
+            crear_contexto_comercial_vacio()
+        )
+    else:
+        contexto_base = dict(
+            contexto_comercial
+        )
+
+    if not isinstance(
+        resultado_memoria,
+        dict,
+    ):
+        return contexto_base
+
+    if not resultado_memoria.get(
+        "exitoso"
+    ):
+        return contexto_base
+
+    memoria = resultado_memoria.get(
+        "memoria"
+    )
+
+    if not isinstance(memoria, dict):
+        return contexto_base
+
+    # --------------------------------------------------------
+    # ETAPA Y ESTADO COMERCIAL
+    # --------------------------------------------------------
+
+    etapa_sugerida = str(
+        memoria.get(
+            "etapa_conversacional_sugerida",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        etapa_sugerida
+        in ETAPAS_CONVERSACIONALES_VALIDAS
+    ):
+        contexto_base[
+            "etapa_conversacional"
+        ] = etapa_sugerida
+
+    estado_sugerido = str(
+        memoria.get(
+            "estado_comercial_sugerido",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        estado_sugerido
+        in ESTADOS_COMERCIALES_VALIDOS
+    ):
+        contexto_base[
+            "estado_comercial"
+        ] = estado_sugerido
+
+    # --------------------------------------------------------
+    # DATOS DE LA FAMILIA
+    # --------------------------------------------------------
+
+    campos_texto_completables = [
+        "nombre_tutor",
+        "zona_interes",
+        "referencia_colegio",
+    ]
+
+    for campo in campos_texto_completables:
+        valor_actual = str(
+            contexto_base.get(
+                campo,
+                "",
+            )
+            or ""
+        ).strip()
+
+        valor_memoria = str(
+            memoria.get(
+                campo,
+                "",
+            )
+            or ""
+        ).strip()
+
+        if (
+            not valor_actual
+            and valor_memoria
+        ):
+            contexto_base[
+                campo
+            ] = valor_memoria
+
+    # --------------------------------------------------------
+    # DATOS DEL ALUMNO
+    # --------------------------------------------------------
+
+    alumnos_actuales = contexto_base.get(
+        "alumnos"
+    )
+
+    alumnos_memoria = memoria.get(
+        "alumnos"
+    )
+
+    if (
+        not alumnos_actuales
+        and isinstance(
+            alumnos_memoria,
+            list,
+        )
+        and alumnos_memoria
+    ):
+        contexto_base[
+            "alumnos"
+        ] = alumnos_memoria
+
+    # --------------------------------------------------------
+    # LISTAS COMERCIALES
+    # --------------------------------------------------------
+
+    equivalencias_listas = {
+        "hitos_comerciales": (
+            "hitos_comerciales"
+        ),
+        "temas_explicados": (
+            "temas_explicados"
+        ),
+        "areas_interes": (
+            "areas_interes"
+        ),
+        "objeciones_detectadas": (
+            "objeciones_detectadas"
+        ),
+    }
+
+    for (
+        campo_contexto,
+        campo_memoria,
+    ) in equivalencias_listas.items():
+        elementos_combinados = []
+
+        for origen in [
+            contexto_base.get(
+                campo_contexto,
+                [],
+            ),
+            memoria.get(
+                campo_memoria,
+                [],
+            ),
+        ]:
+            for elemento in normalizar_lista_textos(
+                origen
+            ):
+                if (
+                    elemento
+                    not in elementos_combinados
+                ):
+                    elementos_combinados.append(
+                        elemento
+                    )
+
+        if campo_contexto == (
+            "hitos_comerciales"
+        ):
+            elementos_combinados = [
+                elemento
+                for elemento
+                in elementos_combinados
+                if elemento
+                in HITOS_COMERCIALES_VALIDOS
+            ]
+
+        contexto_base[
+            campo_contexto
+        ] = elementos_combinados
+
+    # --------------------------------------------------------
+    # RESUMEN DE LA RELACIÓN
+    # --------------------------------------------------------
+
+    resumen_memoria = str(
+        memoria.get(
+            "resumen_relacion",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if resumen_memoria:
+        contexto_base[
+            "resumen_relacion"
+        ] = resumen_memoria
+
+    contexto_base[
+        "historial_completo_disponible"
+    ] = True
+
+    # --------------------------------------------------------
+    # VALIDACIÓN FINAL
+    # --------------------------------------------------------
+
+    try:
+        contexto_validado = (
+            ContextoComercialConversacion
+            .model_validate(
+                contexto_base
+            )
+        )
+
+        return contexto_validado.model_dump()
+
+    except Exception as e:
+        print(
+            "⚠️ Error enriqueciendo contexto "
+            "comercial: "
+            f"{e}"
+        )
+
+        return contexto_comercial
 
 # ============================================================
 # PERSISTENCIA DEL NUEVO FLUJO ESTRUCTURADO
@@ -8225,6 +8472,17 @@ async def debug_commercial_context(
         )
     )
 
+    contexto_comercial_enriquecido = (
+        enriquecer_contexto_comercial_con_memoria(
+            contexto_comercial=(
+                contexto_comercial
+            ),
+            resultado_memoria=(
+                resultado_memoria_historica
+            ),
+        )
+    )
+
     return {
         "modo": "CONSULTA_AISLADA",
         "solo_lectura": True,
@@ -8262,6 +8520,9 @@ async def debug_commercial_context(
         },
         "contexto_comercial": (
             contexto_comercial
+        ),
+        "contexto_comercial_enriquecido": (
+            contexto_comercial_enriquecido
         ),
         "historial_completo": (
             historial_completo
