@@ -1508,7 +1508,7 @@ No agregues explicaciones.
                     prompt_intento,
                     generation_config=(
                         genai.types.GenerationConfig(
-                            max_output_tokens=4000,
+                            max_output_tokens=12000,
                             temperature=0.0,
                         )
                     ),
