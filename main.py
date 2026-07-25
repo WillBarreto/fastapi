@@ -1510,6 +1510,9 @@ No agregues explicaciones.
                         genai.types.GenerationConfig(
                             max_output_tokens=4000,
                             temperature=0.0,
+                            response_mime_type=(
+                                "application/json"
+                            ),
                         )
                     ),
                 )
@@ -1542,12 +1545,22 @@ No agregues explicaciones.
                 )
 
                 if datos_crudos is None:
+                    muestra_respuesta = (
+                        texto_respuesta[:500]
+                        .replace("\n", "\\n")
+                    )
+
+                    print(
+                        "⚠️ Respuesta cruda no válida: "
+                        f"{muestra_respuesta}"
+                    )
+
                     error = (
                         f"{model_name}: "
                         f"intento {numero_intento}: "
                         "JSON_INVALIDO"
                     )
-
+                    
                     resultado_fallo[
                         "errores"
                     ].append(
