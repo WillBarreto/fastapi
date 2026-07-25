@@ -1542,14 +1542,43 @@ No agregues explicaciones.
                 )
 
                 if datos_crudos is None:
-                    muestra_respuesta = (
+                    muestra_inicio = (
                         texto_respuesta[:500]
                         .replace("\n", "\\n")
                     )
 
+                    muestra_final = (
+                        texto_respuesta[-500:]
+                        .replace("\n", "\\n")
+                    )
+
+                    razon_terminacion = ""
+
+                    try:
+                        razon_terminacion = str(
+                            response.candidates[
+                                0
+                            ].finish_reason
+                        )
+                    except Exception:
+                        razon_terminacion = (
+                            "NO_DISPONIBLE"
+                        )
+
                     print(
-                        "⚠️ Respuesta cruda no válida: "
-                        f"{muestra_respuesta}"
+                        "⚠️ JSON histórico no válido | "
+                        f"caracteres={len(texto_respuesta)} | "
+                        f"finish_reason={razon_terminacion}"
+                    )
+
+                    print(
+                        "⚠️ Inicio respuesta: "
+                        f"{muestra_inicio}"
+                    )
+
+                    print(
+                        "⚠️ Final respuesta: "
+                        f"{muestra_final}"
                     )
 
                     error = (
