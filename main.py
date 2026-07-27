@@ -5714,7 +5714,7 @@ Comienza directamente con el mensaje dirigido a la familia.
                     prompt_intento,
                     generation_config=(
                         genai.types.GenerationConfig(
-                            max_output_tokens=300,
+                            max_output_tokens=1300,
                             temperature=0.2,
                         )
                     ),
