@@ -3779,10 +3779,98 @@ def aplicar_reglas_negocio_estructuradas(
 
         return decision
 
-    # ========================================================
-    # 4. PAUSA O CIERRE TEMPORAL
+        # ========================================================
+    # 4. SEGUIMIENTO DE CITA PENDIENTE DE CONFIRMACIÓN
     # ========================================================
 
+    estado_contacto = str(
+        getattr(
+            contact,
+            "status",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    etapa_contacto = ""
+
+    if contact is not None:
+        try:
+            etapa_contacto = str(
+                get_note_value(
+                    contact,
+                    "ETAPA_CONVERSACIONAL",
+                )
+                or get_flow_state(contact)
+                or ""
+            ).strip().upper()
+
+        except Exception:
+            etapa_contacto = ""
+
+    mensaje_seguimiento = (
+        normalizar_texto_geografico(
+            mensaje_usuario
+        )
+    )
+
+    expresiones_confirmacion_pendiente = [
+        "no me confirmaron",
+        "no me han confirmado",
+        "no me confirmo",
+        "no me confirmaron la visita",
+        "sigo esperando confirmacion",
+        "sigo esperando la confirmacion",
+        "quedaron de confirmar",
+        "quedo pendiente la confirmacion",
+        "esta pendiente la confirmacion",
+        "ya no me confirmaron",
+        "aun no me confirman",
+        "todavia no me confirman",
+        "que paso con mi cita",
+        "que paso con la cita",
+        "como quedo mi cita",
+        "como quedo la visita",
+        "me pueden confirmar la cita",
+        "me puede confirmar la visita",
+    ]
+
+    seguimiento_cita_detectado = any(
+        expresion in mensaje_seguimiento
+        for expresion
+        in expresiones_confirmacion_pendiente
+    )
+
+    contexto_cita_pendiente = (
+        estado_contacto
+        == "CITA_PENDIENTE_CONFIRMACION"
+        or etapa_contacto
+        == "ESPERANDO_CONFIRMACION_ADMIN"
+    )
+
+    if (
+        contexto_cita_pendiente
+        and seguimiento_cita_detectado
+    ):
+        decision.update({
+            "accion": "CONSULTAR_ADMIN",
+            "motivo": (
+                "El prospecto está dando seguimiento a una "
+                "visita cuya confirmación administrativa "
+                "continúa pendiente."
+            ),
+            "requiere_admin": True,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        return decision
+
+    # ========================================================
+    # 5. PAUSA O CIERRE TEMPORAL
+    # ========================================================
+
+ 
     if (
     analisis_seguro.get("pausa_conversacion")
         or analisis_seguro.get("intencion_principal")
@@ -3804,7 +3892,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 5. SALUDO SIMPLE
+    # 6. SALUDO SIMPLE
     # ========================================================
 
     if (
@@ -3827,7 +3915,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 6. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
+    # 7. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
     # ========================================================
 
     if (
@@ -3867,7 +3955,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 7. FLUJO DE CITA
+    # 8. FLUJO DE CITA
     # ========================================================
 
     intenciones_cita = {
