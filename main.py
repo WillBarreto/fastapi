@@ -8335,6 +8335,15 @@ async def debug_structured_flow(
 # ENDPOINT AISLADO DE CONTEXTO COMERCIAL
 # ============================================================
 
+class HistoricalFlowSimulationRequest(BaseModel):
+    """
+    Datos permitidos para simular la continuación de una
+    conversación existente mediante el flujo estructurado.
+    """
+
+    phone_number: str
+    message: str
+
 class CommercialContextTestRequest(BaseModel):
     """
     Datos permitidos para consultar el contexto comercial
@@ -8532,7 +8541,525 @@ async def debug_commercial_context(
         ),
         "error": "",
     }
-    
+
+@app.post("/debug/historical-flow-simulation")
+async def debug_historical_flow_simulation(
+    payload: HistoricalFlowSimulationRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Simula la continuación del flujo estructurado utilizando
+    el historial completo y el contexto comercial enriquecido.
+
+    Este endpoint:
+    - no guarda mensajes;
+    - no modifica contactos;
+    - no modifica notes;
+    - no cambia contact.status;
+    - no cambia FLOW_STATE;
+    - no realiza commits;
+    - no envía mensajes por Twilio;
+    - no crea tareas administrativas;
+    - no sustituye el webhook productivo.
+    """
+
+    endpoint_habilitado = (
+        os.getenv(
+            "ENABLE_STRUCTURED_FLOW_TEST_ENDPOINT",
+            "false",
+        )
+        .strip()
+        .lower()
+        in ["true", "1", "yes", "si", "sí"]
+    )
+
+    if not endpoint_habilitado:
+        raise HTTPException(
+            status_code=404,
+            detail="Endpoint de prueba no habilitado.",
+        )
+
+    numero_recibido = str(
+        payload.phone_number or ""
+    ).strip()
+
+    mensaje = str(
+        payload.message or ""
+    ).strip()
+
+    if not numero_recibido:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El campo phone_number "
+                "no puede estar vacío."
+            ),
+        )
+
+    if not mensaje:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El campo message "
+                "no puede estar vacío."
+            ),
+        )
+
+    variantes_numero = {
+        numero_recibido,
+    }
+
+    if numero_recibido.startswith(
+        "whatsapp:"
+    ):
+        variantes_numero.add(
+            numero_recibido.replace(
+                "whatsapp:",
+                "",
+                1,
+            )
+        )
+
+    else:
+        variantes_numero.add(
+            f"whatsapp:{numero_recibido}"
+        )
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.phone_number.in_(
+                list(variantes_numero)
+            )
+        )
+        .first()
+    )
+
+    if contact is None:
+        return {
+            "modo": (
+                "SIMULACION_HISTORICA_AISLADA"
+            ),
+            "solo_lectura": True,
+            "contacto_encontrado": False,
+            "phone_number_recibido": (
+                numero_recibido
+            ),
+            "mensaje_simulado": mensaje,
+            "error": "CONTACTO_NO_ENCONTRADO",
+        }
+
+    # --------------------------------------------------------
+    # HISTORIAL COMPLETO
+    # --------------------------------------------------------
+
+    historial_completo = (
+        obtener_historial_completo_contacto(
+            db=db,
+            contact=contact,
+        )
+    )
+
+    # --------------------------------------------------------
+    # CONTEXTO GUARDADO EN EL CONTACTO
+    # --------------------------------------------------------
+
+    contexto_comercial = (
+        construir_contexto_comercial_desde_contacto(
+            contact
+        )
+    )
+
+    # --------------------------------------------------------
+    # MEMORIA HISTÓRICA
+    # --------------------------------------------------------
+
+    resultado_memoria_historica = (
+        extraer_memoria_historica_con_ia(
+            texto_conversacion=(
+                historial_completo.get(
+                    "texto_conversacion",
+                    "",
+                )
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # CONTEXTO ENRIQUECIDO
+    # --------------------------------------------------------
+
+    contexto_enriquecido = (
+        enriquecer_contexto_comercial_con_memoria(
+            contexto_comercial=(
+                contexto_comercial
+            ),
+            resultado_memoria=(
+                resultado_memoria_historica
+            ),
+        )
+    )
+
+    # --------------------------------------------------------
+    # CONTACTO VIRTUAL DE SIMULACIÓN
+    # --------------------------------------------------------
+
+    class ContactoSimulacion:
+        """
+        Réplica temporal y no persistente del contacto.
+
+        get_note_value() y get_flow_state() pueden leerla como
+        si fuera un contacto real, pero no está asociada a la
+        sesión de SQLAlchemy.
+        """
+
+        pass
+
+    contacto_simulacion = ContactoSimulacion()
+
+    contacto_simulacion.id = contact.id
+    contacto_simulacion.phone_number = (
+        contact.phone_number
+    )
+
+    contacto_simulacion.status = str(
+        contexto_enriquecido.get(
+            "estado_comercial",
+            "PROSPECTO_NUEVO",
+        )
+        or "PROSPECTO_NUEVO"
+    ).strip()
+
+    contacto_simulacion.total_messages = (
+        contact.total_messages
+    )
+
+    contacto_simulacion.first_contact = (
+        contact.first_contact
+    )
+
+    contacto_simulacion.last_contact = (
+        contact.last_contact
+    )
+
+    contacto_simulacion.is_competitor = (
+        contact.is_competitor
+    )
+
+    notas_simulacion = []
+
+    etapa_enriquecida = str(
+        contexto_enriquecido.get(
+            "etapa_conversacional",
+            "CONTACTO_INICIAL",
+        )
+        or "CONTACTO_INICIAL"
+    ).strip()
+
+    notas_simulacion.append(
+        "FLOW_STATE:"
+        f"{etapa_enriquecida}"
+    )
+
+    notas_simulacion.append(
+        "ETAPA_CONVERSACIONAL:"
+        f"{etapa_enriquecida}"
+    )
+
+    zona_interes = str(
+        contexto_enriquecido.get(
+            "zona_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if zona_interes:
+        notas_simulacion.append(
+            f"ZONA_INTERES:{zona_interes}"
+        )
+
+    alumnos = contexto_enriquecido.get(
+        "alumnos"
+    )
+
+    if not isinstance(alumnos, list):
+        alumnos = []
+
+    primer_alumno = (
+        alumnos[0]
+        if alumnos
+        and isinstance(
+            alumnos[0],
+            dict,
+        )
+        else {}
+    )
+
+    nivel_interes = str(
+        primer_alumno.get(
+            "nivel_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if nivel_interes:
+        notas_simulacion.append(
+            f"NIVEL_INTERES:{nivel_interes}"
+        )
+
+    nombre_alumno = str(
+        primer_alumno.get(
+            "nombre",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if nombre_alumno:
+        notas_simulacion.append(
+            f"NOMBRE_ALUMNO:{nombre_alumno}"
+        )
+
+    grado_interes = str(
+        primer_alumno.get(
+            "grado_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if grado_interes:
+        notas_simulacion.append(
+            f"GRADO_INTERES:{grado_interes}"
+        )
+
+    nombre_tutor = str(
+        contexto_enriquecido.get(
+            "nombre_tutor",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if nombre_tutor:
+        notas_simulacion.append(
+            f"NOMBRE_TUTOR:{nombre_tutor}"
+        )
+
+    referencia_colegio = str(
+        contexto_enriquecido.get(
+            "referencia_colegio",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if referencia_colegio:
+        notas_simulacion.append(
+            "REFERENCIA_COLEGIO:"
+            f"{referencia_colegio}"
+        )
+
+    for (
+        clave_nota,
+        campo_contexto,
+    ) in [
+        (
+            "HITOS_COMERCIALES",
+            "hitos_comerciales",
+        ),
+        (
+            "TEMAS_EXPLICADOS",
+            "temas_explicados",
+        ),
+        (
+            "AREAS_INTERES",
+            "areas_interes",
+        ),
+        (
+            "OBJECIONES_DETECTADAS",
+            "objeciones_detectadas",
+        ),
+    ]:
+        valores = normalizar_lista_textos(
+            contexto_enriquecido.get(
+                campo_contexto,
+                [],
+            )
+        )
+
+        if valores:
+            valores_json = json.dumps(
+                valores,
+                ensure_ascii=False,
+            )
+
+            notas_simulacion.append(
+                f"{clave_nota}:{valores_json}"
+            )
+
+    resumen_relacion = str(
+        contexto_enriquecido.get(
+            "resumen_relacion",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if resumen_relacion:
+        notas_simulacion.append(
+            "RESUMEN_RELACION:"
+            f"{resumen_relacion}"
+        )
+
+    memoria = (
+        resultado_memoria_historica.get(
+            "memoria",
+            {},
+        )
+        if isinstance(
+            resultado_memoria_historica,
+            dict,
+        )
+        else {}
+    )
+
+    if not isinstance(memoria, dict):
+        memoria = {}
+
+    fecha_cita_texto = str(
+        memoria.get(
+            "fecha_cita_texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if fecha_cita_texto:
+        notas_simulacion.append(
+            "FECHA_CITA_TEXTO:"
+            f"{fecha_cita_texto}"
+        )
+
+    fecha_cita_iso = str(
+        memoria.get(
+            "fecha_cita_iso",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if fecha_cita_iso:
+        notas_simulacion.append(
+            f"FECHA_CITA_ISO:{fecha_cita_iso}"
+        )
+
+    hora_cita_texto = str(
+        memoria.get(
+            "hora_cita_texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if hora_cita_texto:
+        notas_simulacion.append(
+            "HORA_CITA_TEXTO:"
+            f"{hora_cita_texto}"
+        )
+
+    hora_cita_24h = str(
+        memoria.get(
+            "hora_cita_24h",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if hora_cita_24h:
+        notas_simulacion.append(
+            f"HORA_CITA_24H:{hora_cita_24h}"
+        )
+
+    contacto_simulacion.notes = "\n".join(
+        notas_simulacion
+    )
+
+    # --------------------------------------------------------
+    # HISTORIAL PARA EL ORQUESTADOR
+    # --------------------------------------------------------
+
+    history = (
+        db.query(Message)
+        .filter(
+            Message.contact_id == contact.id
+        )
+        .order_by(
+            Message.timestamp.asc()
+        )
+        .all()
+    )
+
+    # --------------------------------------------------------
+    # SIMULACIÓN DEL ORQUESTADOR
+    # --------------------------------------------------------
+
+    resultado_orquestador = (
+        procesar_mensaje_prospecto_estructurado(
+            mensaje_usuario=mensaje,
+            contact=contacto_simulacion,
+            history=history,
+        )
+    )
+
+    return {
+        "modo": (
+            "SIMULACION_HISTORICA_AISLADA"
+        ),
+        "solo_lectura": True,
+        "contacto_encontrado": True,
+        "phone_number_recibido": (
+            numero_recibido
+        ),
+        "mensaje_simulado": mensaje,
+        "contacto_real_sin_modificar": {
+            "id": contact.id,
+            "phone_number": (
+                contact.phone_number
+            ),
+            "status": contact.status,
+            "notes": contact.notes,
+            "total_messages": (
+                contact.total_messages
+            ),
+        },
+        "historial_completo": (
+            historial_completo
+        ),
+        "memoria_historica_ia": (
+            resultado_memoria_historica
+        ),
+        "contexto_comercial_original": (
+            contexto_comercial
+        ),
+        "contexto_comercial_enriquecido": (
+            contexto_enriquecido
+        ),
+        "contacto_virtual": {
+            "status": (
+                contacto_simulacion.status
+            ),
+            "notes": (
+                contacto_simulacion.notes
+            ),
+        },
+        "resultado_orquestador": (
+            resultado_orquestador
+        ),
+        "error": "",
+    }
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
