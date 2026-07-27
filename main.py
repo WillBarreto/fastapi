@@ -9407,6 +9407,118 @@ async def debug_historical_flow_simulation(
         "error": "",
     }
 
+class DebugStructuredAdminEscalationRequest(BaseModel):
+    phone_number: str
+    message: str
+
+
+@app.post("/debug/structured-admin-escalation")
+async def debug_structured_admin_escalation(
+    payload: DebugStructuredAdminEscalationRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Evalúa el puente de escalación administrativa sin crear tareas,
+    sin enviar WhatsApp y sin modificar al contacto.
+    """
+
+    numero_recibido = str(
+        payload.phone_number or ""
+    ).strip()
+
+    mensaje = str(
+        payload.message or ""
+    ).strip()
+
+    if not numero_recibido:
+        return {
+            "modo": "DIAGNOSTICO_ESCALACION_ADMIN",
+            "solo_lectura": True,
+            "error": "PHONE_NUMBER_REQUERIDO",
+        }
+
+    if not mensaje:
+        return {
+            "modo": "DIAGNOSTICO_ESCALACION_ADMIN",
+            "solo_lectura": True,
+            "error": "MESSAGE_REQUERIDO",
+        }
+
+    numero_limpio = normalizar_numero_whatsapp(
+        numero_recibido
+    )
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.phone_number == numero_limpio
+        )
+        .first()
+    )
+
+    if contact is None:
+        return {
+            "modo": "DIAGNOSTICO_ESCALACION_ADMIN",
+            "solo_lectura": True,
+            "contacto_encontrado": False,
+            "phone_number_recibido": numero_recibido,
+            "error": "CONTACTO_NO_ENCONTRADO",
+        }
+
+    history = (
+        db.query(Message)
+        .filter(
+            Message.contact_id == contact.id
+        )
+        .order_by(
+            Message.timestamp.asc()
+        )
+        .all()
+    )
+
+    resultado_orquestador = (
+        procesar_mensaje_prospecto_estructurado(
+            mensaje_usuario=mensaje,
+            contact=contact,
+            history=history,
+        )
+    )
+
+    respuesta_bot = str(
+        resultado_orquestador.get(
+            "respuesta_generada",
+            "",
+        )
+        or ""
+    ).strip()
+
+    resultado_escalacion = (
+        procesar_escalacion_admin_estructurada(
+            db=db,
+            contact=contact,
+            mensaje_usuario=mensaje,
+            respuesta_bot=respuesta_bot,
+            resultado_orquestador=resultado_orquestador,
+            ejecutar_envio=False,
+        )
+    )
+
+    return {
+        "modo": "DIAGNOSTICO_ESCALACION_ADMIN",
+        "solo_lectura": True,
+        "contacto_encontrado": True,
+        "phone_number_recibido": numero_recibido,
+        "mensaje_simulado": mensaje,
+        "resultado_orquestador": (
+            resultado_orquestador
+        ),
+        "escalacion_admin": (
+            resultado_escalacion
+        ),
+        "error": "",
+    }
+    
+
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
