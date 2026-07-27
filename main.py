@@ -3901,8 +3901,8 @@ def aplicar_reglas_negocio_estructuradas(
 
         return decision
 
-        # ========================================================
-    # 4. SEGUIMIENTO DE CITA PENDIENTE DE CONFIRMACIÓN
+    # ========================================================
+    # 4. SEGUIMIENTO CONTEXTUAL DE CITA PENDIENTE
     # ========================================================
 
     estado_contacto = str(
@@ -3930,64 +3930,88 @@ def aplicar_reglas_negocio_estructuradas(
         except Exception:
             etapa_contacto = ""
 
-    mensaje_seguimiento = (
-        normalizar_texto_geografico(
-            mensaje_usuario
-        )
-    )
-
-    expresiones_confirmacion_pendiente = [
-        "no me confirmaron",
-        "no me han confirmado",
-        "no me confirmo",
-        "no me confirmaron la visita",
-        "sigo esperando confirmacion",
-        "sigo esperando la confirmacion",
-        "quedaron de confirmar",
-        "quedo pendiente la confirmacion",
-        "esta pendiente la confirmacion",
-        "ya no me confirmaron",
-        "aun no me confirman",
-        "todavia no me confirman",
-        "que paso con mi cita",
-        "que paso con la cita",
-        "como quedo mi cita",
-        "como quedo la visita",
-        "me pueden confirmar la cita",
-        "me puede confirmar la visita",
-    ]
-
-    seguimiento_cita_detectado = any(
-        expresion in mensaje_seguimiento
-        for expresion
-        in expresiones_confirmacion_pendiente
-    )
-
-    contexto_cita_pendiente = (
+    contexto_cita_pendiente_determinista = (
         estado_contacto
         == "CITA_PENDIENTE_CONFIRMACION"
         or etapa_contacto
         == "ESPERANDO_CONFIRMACION_ADMIN"
     )
 
+    contexto_cita_pendiente_ia = bool(
+        analisis.get(
+            "contexto_cita_pendiente_reconocido",
+            False,
+        )
+    )
+
+    seguimiento_cita_ia = bool(
+        analisis.get(
+            "seguimiento_cita",
+            False,
+        )
+    )
+
+    solicitud_confirmacion_cita_ia = bool(
+        analisis.get(
+            "solicitud_confirmacion_cita",
+            False,
+        )
+    )
+
+    requiere_admin_contextual = bool(
+        analisis.get(
+            "requiere_admin_contextual",
+            False,
+        )
+    )
+
+    seguimiento_contextual_detectado = (
+        seguimiento_cita_ia
+        or solicitud_confirmacion_cita_ia
+    )
+
+    contexto_cita_pendiente = (
+        contexto_cita_pendiente_determinista
+        or contexto_cita_pendiente_ia
+    )
+
     if (
         contexto_cita_pendiente
-        and seguimiento_cita_detectado
+        and seguimiento_contextual_detectado
+        and requiere_admin_contextual
     ):
         decision.update({
             "accion": "CONSULTAR_ADMIN",
             "motivo": (
-                "El prospecto está dando seguimiento a una "
-                "visita cuya confirmación administrativa "
-                "continúa pendiente."
+                "La IA reconoció que el prospecto está "
+                "dando seguimiento a una visita cuya "
+                "confirmación administrativa continúa "
+                "pendiente."
             ),
             "requiere_admin": True,
             "puede_compartir_costos": zona_validada,
             "debe_finalizar_conversacion": False,
         })
 
-        return decision
+        decision["datos_detectados"].update({
+            "contexto_cita_pendiente_determinista": (
+                contexto_cita_pendiente_determinista
+            ),
+            "contexto_cita_pendiente_ia": (
+                contexto_cita_pendiente_ia
+            ),
+            "seguimiento_cita_ia": (
+                seguimiento_cita_ia
+            ),
+            "solicitud_confirmacion_cita_ia": (
+                solicitud_confirmacion_cita_ia
+            ),
+            "requiere_admin_contextual": (
+                requiere_admin_contextual
+            ),
+        })
 
+        return decision
     # ========================================================
     # 5. PAUSA O CIERRE TEMPORAL
     # ========================================================
