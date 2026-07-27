@@ -9476,6 +9476,22 @@ async def debug_structured_admin_escalation(
         .all()
     )
 
+    historial_completo = (
+        obtener_historial_completo_contacto(
+            db=db,
+            contact=contact,
+        )
+    )
+
+    resultado_memoria_historica = (
+        extraer_memoria_historica_con_ia(
+            historial_completo.get(
+                "texto_conversacion",
+                "",
+            )
+        )
+    )
+
     resultado_orquestador = (
         procesar_mensaje_prospecto_estructurado(
             mensaje_usuario=mensaje,
@@ -9499,6 +9515,9 @@ async def debug_structured_admin_escalation(
             mensaje_usuario=mensaje,
             respuesta_bot=respuesta_bot,
             resultado_orquestador=resultado_orquestador,
+            memoria_historica=(
+                resultado_memoria_historica
+            ),
             ejecutar_envio=False,
         )
     )
@@ -10147,6 +10166,7 @@ def procesar_escalacion_admin_estructurada(
     mensaje_usuario: str,
     respuesta_bot: str,
     resultado_orquestador: Dict[str, Any],
+    memoria_historica: Optional[Dict[str, Any]] = None,
     ejecutar_envio: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -10207,6 +10227,20 @@ def procesar_escalacion_admin_estructurada(
         )
     )
 
+    if not isinstance(memoria_historica, dict):
+        memoria_historica = {}
+
+    if isinstance(
+        memoria_historica.get("memoria"),
+        dict,
+    ):
+        memoria_cita = memoria_historica.get(
+            "memoria",
+            {},
+        )
+    else:
+        memoria_cita = memoria_historica
+
     accion = str(
         decision.get(
             "accion",
@@ -10241,6 +10275,30 @@ def procesar_escalacion_admin_estructurada(
             "",
         )
         or analisis.get(
+            "hora_cita_texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    fecha_cita_memoria = str(
+        memoria_cita.get(
+            "fecha_cita_iso",
+            "",
+        )
+        or memoria_cita.get(
+            "fecha_cita_texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    hora_cita_memoria = str(
+        memoria_cita.get(
+            "hora_cita_24h",
+            "",
+        )
+        or memoria_cita.get(
             "hora_cita_texto",
             "",
         )
@@ -10292,10 +10350,12 @@ def procesar_escalacion_admin_estructurada(
         "motivo": motivo,
         "fecha_cita": (
             fecha_cita_analisis
+            or fecha_cita_memoria
             or fecha_cita_contacto
         ),
         "hora_cita": (
             hora_cita_analisis
+            or hora_cita_memoria
             or hora_cita_contacto
         ),
     })
