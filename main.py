@@ -4523,6 +4523,90 @@ def construir_plan_respuesta_estructurada(
 
             return plan
 
+        motivo_decision = str(
+            decision_segura.get(
+                "motivo",
+                "",
+            )
+            or ""
+        ).strip()
+
+        motivo_normalizado = (
+            normalizar_texto_geografico(
+                motivo_decision
+            )
+        )
+
+        es_seguimiento_cita_pendiente = (
+            "visita" in motivo_normalizado
+            and "confirmacion" in motivo_normalizado
+            and "pendiente" in motivo_normalizado
+        )
+
+        if es_seguimiento_cita_pendiente:
+            plan.update({
+                "objetivo": (
+                    "Responder al seguimiento de una familia que "
+                    "continúa esperando la confirmación administrativa "
+                    "de su visita."
+                ),
+                "debe_incluir": [
+                    (
+                        "Reconocer que la familia ya estaba esperando "
+                        "la confirmación de su visita."
+                    ),
+                    (
+                        "Ofrecer una disculpa breve y sincera por "
+                        "la demora."
+                    ),
+                    (
+                        "Indicar claramente que la visita continúa "
+                        "pendiente de confirmación."
+                    ),
+                    (
+                        "Explicar que se consultará nuevamente con "
+                        "administración."
+                    ),
+                    (
+                        "Indicar que se responderá en cuanto se obtenga "
+                        "la confirmación."
+                    ),
+                ],
+                "no_debe_incluir": (
+                    plan["no_debe_incluir"]
+                    + [
+                        (
+                            "Pedir que el prospecto vuelva a explicar "
+                            "qué información necesita."
+                        ),
+                        (
+                            "Volver a preguntar zona, nivel educativo "
+                            "o área de interés."
+                        ),
+                        (
+                            "Volver a solicitar el día y la hora "
+                            "de la visita."
+                        ),
+                        (
+                            "Hablar de costos, colegiaturas, inscripción "
+                            "o formas de pago."
+                        ),
+                        (
+                            "Presentar la visita como una solicitud nueva."
+                        ),
+                        (
+                            "Afirmar que la visita ya está confirmada."
+                        ),
+                    ]
+                ),
+                "tono": (
+                    "Cordial, empático, breve y responsable. "
+                    "Debe reconocer la demora sin justificarla."
+                ),
+            })
+
+            return plan
+
         plan.update({
             "objetivo": (
                 "Informar que la solicitud debe ser confirmada "
@@ -4540,7 +4624,7 @@ def construir_plan_respuesta_estructurada(
         })
 
         return plan
-
+        
     if accion == "RECHAZAR_CAMPUS":
         plan.update({
             "objetivo": (
