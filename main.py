@@ -10029,6 +10029,171 @@ def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     except Exception as e:
         return f"❌ Error Twilio: {str(e)}"
 
+def procesar_escalacion_admin_estructurada(
+    db: Session,
+    contact,
+    mensaje_usuario: str,
+    respuesta_bot: str,
+    resultado_orquestador: Dict[str, Any],
+    ejecutar_envio: bool = False,
+) -> Dict[str, Any]:
+    """
+    Prepara o ejecuta una escalación administrativa originada
+    por el nuevo flujo estructurado.
+
+    Cuando ejecutar_envio=False:
+    - no crea tareas;
+    - no envía WhatsApp;
+    - no modifica el contacto;
+    - solamente devuelve el diagnóstico.
+
+    Cuando ejecutar_envio=True:
+    - crea o reutiliza una tarea pendiente;
+    - envía la alerta al WhatsApp administrador.
+
+    Esta función no debe utilizarse desde endpoints de simulación
+    con ejecutar_envio=True.
+    """
+
+    resultado = {
+        "requiere_escalacion": False,
+        "ejecutada": False,
+        "tarea_id": None,
+        "alerta_admin": "",
+        "motivo": "",
+        "accion": "",
+        "fecha_cita": "",
+        "hora_cita": "",
+        "error": "",
+    }
+
+    if not isinstance(resultado_orquestador, dict):
+        resultado["error"] = "RESULTADO_ORQUESTADOR_INVALIDO"
+        return resultado
+
+    decision = resultado_orquestador.get(
+        "decision",
+        {},
+    )
+
+    analisis = resultado_orquestador.get(
+        "analisis",
+        {},
+    )
+
+    if not isinstance(decision, dict):
+        resultado["error"] = "DECISION_ESTRUCTURADA_INVALIDA"
+        return resultado
+
+    if not isinstance(analisis, dict):
+        analisis = {}
+
+    requiere_admin = bool(
+        decision.get(
+            "requiere_admin",
+            False,
+        )
+    )
+
+    accion = str(
+        decision.get(
+            "accion",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    motivo = str(
+        decision.get(
+            "motivo",
+            "",
+        )
+        or ""
+    ).strip()
+
+    resultado.update({
+        "requiere_escalacion": requiere_admin,
+        "accion": accion,
+        "motivo": motivo,
+        "fecha_cita": (
+            str(
+                analisis.get(
+                    "fecha_cita_iso",
+                    "",
+                )
+                or analisis.get(
+                    "fecha_cita_texto",
+                    "",
+                )
+                or ""
+            ).strip()
+        ),
+        "hora_cita": (
+            str(
+                analisis.get(
+                    "hora_cita_24h",
+                    "",
+                )
+                or analisis.get(
+                    "hora_cita_texto",
+                    "",
+                )
+                or ""
+            ).strip()
+        ),
+    })
+
+    if not requiere_admin:
+        return resultado
+
+    if contact is None:
+        resultado["error"] = "CONTACTO_NO_DISPONIBLE"
+        return resultado
+
+    if not ejecutar_envio:
+        return resultado
+
+    try:
+        tarea_admin = crear_tarea_admin_pendiente(
+            db=db,
+            contact=contact,
+            mensaje_usuario=mensaje_usuario,
+            respuesta_bot=respuesta_bot,
+        )
+
+        resultado["tarea_id"] = getattr(
+            tarea_admin,
+            "id",
+            None,
+        )
+
+        resultado_alerta = enviar_alerta_admin_whatsapp(
+            contact=contact,
+            mensaje_usuario=mensaje_usuario,
+            respuesta_bot=respuesta_bot,
+            tarea_id=resultado["tarea_id"],
+        )
+
+        resultado.update({
+            "ejecutada": True,
+            "alerta_admin": resultado_alerta,
+            "error": "",
+        })
+
+        return resultado
+
+    except Exception as e:
+        db.rollback()
+
+        print(
+            "⚠️ Error procesando escalación "
+            f"administrativa estructurada: {e}"
+        )
+
+        resultado["error"] = str(e)
+        return resultado
+        
+
 def crear_tarea_admin_pendiente(db: Session, contact, mensaje_usuario: str, respuesta_bot: str):
     """
     Crea una tarea pendiente para que el administrador pueda responder
