@@ -372,8 +372,18 @@ class AnalisisMensajeProspecto(BaseModel):
     pide_costos: bool = False
     pide_cita: bool = False
 
-    fecha_cita_texto: str = ""
-    hora_cita_texto: str = ""
+    seguimiento_cita: bool = False
+    solicitud_confirmacion_cita: bool = False
+    cambio_fecha_cita: bool = False
+    cancelacion_cita: bool = False
+    desistimiento_temporal: bool = False
+    asume_cita_confirmada: bool = False
+    pregunta_paralela: bool = False
+    reclamo_demora: bool = False
+    contexto_cita_pendiente_reconocido: bool = False
+    requiere_admin_contextual: bool = False
+
+    fecha_cita_texto: str = ""    hora_cita_texto: str = ""
     fecha_cita_iso: str = ""
     hora_cita_24h: str = ""
     dia_no_laboral: bool = False
@@ -654,6 +664,45 @@ def normalizar_analisis_mensaje_ia(
         ),
         "pide_cita": normalizar_booleano(
             datos_crudos.get("pide_cita")
+        ),
+
+        "seguimiento_cita": normalizar_booleano(
+            datos_crudos.get("seguimiento_cita")
+        ),
+        "solicitud_confirmacion_cita": normalizar_booleano(
+            datos_crudos.get(
+                "solicitud_confirmacion_cita"
+            )
+        ),
+        "cambio_fecha_cita": normalizar_booleano(
+            datos_crudos.get("cambio_fecha_cita")
+        ),
+        "cancelacion_cita": normalizar_booleano(
+            datos_crudos.get("cancelacion_cita")
+        ),
+        "desistimiento_temporal": normalizar_booleano(
+            datos_crudos.get("desistimiento_temporal")
+        ),
+        "asume_cita_confirmada": normalizar_booleano(
+            datos_crudos.get("asume_cita_confirmada")
+        ),
+        "pregunta_paralela": normalizar_booleano(
+            datos_crudos.get("pregunta_paralela")
+        ),
+        "reclamo_demora": normalizar_booleano(
+            datos_crudos.get("reclamo_demora")
+        ),
+        "contexto_cita_pendiente_reconocido": (
+            normalizar_booleano(
+                datos_crudos.get(
+                    "contexto_cita_pendiente_reconocido"
+                )
+            )
+        ),
+        "requiere_admin_contextual": normalizar_booleano(
+            datos_crudos.get(
+                "requiere_admin_contextual"
+            )
         ),
 
         "fecha_cita_texto": str(
@@ -2086,15 +2135,87 @@ las demás en "intenciones_secundarias".
 6. Si pregunta costo, colegiatura, inscripción o precio:
 "pide_costos": true
 
-7. Si pide visitar, conocer, agendar o tener una cita:
+7. Si pide visitar, conocer, agendar o tener una cita nueva:
 "pide_cita": true
 
-8. Si menciona una fecha relativa como hoy, mañana o un día de la
-semana:
-- conserva la frase original en "fecha_cita_texto"
-- conviértela a YYYY-MM-DD en "fecha_cita_iso"
+8. Debes interpretar el mensaje actual como continuación de la
+conversación, no como un mensaje aislado.
 
-9. Si menciona una hora:
+Usa conjuntamente:
+
+- el estado conversacional actual;
+- el estatus comercial;
+- los datos previos guardados;
+- el historial reciente;
+- la última promesa realizada por el asistente;
+- la fecha y hora de cita recuperadas del contexto;
+- el mensaje actual.
+
+Activa los siguientes campos según el significado integral:
+
+"seguimiento_cita": true
+cuando la familia pregunta, reclama o busca saber qué ocurrió con
+una visita o cita previamente solicitada.
+
+"solicitud_confirmacion_cita": true
+cuando necesita saber si la cita, visita, fecha u horario ya fueron
+confirmados.
+
+"cambio_fecha_cita": true
+cuando desea reemplazar una fecha u hora previamente propuesta.
+
+"cancelacion_cita": true
+cuando manifiesta claramente que quiere cancelar la visita.
+
+"desistimiento_temporal": true
+cuando indica que por ahora no asistirá, que retomará después o que
+ya no desea continuar en este momento, sin tratarse necesariamente
+de una cancelación definitiva.
+
+"asume_cita_confirmada": true
+cuando la familia habla como si la visita ya estuviera confirmada,
+aunque el historial indique que todavía estaba pendiente.
+
+"pregunta_paralela": true
+cuando pregunta costos, idiomas, dirección u otro tema mientras
+existe una cita pendiente, pero su mensaje no es un seguimiento de
+la confirmación.
+
+"reclamo_demora": true
+cuando expresa molestia, preocupación o insistencia por el tiempo
+transcurrido sin respuesta.
+
+"contexto_cita_pendiente_reconocido": true
+cuando los datos previos o el historial muestran que la cita sigue
+esperando confirmación administrativa.
+
+"requiere_admin_contextual": true
+cuando, considerando el historial y el mensaje actual, la respuesta
+depende de una confirmación, disponibilidad, cancelación o cambio
+que debe revisar una persona administradora.
+
+Estos campos no dependen de palabras exactas. Interpreta expresiones
+directas, indirectas, breves, coloquiales y con errores ortográficos.
+
+Ejemplos equivalentes de seguimiento:
+
+- "¿Qué pasó con mi cita?"
+- "¿Ya quedó?"
+- "Sigo pendiente de lo que iban a revisar."
+- "¿Ya pudieron ver si me reciben?"
+- "Nada más quería saber si sí quedó lo del lunes."
+
+Si el estado indica CITA_PENDIENTE_CONFIRMACION o
+ESPERANDO_CONFIRMACION_ADMIN:
+
+- no interpretes la cita como confirmada;
+- no supongas que la directora ya espera a la familia;
+- no conviertas una frase ambigua en una confirmación;
+- reconoce ese estado en
+  "contexto_cita_pendiente_reconocido".
+
+9. Si menciona una fecha relativa como hoy, mañana o un día de la
+semana:
 - conserva la frase en "hora_cita_texto"
 - conviértela a HH:MM en "hora_cita_24h" cuando sea inequívoca
 
