@@ -383,7 +383,8 @@ class AnalisisMensajeProspecto(BaseModel):
     contexto_cita_pendiente_reconocido: bool = False
     requiere_admin_contextual: bool = False
 
-    fecha_cita_texto: str = ""    hora_cita_texto: str = ""
+    fecha_cita_texto: str = ""
+    hora_cita_texto: str = ""
     fecha_cita_iso: str = ""
     hora_cita_24h: str = ""
     dia_no_laboral: bool = False
