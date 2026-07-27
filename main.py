@@ -10223,38 +10223,83 @@ def procesar_escalacion_admin_estructurada(
         or ""
     ).strip()
 
+    fecha_cita_analisis = str(
+        analisis.get(
+            "fecha_cita_iso",
+            "",
+        )
+        or analisis.get(
+            "fecha_cita_texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    hora_cita_analisis = str(
+        analisis.get(
+            "hora_cita_24h",
+            "",
+        )
+        or analisis.get(
+            "hora_cita_texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    fecha_cita_contacto = ""
+    hora_cita_contacto = ""
+
+    if contact is not None:
+        try:
+            fecha_cita_contacto = str(
+                get_note_value(
+                    contact,
+                    "FECHA_CITA",
+                )
+                or get_note_value(
+                    contact,
+                    "FECHA_CITA_TEXTO",
+                )
+                or ""
+            ).strip()
+
+            hora_cita_contacto = str(
+                get_note_value(
+                    contact,
+                    "HORA_CITA",
+                )
+                or get_note_value(
+                    contact,
+                    "HORA_CITA_24H",
+                )
+                or get_note_value(
+                    contact,
+                    "HORA_CITA_TEXTO",
+                )
+                or ""
+            ).strip()
+
+        except Exception as e:
+            print(
+                "⚠️ No fue posible recuperar fecha/hora "
+                f"de cita desde el contacto: {e}"
+            )
+
     resultado.update({
         "requiere_escalacion": requiere_admin,
         "accion": accion,
         "motivo": motivo,
         "fecha_cita": (
-            str(
-                analisis.get(
-                    "fecha_cita_iso",
-                    "",
-                )
-                or analisis.get(
-                    "fecha_cita_texto",
-                    "",
-                )
-                or ""
-            ).strip()
+            fecha_cita_analisis
+            or fecha_cita_contacto
         ),
         "hora_cita": (
-            str(
-                analisis.get(
-                    "hora_cita_24h",
-                    "",
-                )
-                or analisis.get(
-                    "hora_cita_texto",
-                    "",
-                )
-                or ""
-            ).strip()
+            hora_cita_analisis
+            or hora_cita_contacto
         ),
     })
-
+    
     if not requiere_admin:
         return resultado
 
