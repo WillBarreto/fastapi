@@ -7075,7 +7075,7 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=10,
+                max_output_tokens=300,
                 temperature=0.0,
             ),
             tarea="clasificación de alcance campus"
@@ -7694,7 +7694,7 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt_clasificacion,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=10,
+                max_output_tokens=300,
                 temperature=0.1,
             ),
             tarea="clasificación de intención"
@@ -10215,7 +10215,7 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=20,
+                max_output_tokens=300,
                 temperature=0.0
             ),
             tarea="clasificación respuesta admin cita"
@@ -10413,7 +10413,7 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=80,
+                max_output_tokens=300,
                 temperature=0.0
             ),
             tarea="extracción hora cita"
