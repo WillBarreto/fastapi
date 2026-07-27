@@ -4815,6 +4815,34 @@ def generar_respuesta_final_estructurada(
         Devuelve una respuesta segura controlada por Python.
         """
         if accion == "CONSULTAR_ADMIN":
+            motivo_decision = str(
+                decision_segura.get(
+                    "motivo",
+                    "",
+                )
+                or ""
+            ).strip().lower()
+
+            es_seguimiento_cita_pendiente = (
+                "visita"
+                in motivo_decision
+                and "confirmacion"
+                in normalizar_texto_geografico(
+                    motivo_decision
+                )
+                and "pendiente"
+                in motivo_decision
+            )
+
+            if es_seguimiento_cita_pendiente:
+                return (
+                    "Le ofrezco una disculpa por la demora. "
+                    "La confirmación de su visita continúa "
+                    "pendiente. Permítame consultarlo nuevamente "
+                    "con administración y en cuanto tenga respuesta "
+                    "se la comparto."
+                )
+
             if zona_mencionada:
                 return (
                     "Con gusto. Permítame revisar internamente "
@@ -4828,7 +4856,7 @@ def generar_respuesta_final_estructurada(
                 "solicitud. En cuanto tenga la confirmación, "
                 "le comparto la información correspondiente."
             )
-
+            
         if accion == "RECHAZAR_CAMPUS":
             return (
                 "Este canal brinda atención exclusivamente para "
