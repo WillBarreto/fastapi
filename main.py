@@ -9844,7 +9844,327 @@ async def debug_admin_whatsapp_test(
         "error": "",
     }
     
+# ============================================================
+# PUENTE PRODUCTIVO DEL NUEVO FLUJO ESTRUCTURADO
+# ============================================================
+
+def procesar_mensaje_whatsapp_estructurado_real(
+    db: Session,
+    contact,
+    from_number: str,
+    mensaje_usuario: str,
+) -> Dict[str, Any]:
+    """
+    Ejecuta el nuevo flujo estructurado con efectos reales.
+
+    Importante:
+    - Esta función todavía no está conectada al webhook.
+    - Asume que el mensaje entrante ya fue guardado.
+    - Puede enviar una respuesta al prospecto.
+    - Puede guardar la respuesta en la base de datos.
+    - Puede crear una tarea administrativa.
+    - Puede enviar una alerta al WhatsApp administrador.
+    """
+
+    resultado_final = {
+        "flujo": "estructurado_real",
+        "procesado": False,
+        "mensaje_enviado": False,
+        "respuesta": "",
+        "twilio_resultado": "",
+        "twilio_sid": None,
+        "resultado_orquestador": {},
+        "historial_completo": {},
+        "memoria_historica": {},
+        "contexto_comercial": {},
+        "contexto_comercial_enriquecido": {},
+        "escalacion_admin": {},
+        "error": "",
+    }
+
+    mensaje = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    numero_destino = str(
+        from_number or ""
+    ).strip()
+
+    if not mensaje:
+        resultado_final["error"] = "MENSAJE_USUARIO_VACIO"
+        return resultado_final
+
+    if not numero_destino:
+        resultado_final["error"] = "NUMERO_DESTINO_VACIO"
+        return resultado_final
+
+    if contact is None:
+        resultado_final["error"] = "CONTACTO_NO_DISPONIBLE"
+        return resultado_final
+
+    try:
+        # ----------------------------------------------------
+        # 1. HISTORIAL COMPLETO PARA EL ORQUESTADOR
+        # ----------------------------------------------------
+
+        history = (
+            db.query(Message)
+            .filter(
+                Message.contact_id == contact.id
+            )
+            .order_by(
+                Message.timestamp.asc()
+            )
+            .all()
+        )
+
+        historial_completo = (
+            obtener_historial_completo_contacto(
+                db=db,
+                contact=contact,
+            )
+        )
+
+        resultado_final[
+            "historial_completo"
+        ] = historial_completo
+
+        # ----------------------------------------------------
+        # 2. MEMORIA HISTÓRICA
+        # ----------------------------------------------------
+
+        texto_conversacion = str(
+            historial_completo.get(
+                "texto_conversacion",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if texto_conversacion:
+            resultado_memoria_historica = (
+                extraer_memoria_historica_con_ia(
+                    texto_conversacion=(
+                        texto_conversacion
+                    )
+                )
+            )
+        else:
+            resultado_memoria_historica = {
+                "exitoso": False,
+                "memoria": (
+                    crear_memoria_historica_vacia()
+                ),
+                "modelo_usado": "",
+                "intentos_realizados": 0,
+                "errores": [
+                    "HISTORIAL_COMPLETO_VACIO"
+                ],
+            }
+
+        resultado_final[
+            "memoria_historica"
+        ] = resultado_memoria_historica
+
+        # ----------------------------------------------------
+        # 3. CONTEXTO COMERCIAL ENRIQUECIDO
+        # ----------------------------------------------------
+
+        contexto_comercial = (
+            construir_contexto_comercial_desde_contacto(
+                contact
+            )
+        )
+
+        contexto_comercial_enriquecido = (
+            enriquecer_contexto_comercial_con_memoria(
+                contexto_comercial=(
+                    contexto_comercial
+                ),
+                resultado_memoria=(
+                    resultado_memoria_historica
+                ),
+            )
+        )
+
+        resultado_final[
+            "contexto_comercial"
+        ] = contexto_comercial
+
+        resultado_final[
+            "contexto_comercial_enriquecido"
+        ] = contexto_comercial_enriquecido
+
+        # ----------------------------------------------------
+        # 4. ORQUESTADOR ESTRUCTURADO
+        # ----------------------------------------------------
+
+        resultado_orquestador = (
+            procesar_mensaje_prospecto_estructurado(
+                mensaje_usuario=mensaje,
+                contact=contact,
+                history=history,
+            )
+        )
+
+        resultado_final[
+            "resultado_orquestador"
+        ] = resultado_orquestador
+
+        if not isinstance(
+            resultado_orquestador,
+            dict,
+        ):
+            resultado_final[
+                "error"
+            ] = "RESULTADO_ORQUESTADOR_INVALIDO"
+
+            return resultado_final
+
+        respuesta_bot = str(
+            resultado_orquestador.get(
+                "respuesta_generada",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not respuesta_bot:
+            respuesta_bot = (
+                "Con gusto le apoyamos.\n\n"
+                "En este momento no pude procesar completamente "
+                "su mensaje. Permítame revisarlo para brindarle "
+                "una respuesta adecuada."
+            )
+
+            resultado_orquestador[
+                "respuesta_generada"
+            ] = respuesta_bot
+
+            resultado_orquestador[
+                "respuesta_fallback_productiva"
+            ] = True
+
+        resultado_final[
+            "respuesta"
+        ] = respuesta_bot
+
+        # ----------------------------------------------------
+        # 5. ENVÍO REAL AL PROSPECTO
+        # ----------------------------------------------------
+
+        resultado_twilio = (
+            enviar_respuesta_twilio(
+                numero_destino,
+                respuesta_bot,
+            )
+        )
+
+        resultado_final[
+            "twilio_resultado"
+        ] = resultado_twilio
+
+        twilio_sid = None
+
+        if (
+            isinstance(resultado_twilio, str)
+            and "SID:" in resultado_twilio
+        ):
+            twilio_sid = (
+                resultado_twilio
+                .split("SID:", 1)[1]
+                .strip()
+            )
+
+        resultado_final[
+            "twilio_sid"
+        ] = twilio_sid
+
+        envio_exitoso = bool(
+            isinstance(resultado_twilio, str)
+            and resultado_twilio.startswith(
+                "✅"
+            )
+        )
+
+        resultado_final[
+            "mensaje_enviado"
+        ] = envio_exitoso
+
+        if not envio_exitoso:
+            resultado_final[
+                "error"
+            ] = "ERROR_ENVIANDO_RESPUESTA_TWILIO"
+
+            return resultado_final
+
+        # ----------------------------------------------------
+        # 6. GUARDADO DE LA RESPUESTA
+        # ----------------------------------------------------
+
+        save_message(
+            db,
+            contact.id,
+            "outgoing",
+            respuesta_bot,
+            twilio_sid,
+        )
+
+        db.commit()
+
+        # ----------------------------------------------------
+        # 7. ESCALACIÓN ADMINISTRATIVA
+        # ----------------------------------------------------
+
+        resultado_escalacion = (
+            procesar_escalacion_admin_estructurada(
+                db=db,
+                contact=contact,
+                mensaje_usuario=mensaje,
+                respuesta_bot=respuesta_bot,
+                resultado_orquestador=(
+                    resultado_orquestador
+                ),
+                memoria_historica=(
+                    resultado_memoria_historica
+                ),
+                ejecutar_envio=True,
+            )
+        )
+
+        resultado_final[
+            "escalacion_admin"
+        ] = resultado_escalacion
+
+        resultado_final[
+            "procesado"
+        ] = True
+
+        print(
+            "✅ Flujo estructurado real procesado: "
+            f"contact_id={contact.id}, "
+            f"mensaje_enviado={envio_exitoso}, "
+            f"requiere_admin="
+            f"{resultado_escalacion.get('requiere_escalacion', False)}"
+        )
+
+        return resultado_final
+
+    except Exception as e:
+        db.rollback()
+
+        resultado_final[
+            "error"
+        ] = str(e)
+
+        print(
+            "❌ Error en flujo estructurado real: "
+            f"{e}"
+        )
+
+        return resultado_final
         
+
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
