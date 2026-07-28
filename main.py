@@ -9536,6 +9536,158 @@ async def debug_structured_admin_escalation(
         ),
         "error": "",
     }
+
+class DebugStructuredAdminEscalationLiveRequest(BaseModel):
+    phone_number: str
+    message: str
+    confirmation: str
+
+
+@app.post("/debug/structured-admin-escalation-live")
+async def debug_structured_admin_escalation_live(
+    payload: DebugStructuredAdminEscalationLiveRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Ejecuta una prueba real y controlada del puente administrativo.
+
+    Esta ruta:
+    - puede crear o reutilizar una tarea pendiente;
+    - puede enviar una alerta real al WhatsApp administrador;
+    - no envía la respuesta generada al prospecto;
+    - no activa el flujo estructurado en el webhook.
+    """
+
+    confirmacion = str(
+        payload.confirmation or ""
+    ).strip()
+
+    if confirmacion != "ENVIAR_ALERTA_ADMIN_REAL":
+        return {
+            "modo": "PRUEBA_REAL_ESCALACION_ADMIN",
+            "ejecucion_autorizada": False,
+            "error": "CONFIRMACION_INVALIDA",
+        }
+
+    numero_recibido = str(
+        payload.phone_number or ""
+    ).strip()
+
+    mensaje = str(
+        payload.message or ""
+    ).strip()
+
+    if not numero_recibido:
+        return {
+            "modo": "PRUEBA_REAL_ESCALACION_ADMIN",
+            "ejecucion_autorizada": True,
+            "error": "PHONE_NUMBER_REQUERIDO",
+        }
+
+    if not mensaje:
+        return {
+            "modo": "PRUEBA_REAL_ESCALACION_ADMIN",
+            "ejecucion_autorizada": True,
+            "error": "MESSAGE_REQUERIDO",
+        }
+
+    numero_limpio = normalizar_numero_whatsapp(
+        numero_recibido
+    )
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.phone_number == numero_limpio
+        )
+        .first()
+    )
+
+    if contact is None:
+        return {
+            "modo": "PRUEBA_REAL_ESCALACION_ADMIN",
+            "ejecucion_autorizada": True,
+            "contacto_encontrado": False,
+            "phone_number_recibido": numero_recibido,
+            "error": "CONTACTO_NO_ENCONTRADO",
+        }
+
+    history = (
+        db.query(Message)
+        .filter(
+            Message.contact_id == contact.id
+        )
+        .order_by(
+            Message.timestamp.asc()
+        )
+        .all()
+    )
+
+    historial_completo = (
+        obtener_historial_completo_contacto(
+            db=db,
+            contact=contact,
+        )
+    )
+
+    resultado_memoria_historica = (
+        extraer_memoria_historica_con_ia(
+            historial_completo.get(
+                "texto_conversacion",
+                "",
+            )
+        )
+    )
+
+    resultado_orquestador = (
+        procesar_mensaje_prospecto_estructurado(
+            mensaje_usuario=mensaje,
+            contact=contact,
+            history=history,
+        )
+    )
+
+    respuesta_bot = str(
+        resultado_orquestador.get(
+            "respuesta_generada",
+            "",
+        )
+        or ""
+    ).strip()
+
+    resultado_escalacion = (
+        procesar_escalacion_admin_estructurada(
+            db=db,
+            contact=contact,
+            mensaje_usuario=mensaje,
+            respuesta_bot=respuesta_bot,
+            resultado_orquestador=resultado_orquestador,
+            memoria_historica=(
+                resultado_memoria_historica
+            ),
+            ejecutar_envio=True,
+        )
+    )
+
+    return {
+        "modo": "PRUEBA_REAL_ESCALACION_ADMIN",
+        "ejecucion_autorizada": True,
+        "contacto_encontrado": True,
+        "phone_number_recibido": numero_recibido,
+        "mensaje_simulado": mensaje,
+        "respuesta_provisional_prospecto": (
+            respuesta_bot
+        ),
+        "escalacion_admin": (
+            resultado_escalacion
+        ),
+        "advertencia": (
+            "No se envió ningún mensaje al prospecto. "
+            "La respuesta del administrador sí podrá "
+            "continuar el flujo existente."
+        ),
+        "error": "",
+    }
     
 
 @app.post("/webhook/whatsapp")
