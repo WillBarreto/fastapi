@@ -3629,6 +3629,7 @@ def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
     contact=None,
     mensaje_usuario: str = "",
+    contexto_comercial: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Aplica las reglas críticas del colegio sobre el análisis de Gemini.
@@ -3758,6 +3759,160 @@ def aplicar_reglas_negocio_estructuradas(
     )
 
     decision["zona_validada"] = zona_validada
+
+    # ========================================================
+    # CAMBIO AMBIGUO DE NIVEL O POSIBLE NUEVO ALUMNO
+    # ========================================================
+
+    contexto_seguro = (
+        contexto_comercial
+        if isinstance(contexto_comercial, dict)
+        else {}
+    )
+
+    nivel_actual_mensaje = str(
+        analisis_seguro.get(
+            "nivel",
+            "",
+        )
+        or analisis_seguro.get(
+            "grado_solicitado",
+            "",
+        )
+        or ""
+    ).strip()
+
+    alumnos_previos = contexto_seguro.get(
+        "alumnos",
+        [],
+    )
+
+    if not isinstance(alumnos_previos, list):
+        alumnos_previos = []
+
+    niveles_previos = []
+    nombres_alumnos_previos = []
+
+    for alumno_previo in alumnos_previos:
+        if not isinstance(alumno_previo, dict):
+            continue
+
+        nivel_previo = str(
+            alumno_previo.get(
+                "nivel_interes",
+                "",
+            )
+            or ""
+        ).strip()
+
+        nombre_previo = str(
+            alumno_previo.get(
+                "nombre",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if (
+            nivel_previo
+            and nivel_previo not in niveles_previos
+        ):
+            niveles_previos.append(
+                nivel_previo
+            )
+
+        if (
+            nombre_previo
+            and nombre_previo
+            not in nombres_alumnos_previos
+        ):
+            nombres_alumnos_previos.append(
+                nombre_previo
+            )
+
+    nivel_nuevo_distinto = bool(
+        nivel_actual_mensaje
+        and niveles_previos
+        and nivel_actual_mensaje
+        not in niveles_previos
+    )
+
+    nombre_alumno_actual = str(
+        analisis_seguro.get(
+            "nombre_alumno",
+            "",
+        )
+        or ""
+    ).strip()
+
+    mensaje_normalizado = (
+        normalizar_texto_para_deteccion(
+            mensaje_usuario
+        )
+    )
+
+    menciona_otro_alumno = any(
+        expresion in mensaje_normalizado
+        for expresion in [
+            "otro hijo",
+            "otra hija",
+            "otro alumno",
+            "otra alumna",
+            "mi otro hijo",
+            "mi otra hija",
+        ]
+    )
+
+    confirma_mismo_alumno = any(
+        expresion in mensaje_normalizado
+        for expresion in [
+            "es para el mismo",
+            "es para la misma",
+            "tambien es para",
+            "también es para",
+            "para el mismo hijo",
+            "para la misma hija",
+        ]
+    )
+
+    cambio_nivel_ambiguo = bool(
+        nivel_nuevo_distinto
+        and not nombre_alumno_actual
+        and not menciona_otro_alumno
+        and not confirma_mismo_alumno
+    )
+
+    if cambio_nivel_ambiguo:
+        decision.update({
+            "accion": "CONTINUAR_CONVERSACION",
+            "motivo": (
+                "El prospecto mencionó un nivel distinto al "
+                "registrado anteriormente, pero no está claro "
+                "si se refiere al mismo alumno o a otro."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "requiere_aclarar_alumno": True,
+            "nivel_actual_mensaje": (
+                nivel_actual_mensaje
+            ),
+            "niveles_previos": niveles_previos,
+            "nombres_alumnos_previos": (
+                nombres_alumnos_previos
+            ),
+            "pregunta_aclaratoria_sugerida": (
+                "¿Los informes de "
+                f"{nivel_actual_mensaje} son para el alumno "
+                "que ya tenemos registrado o para otro alumno?"
+            ),
+        })
+
+        return decision
+        
     
     # ========================================================
     # 1. CAMPUS EXTERNO O ZONA NO ATENDIDA
@@ -5950,6 +6105,7 @@ def procesar_mensaje_prospecto_estructurado(
     mensaje_usuario: str,
     contact=None,
     history=None,
+    contexto_comercial: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Ejecuta el núcleo del nuevo flujo estructurado.
@@ -6034,6 +6190,7 @@ def procesar_mensaje_prospecto_estructurado(
             analisis=analisis,
             contact=contact,
             mensaje_usuario=mensaje,
+            contexto_comercial=contexto_comercial,
         )
 
         plan_respuesta = (
@@ -10004,9 +10161,12 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 mensaje_usuario=mensaje,
                 contact=contact,
                 history=history,
+                contexto_comercial=(
+                    contexto_comercial_enriquecido
+                ),
             )
         )
-
+        
         resultado_final[
             "resultado_orquestador"
         ] = resultado_orquestador
