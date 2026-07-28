@@ -11619,15 +11619,81 @@ cancelar"""
             resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
             return {"status": "admin_invalid_option"}
 
-        # NUEVO:
-        # Si sólo hay una conversación pendiente y el admin escribe texto,
-        # tomamos ese texto como respuesta directa para ese único prospecto.
+        # Si solamente existe una tarea pendiente, permitimos respuesta
+        # directa únicamente cuando el mensaje contiene una instrucción
+        # administrativa clara. Saludos o textos ambiguos no se envían
+        # al prospecto.
+
         if len(tareas) == 1:
+            mensaje_admin_normalizado = normalizar_texto(
+                mensaje_limpio
+            )
+
+            mensajes_no_accionables = {
+                "",
+                "hola",
+                "holi",
+                "hello",
+                "buen dia",
+                "buenos dias",
+                "buena tarde",
+                "buenas tardes",
+                "buena noche",
+                "buenas noches",
+                "oye",
+                "ok",
+                "okay",
+                "gracias",
+                "si",
+                "no",
+            }
+
+            if mensaje_admin_normalizado in mensajes_no_accionables:
+                tarea = tareas[0]
+
+                respuesta_admin = f"""Tiene una conversación pendiente.
+
+Prospecto:
+{tarea.prospect_phone}
+
+Último mensaje:
+{tarea.trigger_message or ""}
+
+Escriba una instrucción clara para responderle.
+
+Ejemplos:
+- Confirmar lunes a las 10:30
+- Proponer martes a las 11:00
+- Indicar que seguimos revisando disponibilidad
+- Rechazar ese horario y ofrecer otra opción
+
+Para ver el menú, escriba:
+menu"""
+
+                resultado = enviar_respuesta_twilio(
+                    from_number,
+                    respuesta_admin,
+                )
+
+                print(
+                    "🛡️ Mensaje administrativo no accionable; "
+                    f"no se respondió al prospecto: {resultado}"
+                )
+
+                return {
+                    "status": "admin_instruction_required",
+                    "task_id": tarea.id,
+                }
+
             tarea = tareas[0]
             ADMIN_SELECTED_TASKS[admin_key] = tarea.id
             tarea_id_seleccionada = tarea.id
 
-            print(f"✅ Admin respondió directo; se usará la única tarea pendiente {tarea.id}")
+            print(
+                "✅ Admin respondió con una instrucción directa; "
+                f"se usará la única tarea pendiente {tarea.id}"
+            )
+
 
         else:
             # Si hay varias conversaciones pendientes, por seguridad se exige selección.
