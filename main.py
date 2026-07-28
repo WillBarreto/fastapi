@@ -10163,6 +10163,146 @@ def procesar_mensaje_whatsapp_estructurado_real(
         )
 
         return resultado_final
+
+# ============================================================
+# PRUEBA INTEGRAL CONTROLADA DEL FLUJO ESTRUCTURADO REAL
+# ============================================================
+
+class DebugStructuredRealFlowRequest(BaseModel):
+    phone_number: str
+    message: str
+    confirmation: str
+
+
+@app.post("/debug/structured-real-flow-live")
+async def debug_structured_real_flow_live(
+    payload: DebugStructuredRealFlowRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Ejecuta una prueba integral y real del nuevo flujo estructurado.
+
+    Esta ruta:
+    - guarda un mensaje entrante;
+    - ejecuta el nuevo orquestador;
+    - envía una respuesta real al número indicado;
+    - guarda la respuesta saliente;
+    - puede crear una tarea administrativa;
+    - puede enviar una alerta al administrador;
+    - no modifica el feature flag;
+    - no conecta todavía el nuevo flujo al webhook.
+    """
+
+    confirmacion = str(
+        payload.confirmation or ""
+    ).strip()
+
+    if (
+        confirmacion
+        != "EJECUTAR_FLUJO_ESTRUCTURADO_REAL"
+    ):
+        return {
+            "modo": "PRUEBA_INTEGRAL_ESTRUCTURADA",
+            "ejecucion_autorizada": False,
+            "mensaje_enviado": False,
+            "error": "CONFIRMACION_INVALIDA",
+        }
+
+    numero_recibido = str(
+        payload.phone_number or ""
+    ).strip()
+
+    mensaje = str(
+        payload.message or ""
+    ).strip()
+
+    if not numero_recibido:
+        return {
+            "modo": "PRUEBA_INTEGRAL_ESTRUCTURADA",
+            "ejecucion_autorizada": True,
+            "mensaje_enviado": False,
+            "error": "PHONE_NUMBER_REQUERIDO",
+        }
+
+    if not mensaje:
+        return {
+            "modo": "PRUEBA_INTEGRAL_ESTRUCTURADA",
+            "ejecucion_autorizada": True,
+            "mensaje_enviado": False,
+            "error": "MESSAGE_REQUERIDO",
+        }
+
+    numero_whatsapp = numero_recibido
+
+    if not numero_whatsapp.startswith(
+        "whatsapp:"
+    ):
+        numero_whatsapp = (
+            f"whatsapp:{numero_whatsapp}"
+        )
+
+    if es_numero_admin(numero_whatsapp):
+        return {
+            "modo": "PRUEBA_INTEGRAL_ESTRUCTURADA",
+            "ejecucion_autorizada": True,
+            "mensaje_enviado": False,
+            "error": (
+                "NO_SE_PUEDE_USAR_EL_NUMERO_ADMIN_COMO_PROSPECTO"
+            ),
+        }
+
+    try:
+        contact = get_or_create_contact(
+            db,
+            numero_whatsapp,
+        )
+
+        # El puente productivo asume que el mensaje entrante
+        # ya fue guardado, tal como sucede en el webhook.
+        save_message(
+            db,
+            contact.id,
+            "incoming",
+            mensaje,
+        )
+
+        resultado_flujo = (
+            procesar_mensaje_whatsapp_estructurado_real(
+                db=db,
+                contact=contact,
+                from_number=numero_whatsapp,
+                mensaje_usuario=mensaje,
+            )
+        )
+
+        return {
+            "modo": "PRUEBA_INTEGRAL_ESTRUCTURADA",
+            "ejecucion_autorizada": True,
+            "feature_flag_activo": (
+                USE_STRUCTURED_AI_FLOW
+            ),
+            "phone_number_recibido": (
+                numero_recibido
+            ),
+            "mensaje_simulado": mensaje,
+            "contact_id": contact.id,
+            "resultado_flujo": resultado_flujo,
+            "advertencia": (
+                "Esta prueba sí guardó el mensaje y sí pudo "
+                "enviar una respuesta real por WhatsApp."
+            ),
+            "error": "",
+        }
+
+    except Exception as e:
+        db.rollback()
+
+        return {
+            "modo": "PRUEBA_INTEGRAL_ESTRUCTURADA",
+            "ejecucion_autorizada": True,
+            "mensaje_enviado": False,
+            "error": str(e),
+        }
         
 
 @app.post("/webhook/whatsapp")
