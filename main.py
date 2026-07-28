@@ -9689,7 +9689,103 @@ async def debug_structured_admin_escalation_live(
         "error": "",
     }
     
+class DebugTwilioMessageStatusRequest(BaseModel):
+    message_sid: str
 
+
+@app.post("/debug/twilio-message-status")
+async def debug_twilio_message_status(
+    payload: DebugTwilioMessageStatusRequest,
+):
+    """
+    Consulta directamente en Twilio el estado real de un mensaje.
+    No envía mensajes ni modifica la base de datos.
+    """
+
+    message_sid = str(
+        payload.message_sid or ""
+    ).strip()
+
+    if not message_sid:
+        return {
+            "consultado": False,
+            "error": "MESSAGE_SID_REQUERIDO",
+        }
+
+    try:
+        account_sid = os.getenv(
+            "TWILIO_ACCOUNT_SID",
+            "",
+        ).strip()
+
+        api_key = os.getenv(
+            "TWILIO_API_KEY",
+            "",
+        ).strip()
+
+        api_secret = os.getenv(
+            "TWILIO_API_SECRET",
+            "",
+        ).strip()
+
+        if not account_sid:
+            return {
+                "consultado": False,
+                "error": "TWILIO_ACCOUNT_SID_NO_CONFIGURADO",
+            }
+
+        if not api_key or not api_secret:
+            return {
+                "consultado": False,
+                "error": "CREDENCIALES_TWILIO_INCOMPLETAS",
+            }
+
+        client = Client(
+            api_key,
+            api_secret,
+            account_sid,
+        )
+
+        mensaje = (
+            client.messages(
+                message_sid
+            ).fetch()
+        )
+
+        return {
+            "consultado": True,
+            "message_sid": mensaje.sid,
+            "status": mensaje.status,
+            "from": mensaje.from_,
+            "to": mensaje.to,
+            "direction": mensaje.direction,
+            "error_code": mensaje.error_code,
+            "error_message": mensaje.error_message,
+            "date_created": (
+                mensaje.date_created.isoformat()
+                if mensaje.date_created
+                else ""
+            ),
+            "date_sent": (
+                mensaje.date_sent.isoformat()
+                if mensaje.date_sent
+                else ""
+            ),
+            "date_updated": (
+                mensaje.date_updated.isoformat()
+                if mensaje.date_updated
+                else ""
+            ),
+            "error": "",
+        }
+
+    except Exception as e:
+        return {
+            "consultado": False,
+            "message_sid": message_sid,
+            "error": str(e),
+        }
+        
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
