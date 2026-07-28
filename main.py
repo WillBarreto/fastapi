@@ -3837,7 +3837,13 @@ def aplicar_reglas_negocio_estructuradas(
         not in niveles_previos
     )
 
-    nombre_alumno_actual = str(
+    mensaje_normalizado = (
+        normalizar_texto_para_deteccion(
+            mensaje_usuario
+        )
+    )
+
+    nombre_alumno_detectado = str(
         analisis_seguro.get(
             "nombre_alumno",
             "",
@@ -3845,12 +3851,18 @@ def aplicar_reglas_negocio_estructuradas(
         or ""
     ).strip()
 
-    mensaje_normalizado = (
+    nombre_alumno_normalizado = (
         normalizar_texto_para_deteccion(
-            mensaje_usuario
+            nombre_alumno_detectado
         )
     )
 
+    nombre_alumno_mencionado_en_mensaje = bool(
+        nombre_alumno_normalizado
+        and nombre_alumno_normalizado
+        in mensaje_normalizado
+    )
+    
     menciona_otro_alumno = any(
         expresion in mensaje_normalizado
         for expresion in [
@@ -3877,11 +3889,11 @@ def aplicar_reglas_negocio_estructuradas(
 
     cambio_nivel_ambiguo = bool(
         nivel_nuevo_distinto
-        and not nombre_alumno_actual
+        and not nombre_alumno_mencionado_en_mensaje
         and not menciona_otro_alumno
         and not confirma_mismo_alumno
     )
-
+    
     if cambio_nivel_ambiguo:
         decision.update({
             "accion": "CONTINUAR_CONVERSACION",
