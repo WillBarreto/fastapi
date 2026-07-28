@@ -11894,21 +11894,143 @@ REGLAS:
         return respaldo or texto[:120]
 
 
-def extraer_datos_registro_cita(mensaje_usuario: str, contact) -> dict:
+def extraer_datos_registro_cita(
+    mensaje_usuario: str,
+    contact,
+) -> dict:
     """
-    Extrae nombre del padre/madre/tutor, nombre del alumno y grado/nivel.
+    Extrae nombre del padre, madre o tutor, nombre del alumno
+    y grado o nivel de interés.
+
+    Prioridad:
+    1. Extracción determinista desde expresiones comunes.
+    2. Gemini para completar datos que sigan faltando.
+    3. Conserva el nivel previamente registrado.
     """
-    texto = (mensaje_usuario or "").strip()
-    nivel_conocido = get_note_value(contact, "NIVEL_INTERES")
+
+    texto = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    nivel_conocido = str(
+        get_note_value(
+            contact,
+            "NIVEL_INTERES",
+        )
+        or ""
+    ).strip()
 
     datos = {
         "padres": "",
         "alumno": "",
-        "grado": nivel_conocido or ""
+        "grado": nivel_conocido,
     }
 
     if not texto:
         return datos
+
+    # ========================================================
+    # 1. EXTRACCIÓN DETERMINISTA DE NOMBRES
+    # ========================================================
+
+    def limpiar_nombre_extraido(
+        valor: str,
+    ) -> str:
+        nombre = str(
+            valor or ""
+        ).strip()
+
+        nombre = re.sub(
+            r"\s+",
+            " ",
+            nombre,
+        ).strip()
+
+        nombre = nombre.strip(
+            " ,.;:-"
+        )
+
+        return nombre
+
+    patrones_tutor = [
+        (
+            r"(?:yo\s+)?(?:me\s+llamo|mi\s+nombre\s+es|soy)"
+            r"\s+(.+?)"
+            r"(?=\s+(?:y|,)\s+"
+            r"(?:el\s+de\s+mi|mi)\s+"
+            r"(?:hijo|hija|alumno|alumna)\b|$)"
+        ),
+        (
+            r"(?:nombre\s+del\s+padre|nombre\s+de\s+la\s+madre|"
+            r"nombre\s+del\s+tutor)\s*(?:es|:)\s*(.+?)"
+            r"(?=\s+(?:y|,)\s+|$)"
+        ),
+    ]
+
+    patrones_alumno = [
+        (
+            r"(?:mi\s+)?(?:hijo|hija|alumno|alumna)"
+            r"\s+(?:es|se\s+llama)\s+(.+?)$"
+        ),
+        (
+            r"el\s+de\s+mi\s+"
+            r"(?:hijo|hija|alumno|alumna)"
+            r"\s+(?:es|se\s+llama)\s+(.+?)$"
+        ),
+        (
+            r"nombre\s+(?:del|de\s+la)\s+"
+            r"(?:hijo|hija|alumno|alumna)"
+            r"\s*(?:es|:)\s*(.+?)$"
+        ),
+    ]
+
+    for patron in patrones_tutor:
+        coincidencia = re.search(
+            patron,
+            texto,
+            flags=re.IGNORECASE,
+        )
+
+        if coincidencia:
+            datos["padres"] = (
+                limpiar_nombre_extraido(
+                    coincidencia.group(1)
+                )
+            )
+            break
+
+    for patron in patrones_alumno:
+        coincidencia = re.search(
+            patron,
+            texto,
+            flags=re.IGNORECASE,
+        )
+
+        if coincidencia:
+            datos["alumno"] = (
+                limpiar_nombre_extraido(
+                    coincidencia.group(1)
+                )
+            )
+            break
+
+    if (
+        datos["padres"]
+        and datos["alumno"]
+    ):
+        print(
+            "✅ Datos de cita extraídos "
+            "determinísticamente: "
+            f"padres={datos['padres']!r}, "
+            f"alumno={datos['alumno']!r}, "
+            f"grado={datos['grado']!r}"
+        )
+
+        return datos
+
+    # ========================================================
+    # 2. GEMINI PARA COMPLETAR DATOS FALTANTES
+    # ========================================================
 
     if not GEMINI_API_KEY:
         return datos
@@ -11919,11 +12041,16 @@ Extrae datos de registro de cita escolar desde el siguiente mensaje de WhatsApp.
 MENSAJE DEL PROSPECTO:
 {texto}
 
+DATOS YA EXTRAÍDOS:
+Padre, madre o tutor: {datos["padres"] or "No identificado"}
+Alumno: {datos["alumno"] or "No identificado"}
+
 GRADO O NIVEL YA CONOCIDO:
 {nivel_conocido or "No especificado"}
 
 TAREA:
-Devuelve únicamente un JSON válido con estas claves:
+Devuelve únicamente un objeto JSON válido con estas claves:
+
 {{
   "padres": "",
   "alumno": "",
@@ -11934,38 +12061,101 @@ REGLAS:
 - "padres" debe ser el nombre de la mamá, papá o tutor que agenda.
 - "alumno" debe ser el nombre del niño, niña o alumno.
 - "grado" debe ser el grado o nivel de interés.
+- Conserva los datos ya identificados cuando sean correctos.
 - Si el grado ya está conocido, úsalo.
 - Si algún dato no aparece, déjalo como cadena vacía.
-- No inventes apellidos.
-- No agregues explicaciones fuera del JSON.
+- No inventes nombres ni apellidos.
+- Devuelve únicamente JSON válido.
+- No uses Markdown.
+- No agregues explicaciones.
 """
 
     try:
-        response, modelo_usado = generar_con_gemini_con_fallback(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=300,
-                temperature=0.0
-            ),
-            tarea="extracción datos cita"
+        response, modelo_usado = (
+            generar_con_gemini_con_fallback(
+                prompt,
+                generation_config=(
+                    genai.types.GenerationConfig(
+                        max_output_tokens=300,
+                        temperature=0.0,
+                    )
+                ),
+                tarea="extracción datos cita",
+            )
         )
 
-        texto_respuesta = extraer_texto_respuesta_gemini(response).strip()
+        texto_respuesta = (
+            extraer_texto_respuesta_gemini(
+                response
+            ).strip()
+        )
 
-        texto_respuesta = texto_respuesta.replace("```json", "").replace("```", "").strip()
+        datos_ia = extraer_json_de_texto(
+            texto_respuesta
+        )
 
-        datos_ia = json.loads(texto_respuesta)
+        if not isinstance(
+            datos_ia,
+            dict,
+        ):
+            print(
+                "⚠️ Gemini no devolvió un JSON válido "
+                "para los datos de cita."
+            )
 
-        datos["padres"] = (datos_ia.get("padres") or "").strip()
-        datos["alumno"] = (datos_ia.get("alumno") or "").strip()
-        datos["grado"] = (datos_ia.get("grado") or nivel_conocido or "").strip()
+            return datos
+
+        padres_ia = limpiar_nombre_extraido(
+            datos_ia.get(
+                "padres",
+                "",
+            )
+        )
+
+        alumno_ia = limpiar_nombre_extraido(
+            datos_ia.get(
+                "alumno",
+                "",
+            )
+        )
+
+        grado_ia = str(
+            datos_ia.get(
+                "grado",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not datos["padres"] and padres_ia:
+            datos["padres"] = padres_ia
+
+        if not datos["alumno"] and alumno_ia:
+            datos["alumno"] = alumno_ia
+
+        datos["grado"] = (
+            grado_ia
+            or nivel_conocido
+            or datos["grado"]
+        )
+
+        print(
+            "✅ Datos de cita extraídos: "
+            f"padres={datos['padres']!r}, "
+            f"alumno={datos['alumno']!r}, "
+            f"grado={datos['grado']!r}, "
+            f"modelo={modelo_usado}"
+        )
 
         return datos
 
     except Exception as e:
-        print(f"⚠️ Error extrayendo datos de cita: {e}")
-        return datos
+        print(
+            "⚠️ Error extrayendo datos de cita: "
+            f"{e}"
+        )
 
+        return datos
 
 def construir_resumen_cita_admin(contact) -> str:
     """
