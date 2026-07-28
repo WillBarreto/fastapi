@@ -11625,7 +11625,7 @@ cancelar"""
         # al prospecto.
 
         if len(tareas) == 1:
-            mensaje_admin_normalizado = normalizar_texto(
+            mensaje_admin_normalizado = normalizar_texto_busqueda(
                 mensaje_limpio
             )
 
