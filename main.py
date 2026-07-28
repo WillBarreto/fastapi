@@ -9785,6 +9785,65 @@ async def debug_twilio_message_status(
             "message_sid": message_sid,
             "error": str(e),
         }
+
+class DebugAdminWhatsAppTestRequest(BaseModel):
+    confirmation: str
+
+
+@app.post("/debug/admin-whatsapp-test")
+async def debug_admin_whatsapp_test(
+    payload: DebugAdminWhatsAppTestRequest,
+):
+    """
+    Envía un mensaje simple al WhatsApp administrador.
+
+    No crea tareas.
+    No consulta prospectos.
+    No envía mensajes a prospectos.
+    """
+
+    confirmacion = str(
+        payload.confirmation or ""
+    ).strip()
+
+    if confirmacion != "ENVIAR_PRUEBA_ADMIN":
+        return {
+            "ejecutado": False,
+            "error": "CONFIRMACION_INVALIDA",
+        }
+
+    admin_number = str(
+        os.getenv(
+            "ADMIN_WHATSAPP_NUMBER",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if not admin_number:
+        return {
+            "ejecutado": False,
+            "error": "ADMIN_WHATSAPP_NUMBER_NO_CONFIGURADO",
+        }
+
+    mensaje_prueba = (
+        "✅ Prueba de comunicación administrativa.\n\n"
+        "Este mensaje confirma que el bot puede enviar "
+        "alertas a su WhatsApp privado."
+    )
+
+    resultado = enviar_respuesta_twilio(
+        admin_number,
+        mensaje_prueba,
+    )
+
+    return {
+        "ejecutado": True,
+        "destino": admin_number,
+        "resultado": resultado,
+        "error": "",
+    }
+    
         
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
