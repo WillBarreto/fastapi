@@ -768,7 +768,7 @@ def obtener_modelos_gemini():
         model.strip()
         for model in os.getenv(
             "GEMINI_FALLBACK_MODELS",
-            "gemini-1.5-flash"
+            ""
         ).split(",")
         if model.strip()
     ]
@@ -1950,6 +1950,186 @@ No dejes la respuesta vacía.
 
     return resultado_fallo
     
+def crear_analisis_determinista_basico(
+    mensaje_usuario: str,
+) -> Dict[str, Any]:
+    """
+    Construye un análisis mínimo y seguro cuando Gemini
+    no devuelve JSON válido.
+
+    No sustituye el análisis semántico completo.
+    Solamente recupera intenciones y datos explícitos
+    que pueden identificarse sin ambigüedad.
+    """
+
+    analisis = crear_analisis_mensaje_vacio()
+
+    mensaje_original = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    if not mensaje_original:
+        return analisis
+
+    mensaje_normalizado = (
+        unicodedata.normalize(
+            "NFD",
+            mensaje_original.lower(),
+        )
+    )
+
+    mensaje_normalizado = "".join(
+        caracter
+        for caracter in mensaje_normalizado
+        if unicodedata.category(caracter) != "Mn"
+    )
+
+    mensaje_normalizado = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        mensaje_normalizado,
+    )
+
+    mensaje_normalizado = re.sub(
+        r"\s+",
+        " ",
+        mensaje_normalizado,
+    ).strip()
+
+    # ========================================================
+    # SALUDO
+    # ========================================================
+
+    expresiones_saludo = [
+        "hola",
+        "buenos dias",
+        "buenas tardes",
+        "buenas noches",
+        "que tal",
+    ]
+
+    tiene_saludo = any(
+        mensaje_normalizado == expresion
+        or mensaje_normalizado.startswith(
+            f"{expresion} "
+        )
+        for expresion in expresiones_saludo
+    )
+
+    analisis["saludo"] = tiene_saludo
+
+    # ========================================================
+    # NIVEL EDUCATIVO EXPLÍCITO
+    # ========================================================
+
+    if (
+        "primaria"
+        in mensaje_normalizado
+    ):
+        analisis["nivel"] = "Primaria"
+
+    elif (
+        "secundaria"
+        in mensaje_normalizado
+    ):
+        analisis["nivel"] = "Secundaria"
+
+    elif any(
+        expresion in mensaje_normalizado
+        for expresion in [
+            "kinder",
+            "preescolar",
+        ]
+    ):
+        analisis["nivel"] = "Kínder"
+
+    # ========================================================
+    # SOLICITUD DE INFORMES
+    # ========================================================
+
+    expresiones_informes = [
+        "informes",
+        "informacion",
+        "quiero saber",
+        "quisiera saber",
+        "me interesa",
+        "solicito informacion",
+    ]
+
+    pide_informes = any(
+        expresion in mensaje_normalizado
+        for expresion in expresiones_informes
+    )
+
+    if pide_informes:
+        analisis.update({
+            "intencion_principal": "PEDIR_INFORMES",
+            "accion_recomendada": "CONTINUAR_INFORMES",
+            "confianza": 0.90,
+        })
+
+        analisis["datos_detectados"] = [
+            "solicitud_informes",
+        ]
+
+        if analisis.get("nivel"):
+            analisis[
+                "datos_detectados"
+            ].append(
+                "nivel"
+            )
+
+        return analisis
+
+    # ========================================================
+    # SOLICITUD EXPLÍCITA DE COSTOS
+    # ========================================================
+
+    expresiones_costos = [
+        "costo",
+        "costos",
+        "precio",
+        "colegiatura",
+        "inscripcion",
+        "cuanto cuesta",
+        "cuanto esta",
+    ]
+
+    pide_costos = any(
+        expresion in mensaje_normalizado
+        for expresion in expresiones_costos
+    )
+
+    if pide_costos:
+        analisis.update({
+            "intencion_principal": "PEDIR_COSTOS",
+            "pide_costos": True,
+            "tema_interes": "costos",
+            "accion_recomendada": "RESPONDER_COSTOS",
+            "confianza": 0.90,
+        })
+
+        analisis["datos_detectados"] = [
+            "solicitud_costos",
+        ]
+
+        return analisis
+
+    # ========================================================
+    # SALUDO SIMPLE
+    # ========================================================
+
+    if tiene_saludo:
+        analisis.update({
+            "saludo_simple": True,
+            "intencion_principal": "SALUDO",
+            "accion_recomendada": "RESPONDER_SALUDO",
+            "confianza": 0.95,
+        })
+
+        return analisis
+
+    return analisis
 
 def analizar_mensaje_prospecto_con_ia(
     mensaje_usuario: str,
@@ -2267,6 +2447,28 @@ CONTRATO OBLIGATORIO:
             "📋 Errores de análisis: "
             f"{errores_analisis_texto}"
         )
+
+        analisis_respaldo = (
+            crear_analisis_determinista_basico(
+                mensaje
+            )
+        )
+
+        if (
+            analisis_estructurado_contiene_informacion(
+                analisis_respaldo
+            )
+        ):
+            print(
+                "✅ Se utilizó análisis determinista "
+                "de respaldo: "
+                f"{json.dumps(
+                    analisis_respaldo,
+                    ensure_ascii=False,
+                )}"
+            )
+
+            return analisis_respaldo
 
         return crear_analisis_mensaje_vacio()
 
