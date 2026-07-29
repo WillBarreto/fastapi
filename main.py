@@ -11850,49 +11850,202 @@ def construir_solicitud_datos_cita(contact) -> str:
 De esta manera podremos tenerlos registrados y dedicarles el tiempo que requieren.{complemento_grado}"""
 
 
-def extraer_hora_cita_confirmada(mensaje_confirmacion: str, respaldo: str = "") -> str:
+def extraer_hora_cita_confirmada(
+    mensaje_confirmacion: str,
+    respaldo: str = "",
+) -> str:
     """
-    Extrae una frase breve con día y hora de la cita a partir del mensaje confirmado.
+    Extrae una frase breve y completa con el día y la hora
+    confirmados para una cita.
+
+    Prioridad:
+    1. Mensaje final enviado al prospecto.
+    2. Mensaje original del prospecto.
+    3. Gemini como último respaldo.
+
+    Nunca acepta horarios incompletos como "11:".
     """
-    texto = (mensaje_confirmacion or "").strip()
-    respaldo = (respaldo or "").strip()
+
+    texto = str(
+        mensaje_confirmacion or ""
+    ).strip()
+
+    respaldo_limpio = str(
+        respaldo or ""
+    ).strip()
+
+    def extraer_fecha_hora_determinista(
+        contenido: str,
+    ) -> str:
+        contenido = str(
+            contenido or ""
+        ).strip()
+
+        if not contenido:
+            return ""
+
+        patrones = [
+            # mañana a las 11:30 am
+            (
+                r"\b("
+                r"hoy|mañana|pasado\s+mañana|"
+                r"este\s+lunes|este\s+martes|"
+                r"este\s+miércoles|este\s+miercoles|"
+                r"este\s+jueves|este\s+viernes|"
+                r"lunes|martes|miércoles|miercoles|"
+                r"jueves|viernes"
+                r")"
+                r"(?:\s+\d{1,2}\s+de\s+[a-záéíóúñ]+)?"
+                r"\s+(?:a\s+las?|a\s+la)\s+"
+                r"(\d{1,2}:\d{2})"
+                r"\s*(a\.?\s*m\.?|p\.?\s*m\.?|am|pm)?\b"
+            ),
+
+            # mañana a las 11 am
+            (
+                r"\b("
+                r"hoy|mañana|pasado\s+mañana|"
+                r"este\s+lunes|este\s+martes|"
+                r"este\s+miércoles|este\s+miercoles|"
+                r"este\s+jueves|este\s+viernes|"
+                r"lunes|martes|miércoles|miercoles|"
+                r"jueves|viernes"
+                r")"
+                r"(?:\s+\d{1,2}\s+de\s+[a-záéíóúñ]+)?"
+                r"\s+(?:a\s+las?|a\s+la)\s+"
+                r"(\d{1,2})"
+                r"\s*(a\.?\s*m\.?|p\.?\s*m\.?|am|pm)\b"
+            ),
+        ]
+
+        for patron in patrones:
+            coincidencia = re.search(
+                patron,
+                contenido,
+                flags=re.IGNORECASE,
+            )
+
+            if not coincidencia:
+                continue
+
+            frase = coincidencia.group(0).strip()
+
+            frase = re.sub(
+                r"\s+",
+                " ",
+                frase,
+            ).strip(" ,.;")
+
+            if frase.endswith(":"):
+                continue
+
+            return frase
+
+        return ""
+
+    # ========================================================
+    # 1. INTENTO DETERMINISTA CON EL MENSAJE CONFIRMADO
+    # ========================================================
+
+    resultado = extraer_fecha_hora_determinista(
+        texto
+    )
+
+    if resultado:
+        print(
+            "✅ Hora de cita extraída del mensaje confirmado: "
+            f"{resultado!r}"
+        )
+        return resultado
+
+    # ========================================================
+    # 2. INTENTO DETERMINISTA CON EL MENSAJE ORIGINAL
+    # ========================================================
+
+    resultado = extraer_fecha_hora_determinista(
+        respaldo_limpio
+    )
+
+    if resultado:
+        print(
+            "✅ Hora de cita recuperada del mensaje original: "
+            f"{resultado!r}"
+        )
+        return resultado
+
+    # ========================================================
+    # 3. GEMINI COMO ÚLTIMO RESPALDO
+    # ========================================================
 
     if not GEMINI_API_KEY:
-        return respaldo or texto[:120]
+        return respaldo_limpio or texto[:120]
 
     prompt = f"""
-Extrae únicamente el día y hora de la cita del siguiente mensaje.
+Extrae únicamente el día y la hora completos de la cita.
 
-MENSAJE:
+MENSAJE CONFIRMADO:
 {texto}
 
-RESPALDO:
-{respaldo}
+MENSAJE ORIGINAL DEL PROSPECTO:
+{respaldo_limpio}
 
 REGLAS:
-- Responde sólo con una frase breve.
-- Ejemplo: lunes a las 8:00 a.m.
-- Si no encuentras día y hora completos, usa el respaldo.
-- No expliques nada.
+- Responde únicamente con una frase breve.
+- Ejemplo: mañana a las 11:30 am
+- La hora debe estar completa.
+- Nunca devuelvas una hora terminada en dos puntos.
+- Si el mensaje confirmado está incompleto, usa el mensaje original.
+- No agregues explicaciones.
 """
 
     try:
-        response, modelo_usado = generar_con_gemini_con_fallback(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=300,
-                temperature=0.0
-            ),
-            tarea="extracción hora cita"
+        response, modelo_usado = (
+            generar_con_gemini_con_fallback(
+                prompt,
+                generation_config=(
+                    genai.types.GenerationConfig(
+                        max_output_tokens=100,
+                        temperature=0.0,
+                    )
+                ),
+                tarea="extracción hora cita",
+            )
         )
 
-        resultado = extraer_texto_respuesta_gemini(response).strip()
-        return resultado or respaldo or texto[:120]
+        respuesta_ia = (
+            extraer_texto_respuesta_gemini(
+                response
+            ).strip()
+        )
+
+        resultado_ia = (
+            extraer_fecha_hora_determinista(
+                respuesta_ia
+            )
+        )
+
+        if resultado_ia:
+            print(
+                "✅ Hora de cita extraída con Gemini: "
+                f"{resultado_ia!r}, "
+                f"modelo={modelo_usado}"
+            )
+            return resultado_ia
+
+        print(
+            "⚠️ Gemini devolvió una hora incompleta "
+            f"o inválida: {respuesta_ia!r}"
+        )
+
+        return respaldo_limpio or texto[:120]
 
     except Exception as e:
-        print(f"⚠️ Error extrayendo hora de cita: {e}")
-        return respaldo or texto[:120]
+        print(
+            "⚠️ Error extrayendo hora de cita: "
+            f"{e}"
+        )
 
+        return respaldo_limpio or texto[:120]
 
 def extraer_datos_registro_cita(
     mensaje_usuario: str,
