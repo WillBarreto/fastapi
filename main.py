@@ -2459,15 +2459,17 @@ CONTRATO OBLIGATORIO:
                 analisis_respaldo
             )
         ):
+            analisis_respaldo_texto = json.dumps(
+                analisis_respaldo,
+                ensure_ascii=False,
+            )
+
             print(
                 "✅ Se utilizó análisis determinista "
                 "de respaldo: "
-                f"{json.dumps(
-                    analisis_respaldo,
-                    ensure_ascii=False,
-                )}"
+                f"{analisis_respaldo_texto}"
             )
-
+            
             return analisis_respaldo
 
         return crear_analisis_mensaje_vacio()
