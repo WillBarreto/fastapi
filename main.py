@@ -162,6 +162,11 @@ TEMAS_INTERES_VALIDOS = {
 
 ACCIONES_RECOMENDADAS_VALIDAS = {
     "RESPONDER_SALUDO",
+    "PEDIR_REFERENCIA",
+    "PRESENTAR_PROPUESTA_VALOR",
+    "EXPLICAR_METODO_FILADELFIA",
+    "PREGUNTAR_AREA_INTERES",
+    "PROFUNDIZAR_AREA_INTERES",
     "PEDIR_ZONA",
     "CONTINUAR_INFORMES",
     "RESPONDER_TEMA",
@@ -4603,9 +4608,300 @@ def aplicar_reglas_negocio_estructuradas(
         ] = saludo_simple_determinista
 
         return decision
+
+    # ========================================================
+    # 7. SECUENCIA COMERCIAL OBLIGATORIA
+    # ========================================================
+
+    contexto_secuencial = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else {}
+    )
+
+    hitos_comerciales = (
+        contexto_secuencial.get(
+            "hitos_comerciales",
+            [],
+        )
+    )
+
+    if not isinstance(
+        hitos_comerciales,
+        list,
+    ):
+        hitos_comerciales = []
+
+    hitos_comerciales = {
+        str(
+            hito or ""
+        ).strip().upper()
+        for hito in hitos_comerciales
+        if str(
+            hito or ""
+        ).strip()
+    }
+
+    referencia_previa = str(
+        contexto_secuencial.get(
+            "referencia_colegio",
+            "",
+        )
+        or ""
+    ).strip()
+
+    zona_previa_contexto = str(
+        contexto_secuencial.get(
+            "zona_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    areas_interes_previas = (
+        contexto_secuencial.get(
+            "areas_interes",
+            [],
+        )
+    )
+
+    if not isinstance(
+        areas_interes_previas,
+        list,
+    ):
+        areas_interes_previas = []
+
+    solicita_informacion_general = bool(
+        analisis_seguro.get(
+            "intencion_principal"
+        )
+        in {
+            "PEDIR_INFORMES",
+            "OTRO",
+        }
+        or "PEDIR_INFORMES"
+        in analisis_seguro.get(
+            "intenciones_secundarias",
+            [],
+        )
+        or contexto_secuencial.get(
+            "estado_comercial"
+        )
+        in {
+            "PROSPECTO_NUEVO",
+            "EN_CALIFICACION",
+            "PROSPECTO_INFORMADO",
+        }
+    )
+
+    tiene_proceso_comercial_iniciado = bool(
+        solicita_informacion_general
+        or "PIDIO_INFORMES"
+        in hitos_comerciales
+        or referencia_previa
+        or zona_previa_contexto
+        or zona_validada
+    )
+
+    if tiene_proceso_comercial_iniciado:
+        # ----------------------------------------------------
+        # PASO 1: REFERENCIA DEL COLEGIO
+        # ----------------------------------------------------
+
+        referencia_confirmada = bool(
+            referencia_previa
+            or "RESPONDIO_REFERENCIA"
+            in hitos_comerciales
+        )
+
+        if not referencia_confirmada:
+            decision.update({
+                "accion": "PEDIR_REFERENCIA",
+                "motivo": (
+                    "La familia inició el proceso de informes, "
+                    "pero todavía no ha indicado si conoce o "
+                    "tiene alguna referencia del colegio."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "REFERENCIA_COLEGIO"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 2: VALIDACIÓN DE ZONA
+        # ----------------------------------------------------
+
+        zona_confirmada_contexto = bool(
+            zona_validada
+            or zona_previa_contexto
+            or "ZONA_VALIDADA"
+            in hitos_comerciales
+        )
+
+        if not zona_confirmada_contexto:
+            decision.update({
+                "accion": "PEDIR_ZONA",
+                "motivo": (
+                    "La familia ya respondió sobre su "
+                    "referencia del colegio, pero todavía "
+                    "falta validar su localidad."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "VALIDACION_ZONA"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 3: PRESENTACIÓN DE PROPUESTA DE VALOR
+        # ----------------------------------------------------
+
+        if (
+            "RECIBIO_PRESENTACION_VALOR"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "PRESENTAR_PROPUESTA_VALOR",
+                "motivo": (
+                    "La zona ya fue validada y corresponde "
+                    "presentar brevemente la propuesta de "
+                    "valor del colegio."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "PRESENTACION_VALOR"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 4: MÉTODO FILADELFIA
+        # ----------------------------------------------------
+
+        if (
+            "RECIBIO_EXPLICACION_METODO"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "EXPLICAR_METODO_FILADELFIA",
+                "motivo": (
+                    "La familia ya recibió la presentación "
+                    "general y corresponde explicar el "
+                    "Método Filadelfia."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "EXPLICACION_METODO"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 5: ÁREA DE INTERÉS
+        # ----------------------------------------------------
+
+        area_interes_confirmada = bool(
+            areas_interes_previas
+            or "EXPRESO_AREA_INTERES"
+            in hitos_comerciales
+        )
+
+        if not area_interes_confirmada:
+            decision.update({
+                "accion": "PREGUNTAR_AREA_INTERES",
+                "motivo": (
+                    "La familia ya conoce la propuesta "
+                    "general y el Método Filadelfia; ahora "
+                    "corresponde identificar qué aspecto "
+                    "educativo considera más importante."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "IDENTIFICACION_INTERES"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 6: PROFUNDIZACIÓN PERSONALIZADA
+        # ----------------------------------------------------
+
+        if (
+            "RECIBIO_RESPUESTA_PERSONALIZADA"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "PROFUNDIZAR_AREA_INTERES",
+                "motivo": (
+                    "La familia expresó un área de interés "
+                    "y corresponde responder de manera "
+                    "personalizada antes de invitarla a visitar."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "PROFUNDIZACION_INTERES"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 7: INVITACIÓN A VISITA
+        # ----------------------------------------------------
+
+        if not (
+            "ACEPTO_VISITA"
+            in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "INVITAR_CITA",
+                "motivo": (
+                    "La familia ya recibió información "
+                    "suficiente para ser invitada a conocer "
+                    "el colegio presencialmente."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "INVITACION_VISITA"
+
+            return decision
         
     # ========================================================
-    # 7. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
+    # 8. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
     # ========================================================
 
     if (
@@ -4645,7 +4941,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 8. FLUJO DE CITA
+    # 9. FLUJO DE CITA
     # ========================================================
 
     intenciones_cita = {
@@ -4764,7 +5060,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 8. DATOS POSTERIORES A LA CONFIRMACIÓN DE CITA
+    # 10. DATOS POSTERIORES A LA CONFIRMACIÓN DE CITA
     # ========================================================
 
     if (
@@ -4814,7 +5110,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 9. RESPUESTA DE ZONA VÁLIDA
+    # 11. RESPUESTA DE ZONA VÁLIDA
     # ========================================================
 
     if (
@@ -4847,7 +5143,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 10. TEMA EDUCATIVO
+    # 12. TEMA EDUCATIVO
     # ========================================================
 
     if (
@@ -4868,7 +5164,7 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
-    # 11. INFORMES GENERALES
+    # 13. INFORMES GENERALES
     # ========================================================
 
     intencion_principal = str(
@@ -5149,6 +5445,180 @@ def construir_plan_respuesta_estructurada(
             "debe_incluir": [
                 "Un saludo acorde con el mensaje recibido.",
             ],
+        })
+
+        return plan
+
+    if accion == "PEDIR_REFERENCIA":
+        plan.update({
+            "objetivo": (
+                "Conocer si la familia ya tiene alguna "
+                "referencia del Colegio Valle de Filadelfia "
+                "Campus Santa Cruz."
+            ),
+            "debe_incluir": [
+                (
+                    "Una sola pregunta abierta para saber "
+                    "si ya conoce o tiene alguna referencia "
+                    "del colegio."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Pedir nombre, edad, grado o localidad.",
+                    "Presentar todavía el modelo educativo.",
+                    "Invitar todavía a una visita.",
+                    "Formular más de una pregunta.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "PRESENTAR_PROPUESTA_VALOR":
+        plan.update({
+            "objetivo": (
+                "Presentar de manera breve y atractiva la "
+                "propuesta general de valor del colegio."
+            ),
+            "debe_incluir": [
+                (
+                    "Una explicación breve de que el colegio "
+                    "busca desarrollar integralmente a sus alumnos."
+                ),
+                (
+                    "Una pregunta abierta y sencilla que permita "
+                    "continuar la conversación."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Explicar todavía todo el Método Filadelfia.",
+                    "Invitar todavía a una visita.",
+                    "Ofrecer folletos, enlaces o llamadas.",
+                    "Pedir varios datos al mismo tiempo.",
+                    "Formular más de una pregunta.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "EXPLICAR_METODO_FILADELFIA":
+        plan.update({
+            "objetivo": (
+                "Explicar claramente qué es el Método "
+                "Filadelfia y cómo se refleja en el "
+                "aprendizaje de los alumnos."
+            ),
+            "debe_incluir": [
+                (
+                    "Una explicación breve, comprensible y "
+                    "centrada en el valor educativo del método."
+                ),
+                (
+                    "Una sola pregunta abierta para mantener "
+                    "la conversación."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Invitar todavía a una visita.",
+                    "Ofrecer llamadas, folletos o enlaces.",
+                    "Pedir nombre, edad, grado y zona juntos.",
+                    "Formular más de una pregunta.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "PREGUNTAR_AREA_INTERES":
+        plan.update({
+            "objetivo": (
+                "Identificar qué aspecto del desarrollo o "
+                "aprendizaje del alumno es más importante "
+                "para la familia."
+            ),
+            "debe_incluir": [
+                (
+                    "Una única pregunta abierta para conocer "
+                    "qué le interesa fortalecer o qué busca "
+                    "la familia en un colegio."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Enumerar demasiadas opciones.",
+                    "Invitar todavía a una visita.",
+                    "Pedir datos administrativos.",
+                    "Formular más de una pregunta.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "PROFUNDIZAR_AREA_INTERES":
+        plan.update({
+            "objetivo": (
+                "Responder de forma personalizada al área "
+                "educativa que la familia indicó como prioritaria."
+            ),
+            "debe_incluir": [
+                (
+                    "Información institucional directamente "
+                    "relacionada con el interés expresado."
+                ),
+                (
+                    "Una pregunta abierta breve que permita "
+                    "confirmar si esa propuesta responde a "
+                    "lo que la familia busca."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Cambiar a un tema no solicitado.",
+                    "Ofrecer llamadas, enlaces o folletos.",
+                    "Pedir varios datos.",
+                    "Formular más de una pregunta.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "INVITAR_CITA":
+        plan.update({
+            "objetivo": (
+                "Invitar a la familia a conocer presencialmente "
+                "el Campus Santa Cruz Atizapán."
+            ),
+            "debe_incluir": [
+                (
+                    "Una invitación natural y no agresiva "
+                    "para realizar una visita presencial."
+                ),
+                (
+                    "Una sola pregunta abierta para saber "
+                    "si le gustaría conocer el campus."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Proponer llamadas telefónicas o videollamadas.",
+                    "Ofrecer sesiones informativas remotas.",
+                    "Inventar folletos o enlaces.",
+                    "Pedir fecha y hora antes de que la familia acepte.",
+                    "Formular más de una pregunta.",
+                ]
+            ),
         })
 
         return plan
