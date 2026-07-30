@@ -5015,6 +5015,35 @@ def construir_plan_respuesta_estructurada(
         "nivel": nivel,
     }
 
+    # ========================================================
+    # BLOQUEO GLOBAL DE COSTOS
+    # ========================================================
+
+    if not plan["puede_compartir_costos"]:
+        plan["no_debe_incluir"].extend([
+            (
+                "Cualquier cantidad, precio, costo, colegiatura, "
+                "inscripción, mensualidad o importe."
+            ),
+            (
+                "Menciones a becas, descuentos, promociones, "
+                "planes de pago o formas de pago."
+            ),
+            (
+                "Prometer que posteriormente se compartirán "
+                "costos o información económica."
+            ),
+            (
+                "Usar expresiones como información de costos, "
+                "costos correspondientes, costos detallados, "
+                "proceso de admisión y costos."
+            ),
+            (
+                "Introducir el tema económico cuando el "
+                "prospecto no lo ha solicitado."
+            ),
+        ])
+
     if accion == "RESPONDER_SALUDO":
         plan.update({
             "objetivo": (
@@ -5639,6 +5668,57 @@ def generar_respuesta_final_estructurada(
                 respuesta_limpia
             )
         )
+
+        # ====================================================
+        # VALIDACIÓN GLOBAL DE REFERENCIAS ECONÓMICAS
+        # ====================================================
+
+        puede_compartir_costos = bool(
+            decision_segura.get(
+                "puede_compartir_costos",
+                False,
+            )
+        )
+
+        if not puede_compartir_costos:
+            expresiones_economicas_prohibidas = [
+                "costo",
+                "costos",
+                "precio",
+                "precios",
+                "colegiatura",
+                "colegiaturas",
+                "mensualidad",
+                "mensualidades",
+                "inscripcion",
+                "importe",
+                "beca",
+                "becas",
+                "descuento",
+                "descuentos",
+                "promocion",
+                "promociones",
+                "plan de pago",
+                "planes de pago",
+                "forma de pago",
+                "formas de pago",
+                "informacion de costos",
+                "informacion detallada de costos",
+                "costos correspondientes",
+                "costos detallados",
+                "compartir los costos",
+                "brindarte los costos",
+                "proceso de admision y costos",
+            ]
+
+            for expresion in (
+                expresiones_economicas_prohibidas
+            ):
+                if expresion in texto_normalizado:
+                    errores.append(
+                        "MENCION_ECONOMICA_NO_AUTORIZADA:"
+                        f"{expresion}"
+                    )
 
         frases_prohibidas = [
             "refinar segun reglas",
