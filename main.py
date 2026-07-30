@@ -2217,6 +2217,9 @@ def analizar_mensaje_prospecto_con_ia(
     mensaje_usuario: str,
     contact=None,
     history=None,
+    contexto_comercial: Optional[
+        Dict[str, Any]
+    ] = None,
 ) -> Dict[str, Any]:
     """
     Analiza integralmente el mensaje actual del prospecto con Gemini.
@@ -2306,6 +2309,21 @@ def analizar_mensaje_prospecto_con_ia(
         indent=2,
     )
 
+    contexto_comercial_seguro = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else crear_contexto_comercial_vacio()
+    )
+
+    contexto_comercial_json = json.dumps(
+        contexto_comercial_seguro,
+        ensure_ascii=False,
+        indent=2,
+    )
+
     prompt_analisis = f"""
 Eres el analizador semántico de un bot de admisiones del
 Colegio Valle de Filadelfia, Campus Santa Cruz Atizapán.
@@ -2324,6 +2342,9 @@ ESTATUS DEL CONTACTO:
 
 DATOS PREVIOS GUARDADOS:
 {notas_contacto or "Sin datos previos guardados."}
+
+CONTEXTO COMERCIAL ENRIQUECIDO:
+{contexto_comercial_json}
 
 HISTORIAL RECIENTE:
 {historial_texto}
@@ -2402,17 +2423,41 @@ las demás en "intenciones_secundarias".
 "pide_cita": true
 
 8. Debes interpretar el mensaje actual como continuación de la
-conversación, no como un mensaje aislado.
+conversación, nunca como un mensaje aislado.
 
 Usa conjuntamente:
 
+- el contexto comercial enriquecido;
+- la etapa conversacional;
+- los hitos comerciales;
+- los datos ya confirmados;
 - el estado conversacional actual;
 - el estatus comercial;
 - los datos previos guardados;
 - el historial reciente;
-- la última promesa realizada por el asistente;
+- el último mensaje del asistente;
+- la última pregunta formulada por el asistente;
 - la fecha y hora de cita recuperadas del contexto;
 - el mensaje actual.
+
+REGLA CONTEXTUAL ABSOLUTA:
+
+Cuando el mensaje actual sea breve, ambiguo o no tenga significado
+suficiente por sí solo, interprétalo como respuesta a la última
+pregunta del asistente.
+
+Una respuesta breve puede confirmar, negar, precisar, corregir o
+completar el dato que estaba pendiente.
+
+No exijas que el prospecto repita el tema de la pregunta.
+
+No devuelvas un contrato vacío únicamente porque el mensaje actual
+sea breve. Recupera su significado del historial, de la última
+pregunta y del contexto comercial enriquecido.
+
+Los hitos y datos del contexto comercial representan información
+ya recuperada de la conversación. No los ignores ni obligues a la
+familia a responder nuevamente algo que ya quedó confirmado.
 
 Activa los siguientes campos según el significado integral:
 
@@ -7182,8 +7227,11 @@ def procesar_mensaje_prospecto_estructurado(
             mensaje_usuario=mensaje,
             contact=contact,
             history=history or [],
+            contexto_comercial=(
+                contexto_comercial
+            ),
         )
-
+        
         analisis_fallo = (
             analisis.get("intencion_principal") == "OTRO"
             and analisis.get("confianza", 0.0) == 0.0
