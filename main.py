@@ -3906,6 +3906,99 @@ def clasificar_nivel_por_fecha_nacimiento(
 
     return resultado
 
+def detectar_saludo_simple_estructurado(
+    mensaje_usuario: str,
+) -> str:
+    """
+    Detecta determinísticamente cuando el mensaje contiene
+    únicamente un saludo.
+
+    Devuelve el saludo contextual que debe utilizarse:
+    - Hola
+    - Buenos días
+    - Buenas tardes
+    - Buenas noches
+
+    Devuelve una cadena vacía cuando el mensaje contiene
+    una intención adicional.
+    """
+
+    mensaje_original = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    if not mensaje_original:
+        return ""
+
+    mensaje_normalizado = unicodedata.normalize(
+        "NFD",
+        mensaje_original.lower(),
+    )
+
+    mensaje_normalizado = "".join(
+        caracter
+        for caracter in mensaje_normalizado
+        if unicodedata.category(caracter) != "Mn"
+    )
+
+    mensaje_normalizado = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        mensaje_normalizado,
+    )
+
+    mensaje_normalizado = re.sub(
+        r"\s+",
+        " ",
+        mensaje_normalizado,
+    ).strip()
+
+    equivalencias_saludo = {
+        "hola": "Hola",
+        "holaa": "Hola",
+        "holaaa": "Hola",
+        "buen dia": "Buenos días",
+        "buenos dias": "Buenos días",
+        "buenas tardes": "Buenas tardes",
+        "buena tarde": "Buenas tardes",
+        "buenas noches": "Buenas noches",
+        "buena noche": "Buenas noches",
+        "que tal": "Hola",
+    }
+
+    return equivalencias_saludo.get(
+        mensaje_normalizado,
+        "",
+    )
+
+
+def crear_respuesta_saludo_simple_estructurado(
+    mensaje_usuario: str,
+) -> str:
+    """
+    Genera una respuesta institucional breve y abierta
+    para un saludo simple.
+
+    No presenta el colegio.
+    No pide nombre, nivel, zona ni grado.
+    No utiliza Gemini.
+    """
+
+    saludo_contextual = (
+        detectar_saludo_simple_estructurado(
+            mensaje_usuario
+        )
+    )
+
+    if not saludo_contextual:
+        return ""
+
+    return (
+        f"{saludo_contextual}. "
+        "¿En qué podemos ayudarle?"
+    )
+    
+
 def aplicar_reglas_negocio_estructuradas(
     analisis: Dict[str, Any],
     contact=None,
@@ -4489,14 +4582,13 @@ def aplicar_reglas_negocio_estructuradas(
     # 6. SALUDO SIMPLE
     # ========================================================
 
-    if (
-        analisis_seguro.get("saludo_simple")
-        and analisis_seguro.get("intencion_principal")
-        == "SALUDO"
-        and not analisis_seguro.get(
-            "intenciones_secundarias"
+    saludo_simple_determinista = (
+        detectar_saludo_simple_estructurado(
+            mensaje_usuario
         )
-    ):
+    )
+
+    if saludo_simple_determinista:
         decision.update({
             "accion": "RESPONDER_SALUDO",
             "motivo": (
@@ -4506,8 +4598,12 @@ def aplicar_reglas_negocio_estructuradas(
             "puede_compartir_costos": False,
         })
 
-        return decision
+        decision["datos_detectados"][
+            "saludo_contextual"
+        ] = saludo_simple_determinista
 
+        return decision
+        
     # ========================================================
     # 7. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
     # ========================================================
@@ -5504,6 +5600,43 @@ def generar_respuesta_final_estructurada(
         resultado["error"] = "MENSAJE_USUARIO_VACIO"
         return resultado
 
+    # ========================================================
+    # SALUDO SIMPLE DETERMINISTA
+    # ========================================================
+
+    if accion == "RESPONDER_SALUDO":
+        respuesta_saludo = (
+            crear_respuesta_saludo_simple_estructurado(
+                mensaje
+            )
+        )
+
+        if not respuesta_saludo:
+            respuesta_saludo = (
+                "Hola. ¿En qué podemos ayudarle?"
+            )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_saludo,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "SALUDO_SIMPLE_DETERMINISTA"
+            ),
+            "error": "",
+        })
+
+        print(
+            "👋 Saludo simple estructurado. "
+            "Se omite Gemini: "
+            f"{respuesta_saludo}"
+        )
+
+        return resultado
+
     api_key = (
         os.getenv("GOOGLE_AI_API_KEY")
         or os.getenv("GEMINI_API_KEY")
@@ -5577,8 +5710,13 @@ def generar_respuesta_final_estructurada(
             )
 
         if accion == "RESPONDER_SALUDO":
-            return "¡Hola! Con gusto le atendemos."
-
+            return (
+                crear_respuesta_saludo_simple_estructurado(
+                    mensaje
+                )
+                or "Hola. ¿En qué podemos ayudarle?"
+            )
+            
         if accion == "PEDIR_FECHA_NACIMIENTO":
             return (
                 "¿Me comparte, por favor, la fecha de nacimiento "
