@@ -6252,6 +6252,42 @@ def generar_respuesta_final_estructurada(
 
         errores = []
 
+        # ====================================================
+        # FORMATO VISUAL PARA WHATSAPP
+        # ====================================================
+
+        signos_pregunta = (
+            respuesta_limpia.count("?")
+        )
+
+        if signos_pregunta > 1:
+            errores.append(
+                "MAS_DE_UNA_PREGUNTA"
+            )
+
+        contiene_pregunta = (
+            "?" in respuesta_limpia
+        )
+
+        if contiene_pregunta:
+            posicion_pregunta = (
+                respuesta_limpia.rfind("?")
+            )
+
+            texto_antes_pregunta = (
+                respuesta_limpia[
+                    :posicion_pregunta + 1
+                ]
+            )
+
+            if (
+                "\n\n" not in texto_antes_pregunta
+                and len(respuesta_limpia) > 120
+            ):
+                errores.append(
+                    "FALTA_SEPARACION_ANTES_PREGUNTA"
+                )
+
         if not respuesta_limpia:
             errores.append("RESPUESTA_VACIA")
 
@@ -6954,6 +6990,11 @@ INSTRUCCIONES:
 - Respeta la decisión de Python.
 - Cumple el objetivo y las restricciones del plan.
 - Escribe una sola respuesta breve, cordial y natural.
+- Usa trato institucional de usted, salvo que el historial
+  muestre claramente que debe conservarse otro tratamiento.
+- No agregues un saludo si el prospecto no saludó.
+- No uses expresiones como "qué gusto saludarte",
+  "qué gusto" o "mucho gusto" como frases de relleno.
 - No muestres análisis, pasos, listas ni razonamientos.
 - No uses encabezados.
 - No uses Markdown.
@@ -6962,8 +7003,21 @@ INSTRUCCIONES:
 - No menciones Google, rutas, coordenadas ni distancias.
 - No inventes costos, fechas, disponibilidad ni datos.
 - Devuelve exclusivamente el texto para WhatsApp.
-"""
 
+REGLAS DE FORMATO PARA WHATSAPP:
+
+- Divide la respuesta en párrafos breves.
+- Cada párrafo debe expresar una sola idea.
+- Cuando exista una explicación seguida de una pregunta,
+  coloca una línea en blanco antes de la pregunta.
+- La pregunta principal debe aparecer en el último párrafo.
+- Formula como máximo una pregunta principal.
+- Usa como máximo dos párrafos, salvo que sea indispensable
+  un tercero.
+- No redactes bloques largos de texto.
+- Evita respuestas visualmente densas o amontonadas.
+- Conserva exactamente los saltos de línea en la respuesta final.
+"""
     ultimo_modelo = ""
     errores_acumulados = []
 
