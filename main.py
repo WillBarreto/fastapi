@@ -35,6 +35,83 @@ USE_STRUCTURED_AI_FLOW = (
 )
 
 # ============================================================
+# NÚMEROS AUTORIZADOS PARA PROBAR EL FLUJO ESTRUCTURADO
+# ============================================================
+
+STRUCTURED_FLOW_TEST_NUMBERS = {
+    numero.strip()
+    for numero in os.getenv(
+        "STRUCTURED_FLOW_TEST_NUMBERS",
+        "",
+    ).split(",")
+    if numero.strip()
+}
+
+
+def normalizar_numero_whatsapp(
+    numero: str,
+) -> str:
+    """
+    Normaliza un número para poder comparar variantes como:
+    +5215548123885
+    whatsapp:+5215548123885
+    5215548123885
+    """
+
+    numero_limpio = str(
+        numero or ""
+    ).strip()
+
+    numero_limpio = numero_limpio.replace(
+        "whatsapp:",
+        "",
+    )
+
+    digitos = re.sub(
+        r"\D",
+        "",
+        numero_limpio,
+    )
+
+    return digitos
+
+
+def es_numero_prueba_flujo_estructurado(
+    numero: str,
+) -> bool:
+    """
+    Indica si un número está autorizado para utilizar
+    el nuevo flujo estructurado aunque el feature flag
+    general siga apagado.
+    """
+
+    numero_normalizado = (
+        normalizar_numero_whatsapp(
+            numero
+        )
+    )
+
+    if not numero_normalizado:
+        return False
+
+    numeros_autorizados = {
+        normalizar_numero_whatsapp(
+            numero_configurado
+        )
+        for numero_configurado
+        in STRUCTURED_FLOW_TEST_NUMBERS
+        if normalizar_numero_whatsapp(
+            numero_configurado
+        )
+    }
+
+    return (
+        numero_normalizado
+        in numeros_autorizados
+    )
+    
+
+# ============================================================
 # CONTRATO DE ANÁLISIS ESTRUCTURADO DEL MENSAJE DEL PROSPECTO
 # ============================================================
 
@@ -10752,14 +10829,94 @@ async def whatsapp_webhook(
         print(f"👤 USUARIO: {mensaje_entrada}")
         print(f"{'-'*40}")
 
-        contact = get_or_create_contact(db, From)
-        save_message(db, contact.id, 'incoming', mensaje_entrada)
-        
-        estado_flujo_actual = get_flow_state(contact)
-        
-        if estado_flujo_actual == "ESPERANDO_DATOS_CITA":
-            return procesar_datos_registro_cita(db, contact, From, mensaje_entrada)
-        
+        contact = get_or_create_contact(
+            db,
+            From,
+        )
+
+        # El mensaje entrante se guarda una sola vez antes
+        # de decidir cuál flujo debe procesarlo.
+        save_message(
+            db,
+            contact.id,
+            "incoming",
+            mensaje_entrada,
+        )
+
+        usar_flujo_estructurado = bool(
+            USE_STRUCTURED_AI_FLOW
+            or es_numero_prueba_flujo_estructurado(
+                From
+            )
+        )
+
+        if usar_flujo_estructurado:
+            origen_activacion = (
+                "FEATURE_FLAG_GENERAL"
+                if USE_STRUCTURED_AI_FLOW
+                else "NUMERO_DE_PRUEBA"
+            )
+
+            print(
+                "🧪 Flujo estructurado activado en webhook: "
+                f"origen={origen_activacion}, "
+                f"numero={From}"
+            )
+
+            resultado_estructurado = (
+                procesar_mensaje_whatsapp_estructurado_real(
+                    db=db,
+                    contact=contact,
+                    from_number=From,
+                    mensaje_usuario=mensaje_entrada,
+                )
+            )
+
+            resultado_estructurado_texto = (
+                json.dumps(
+                    resultado_estructurado,
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+
+            print(
+                "🧪 Resultado flujo estructurado "
+                "desde webhook: "
+                f"{resultado_estructurado_texto}"
+            )
+
+            return {
+                "status": (
+                    "processed_structured_flow"
+                    if resultado_estructurado.get(
+                        "procesado"
+                    )
+                    else "structured_flow_error"
+                ),
+                "contact_id": contact.id,
+                "activation_source": (
+                    origen_activacion
+                ),
+                "structured_result": (
+                    resultado_estructurado
+                ),
+            }
+        estado_flujo_actual = get_flow_state(
+            contact
+        )
+
+        if (
+            estado_flujo_actual
+            == "ESPERANDO_DATOS_CITA"
+        ):
+            return procesar_datos_registro_cita(
+                db,
+                contact,
+                From,
+                mensaje_entrada,
+            )
+            
         if es_saludo_repetido_temprano(estado_flujo_actual, mensaje_entrada):
             return responder_saludo_repetido_temprano(db, contact, From, mensaje_entrada)
         
