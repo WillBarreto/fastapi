@@ -10293,6 +10293,177 @@ async def debug_admin_whatsapp_test(
         "resultado": resultado,
         "error": "",
     }
+
+def crear_respuesta_cortesia_estructurada(
+    mensaje_usuario: str,
+    contact=None,
+) -> str:
+    """
+    Responde de manera determinista a agradecimientos
+    y cierres breves.
+
+    Evita utilizar Gemini para mensajes como:
+    - gracias
+    - muchas gracias
+    - perfecto, gracias
+    - ok, gracias
+    - nos vemos
+    - hasta mañana
+
+    Devuelve una cadena vacía cuando el mensaje contiene
+    otra intención que debe procesar el flujo estructurado.
+    """
+
+    mensaje_original = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    if not mensaje_original:
+        return ""
+
+    mensaje_normalizado = unicodedata.normalize(
+        "NFD",
+        mensaje_original.lower(),
+    )
+
+    mensaje_normalizado = "".join(
+        caracter
+        for caracter in mensaje_normalizado
+        if unicodedata.category(caracter) != "Mn"
+    )
+
+    mensaje_normalizado = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        mensaje_normalizado,
+    )
+
+    mensaje_normalizado = re.sub(
+        r"\s+",
+        " ",
+        mensaje_normalizado,
+    ).strip()
+
+    expresiones_cortesia = {
+        "gracias",
+        "muchas gracias",
+        "mil gracias",
+        "perfecto gracias",
+        "muy bien gracias",
+        "ok gracias",
+        "okay gracias",
+        "sale gracias",
+        "esta bien gracias",
+        "de acuerdo gracias",
+        "excelente gracias",
+        "nos vemos",
+        "hasta manana",
+        "hasta luego",
+        "buena tarde",
+        "buen dia",
+    }
+
+    if mensaje_normalizado not in expresiones_cortesia:
+        return ""
+
+    nombre_tutor = ""
+
+    if contact is not None:
+        nombre_tutor = (
+            get_note_value(
+                contact,
+                "NOMBRE_PADRES",
+            )
+            or get_note_value(
+                contact,
+                "NOMBRE_TUTOR",
+            )
+            or get_note_value(
+                contact,
+                "NOMBRE_PADRE",
+            )
+            or get_note_value(
+                contact,
+                "NOMBRE_MADRE",
+            )
+        )
+
+    primer_nombre = ""
+
+    if nombre_tutor:
+        primer_nombre = (
+            nombre_tutor
+            .strip()
+            .split()[0]
+        )
+
+    estado_contacto = str(
+        getattr(
+            contact,
+            "status",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    estado_flujo = ""
+
+    if contact is not None:
+        try:
+            estado_flujo = str(
+                get_flow_state(
+                    contact
+                )
+                or ""
+            ).strip().upper()
+
+        except Exception:
+            estado_flujo = ""
+
+    hora_cita = ""
+
+    if contact is not None:
+        hora_cita = get_note_value(
+            contact,
+            "HORA_CITA",
+        )
+
+    tiene_visita_confirmada = bool(
+        estado_contacto
+        in {
+            "VISITA_AGENDADA",
+            "VISITA_CONFIRMADA",
+        }
+        or estado_flujo
+        in {
+            "CITA_DATOS_COMPLETOS",
+            "VISITA_CONFIRMADA",
+        }
+        or hora_cita
+    )
+
+    if tiene_visita_confirmada:
+        if primer_nombre:
+            return (
+                f"Con gusto, {primer_nombre}. "
+                "Los esperamos en su visita."
+            )
+
+        return (
+            "Con gusto. "
+            "Los esperamos en su visita."
+        )
+
+    if primer_nombre:
+        return (
+            f"Con gusto, {primer_nombre}. "
+            "Quedamos atentos para apoyarle."
+        )
+
+    return (
+        "Con gusto. "
+        "Quedamos atentos para apoyarle."
+    )
     
 # ============================================================
 # PUENTE PRODUCTIVO DEL NUEVO FLUJO ESTRUCTURADO
@@ -10350,6 +10521,102 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
     if contact is None:
         resultado_final["error"] = "CONTACTO_NO_DISPONIBLE"
+        return resultado_final
+
+        # --------------------------------------------------------
+    # RESPUESTA DETERMINISTA A CORTESÍAS Y CIERRES BREVES
+    # --------------------------------------------------------
+
+    respuesta_cortesia = (
+        crear_respuesta_cortesia_estructurada(
+            mensaje_usuario=mensaje,
+            contact=contact,
+        )
+    )
+
+    if respuesta_cortesia:
+        print(
+            "👋 Cortesía breve detectada. "
+            "Se omite Gemini."
+        )
+
+        resultado_twilio = (
+            enviar_respuesta_twilio(
+                numero_destino,
+                respuesta_cortesia,
+            )
+        )
+
+        twilio_sid = None
+
+        if (
+            isinstance(
+                resultado_twilio,
+                str,
+            )
+            and "SID:" in resultado_twilio
+        ):
+            twilio_sid = (
+                resultado_twilio
+                .split(
+                    "SID:",
+                    1,
+                )[1]
+                .strip()
+            )
+
+        envio_exitoso = bool(
+            isinstance(
+                resultado_twilio,
+                str,
+            )
+            and resultado_twilio.startswith(
+                "✅"
+            )
+        )
+
+        if envio_exitoso:
+            save_message(
+                db,
+                contact.id,
+                "outgoing",
+                respuesta_cortesia,
+                twilio_sid,
+            )
+
+            db.commit()
+
+        resultado_final.update({
+            "procesado": envio_exitoso,
+            "mensaje_enviado": envio_exitoso,
+            "respuesta": respuesta_cortesia,
+            "twilio_resultado": resultado_twilio,
+            "twilio_sid": twilio_sid,
+            "resultado_orquestador": {
+                "version": "1.0",
+                "flujo": "estructurado",
+                "procesado": envio_exitoso,
+                "tipo_respuesta": (
+                    "CORTESIA_DETERMINISTA"
+                ),
+                "respuesta_generada": (
+                    respuesta_cortesia
+                ),
+                "gemini_utilizado": False,
+                "error": "",
+            },
+            "error": (
+                ""
+                if envio_exitoso
+                else "ERROR_ENVIANDO_CORTESIA_TWILIO"
+            ),
+        })
+
+        print(
+            "👋 Respuesta de cortesía: "
+            f"{respuesta_cortesia}"
+        )
+
         return resultado_final
 
     try:
