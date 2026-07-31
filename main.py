@@ -16,6 +16,7 @@ import json
 import base64
 import re
 import unicodedata
+import threading
 
 from sqlalchemy.dialects.postgresql import ENUM
 from prompt_manager import PromptManager
@@ -26,6 +27,25 @@ prompt_manager = PromptManager()
 
 FLOW_STATE_PREFIX = "FLOW_STATE:"
 ADMIN_SELECTED_TASKS = {}
+
+# ============================================================
+# BUFFER DE MENSAJES CONSECUTIVOS DE WHATSAPP
+# ============================================================
+
+MESSAGE_BUFFER_SECONDS = int(
+    os.getenv(
+        "MESSAGE_BUFFER_SECONDS",
+        "20",
+    )
+)
+
+MESSAGE_BUFFERS: Dict[
+    str,
+    Dict[str, Any],
+] = {}
+
+MESSAGE_BUFFER_LOCK = threading.Lock()
+
 
 USE_STRUCTURED_AI_FLOW = (
     os.getenv("USE_STRUCTURED_AI_FLOW", "false")
@@ -11604,10 +11624,8 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
         if not respuesta_bot:
             respuesta_bot = (
-                "Con gusto le apoyamos.\n\n"
-                "En este momento no pude procesar completamente "
-                "su mensaje. Permítame revisarlo para brindarle "
-                "una respuesta adecuada."
+                "Creo que no comprendí bien su mensaje.\n\n"
+                "¿Podría aclararme su respuesta, por favor?"
             )
 
             resultado_orquestador[
@@ -11876,7 +11894,216 @@ async def debug_structured_real_flow_live(
             "mensaje_enviado": False,
             "error": str(e),
         }
-        
+
+# ============================================================
+# PROCESAMIENTO DIFERIDO DEL BUFFER DE WHATSAPP
+# ============================================================
+
+def procesar_buffer_whatsapp_estructurado(
+    from_number: str,
+    identificador_buffer: str,
+) -> None:
+    """
+    Procesa conjuntamente los mensajes recibidos después de que
+    transcurre el periodo de inactividad configurado.
+
+    Cada ejecución utiliza su propia sesión de base de datos.
+    """
+
+    mensajes_buffer = []
+
+    with MESSAGE_BUFFER_LOCK:
+        buffer_actual = MESSAGE_BUFFERS.get(
+            from_number
+        )
+
+        if not buffer_actual:
+            return
+
+        if (
+            buffer_actual.get("identificador")
+            != identificador_buffer
+        ):
+            return
+
+        mensajes_buffer = list(
+            buffer_actual.get(
+                "mensajes",
+                [],
+            )
+        )
+
+        MESSAGE_BUFFERS.pop(
+            from_number,
+            None,
+        )
+
+    mensaje_conjunto = "\n".join(
+        str(mensaje or "").strip()
+        for mensaje in mensajes_buffer
+        if str(mensaje or "").strip()
+    ).strip()
+
+    if not mensaje_conjunto:
+        return
+
+    db_buffer = SessionLocal()
+
+    try:
+        contact = get_or_create_contact(
+            db_buffer,
+            from_number,
+        )
+
+        print(
+            "\n📦 PROCESANDO BUFFER DE WHATSAPP"
+        )
+        print(
+            f"📱 Número: {from_number}"
+        )
+        print(
+            f"📨 Mensajes agrupados: "
+            f"{len(mensajes_buffer)}"
+        )
+        print(
+            f"📝 Mensaje conjunto: "
+            f"{mensaje_conjunto}"
+        )
+
+        resultado_estructurado = (
+            procesar_mensaje_whatsapp_estructurado_real(
+                db=db_buffer,
+                contact=contact,
+                from_number=from_number,
+                mensaje_usuario=mensaje_conjunto,
+            )
+        )
+
+        print(
+            "✅ Buffer estructurado procesado: "
+            f"{json.dumps(
+                resultado_estructurado,
+                ensure_ascii=False,
+                default=str,
+            )}"
+        )
+
+    except Exception as e:
+        db_buffer.rollback()
+
+        print(
+            "❌ Error procesando buffer "
+            f"de WhatsApp: {e}"
+        )
+
+    finally:
+        db_buffer.close()
+
+
+def agregar_mensaje_al_buffer_whatsapp(
+    from_number: str,
+    mensaje: str,
+) -> Dict[str, Any]:
+    """
+    Agrega un mensaje al buffer del contacto.
+
+    Cada mensaje nuevo cancela el temporizador anterior y vuelve
+    a iniciar el periodo de espera.
+    """
+
+    numero_normalizado = (
+        normalizar_numero_whatsapp(
+            from_number
+        )
+    )
+
+    clave_buffer = (
+        numero_normalizado
+        or str(from_number or "").strip()
+    )
+
+    identificador_buffer = (
+        f"{clave_buffer}-"
+        f"{datetime.now(timezone.utc).timestamp()}"
+    )
+
+    with MESSAGE_BUFFER_LOCK:
+        buffer_anterior = MESSAGE_BUFFERS.get(
+            clave_buffer
+        )
+
+        mensajes_acumulados = []
+
+        if buffer_anterior:
+            temporizador_anterior = (
+                buffer_anterior.get(
+                    "temporizador"
+                )
+            )
+
+            if temporizador_anterior:
+                try:
+                    temporizador_anterior.cancel()
+                except Exception:
+                    pass
+
+            mensajes_acumulados = list(
+                buffer_anterior.get(
+                    "mensajes",
+                    [],
+                )
+            )
+
+        mensaje_limpio = str(
+            mensaje or ""
+        ).strip()
+
+        if mensaje_limpio:
+            mensajes_acumulados.append(
+                mensaje_limpio
+            )
+
+        temporizador = threading.Timer(
+            MESSAGE_BUFFER_SECONDS,
+            procesar_buffer_whatsapp_estructurado,
+            args=(
+                from_number,
+                identificador_buffer,
+            ),
+        )
+
+        temporizador.daemon = True
+
+        MESSAGE_BUFFERS[clave_buffer] = {
+            "identificador": identificador_buffer,
+            "mensajes": mensajes_acumulados,
+            "temporizador": temporizador,
+            "ultima_actualizacion": (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            ),
+        }
+
+        temporizador.start()
+
+    print(
+        "📥 Mensaje agregado al buffer: "
+        f"numero={from_number}, "
+        f"mensajes={len(mensajes_acumulados)}, "
+        f"espera={MESSAGE_BUFFER_SECONDS}s"
+    )
+
+    return {
+        "buffer_activo": True,
+        "mensajes_acumulados": (
+            len(mensajes_acumulados)
+        ),
+        "segundos_espera": (
+            MESSAGE_BUFFER_SECONDS
+        ),
+    }
+    
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
@@ -11978,54 +12205,31 @@ async def whatsapp_webhook(
             )
 
             print(
-                "🧪 Flujo estructurado activado en webhook: "
+                "🧪 Flujo estructurado enviado al buffer: "
                 f"origen={origen_activacion}, "
                 f"numero={From}"
             )
 
-            resultado_estructurado = (
-                procesar_mensaje_whatsapp_estructurado_real(
-                    db=db,
-                    contact=contact,
+            resultado_buffer = (
+                agregar_mensaje_al_buffer_whatsapp(
                     from_number=From,
-                    mensaje_usuario=mensaje_entrada,
+                    mensaje=mensaje_entrada,
                 )
-            )
-
-            resultado_estructurado_texto = (
-                json.dumps(
-                    resultado_estructurado,
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-
-            print(
-                "🧪 Resultado flujo estructurado "
-                "desde webhook: "
-                f"{resultado_estructurado_texto}"
             )
 
             return {
-                "status": (
-                    "processed_structured_flow"
-                    if resultado_estructurado.get(
-                        "procesado"
-                    )
-                    else "structured_flow_error"
-                ),
+                "status": "buffered_structured_flow",
                 "contact_id": contact.id,
                 "activation_source": (
                     origen_activacion
                 ),
-                "structured_result": (
-                    resultado_estructurado
-                ),
+                "buffer_result": resultado_buffer,
             }
+
         estado_flujo_actual = get_flow_state(
             contact
         )
-
+        
         if (
             estado_flujo_actual
             == "ESPERANDO_DATOS_CITA"
