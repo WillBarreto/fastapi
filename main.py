@@ -4681,26 +4681,14 @@ def aplicar_reglas_negocio_estructuradas(
         hitos_comerciales = []
 
     hitos_comerciales = {
-        str(
-            hito or ""
-        ).strip().upper()
+        str(hito or "").strip().upper()
         for hito in hitos_comerciales
-        if str(
-            hito or ""
-        ).strip()
+        if str(hito or "").strip()
     }
 
     referencia_previa = str(
         contexto_secuencial.get(
             "referencia_colegio",
-            "",
-        )
-        or ""
-    ).strip()
-
-    zona_previa_contexto = str(
-        contexto_secuencial.get(
-            "zona_interes",
             "",
         )
         or ""
@@ -4719,86 +4707,54 @@ def aplicar_reglas_negocio_estructuradas(
     ):
         areas_interes_previas = []
 
-    solicita_informacion_general = bool(
+    intencion_principal = str(
         analisis_seguro.get(
-            "intencion_principal"
+            "intencion_principal",
+            "",
         )
-        in {
-            "PEDIR_INFORMES",
-            "OTRO",
-        }
-        or "PEDIR_INFORMES"
-        in analisis_seguro.get(
+        or ""
+    ).strip().upper()
+
+    intenciones_secundarias = (
+        analisis_seguro.get(
             "intenciones_secundarias",
             [],
         )
-        or contexto_secuencial.get(
-            "estado_comercial"
-        )
-        in {
-            "PROSPECTO_NUEVO",
-            "EN_CALIFICACION",
-            "PROSPECTO_INFORMADO",
-        }
     )
 
+    if not isinstance(
+        intenciones_secundarias,
+        list,
+    ):
+        intenciones_secundarias = []
+
     tiene_proceso_comercial_iniciado = bool(
-        solicita_informacion_general
+        intencion_principal == "PEDIR_INFORMES"
+        or "PEDIR_INFORMES"
+        in intenciones_secundarias
         or "PIDIO_INFORMES"
         in hitos_comerciales
-        or referencia_previa
-        or zona_previa_contexto
-        or zona_validada
     )
 
     if tiene_proceso_comercial_iniciado:
-        # ----------------------------------------------------
-        # PASO 1: REFERENCIA DEL COLEGIO
-        # ----------------------------------------------------
-
-        referencia_confirmada = bool(
-            referencia_previa
-            or "RESPONDIO_REFERENCIA"
-            in hitos_comerciales
-        )
-
-        if not referencia_confirmada:
-            decision.update({
-                "accion": "PEDIR_REFERENCIA",
-                "motivo": (
-                    "La familia inició el proceso de informes, "
-                    "pero todavía no ha indicado si conoce o "
-                    "tiene alguna referencia del colegio."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": False,
-                "debe_finalizar_conversacion": False,
-            })
-
-            decision["datos_detectados"][
-                "etapa_secuencial"
-            ] = "REFERENCIA_COLEGIO"
-
-            return decision
 
         # ----------------------------------------------------
-        # PASO 2: VALIDACIÓN DE ZONA
+        # PASO 1: VALIDAR ZONA
         # ----------------------------------------------------
 
-        zona_confirmada_contexto = bool(
+        zona_confirmada = bool(
             zona_validada
-            or zona_previa_contexto
             or "ZONA_VALIDADA"
             in hitos_comerciales
         )
 
-        if not zona_confirmada_contexto:
+        if not zona_confirmada:
             decision.update({
                 "accion": "PEDIR_ZONA",
                 "motivo": (
-                    "La familia ya respondió sobre su "
-                    "referencia del colegio, pero todavía "
-                    "falta validar su localidad."
+                    "La familia confirmó que desea recibir "
+                    "información del colegio y corresponde "
+                    "validar primero su localidad."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -4812,7 +4768,36 @@ def aplicar_reglas_negocio_estructuradas(
             return decision
 
         # ----------------------------------------------------
-        # PASO 3: PRESENTACIÓN DE PROPUESTA DE VALOR
+        # PASO 2: REFERENCIA DEL COLEGIO
+        # ----------------------------------------------------
+
+        referencia_confirmada = bool(
+            referencia_previa
+            or "RESPONDIO_REFERENCIA"
+            in hitos_comerciales
+        )
+
+        if not referencia_confirmada:
+            decision.update({
+                "accion": "PEDIR_REFERENCIA",
+                "motivo": (
+                    "La localidad ya fue validada y ahora "
+                    "corresponde conocer cómo supo del colegio "
+                    "o qué referencias tiene."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "REFERENCIA_COLEGIO"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 3: PROPUESTA GENERAL DE VALOR
         # ----------------------------------------------------
 
         if (
@@ -4822,9 +4807,9 @@ def aplicar_reglas_negocio_estructuradas(
             decision.update({
                 "accion": "PRESENTAR_PROPUESTA_VALOR",
                 "motivo": (
-                    "La zona ya fue validada y corresponde "
-                    "presentar brevemente la propuesta de "
-                    "valor del colegio."
+                    "La zona y la referencia ya fueron "
+                    "confirmadas. Corresponde presentar la "
+                    "propuesta general de valor."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -4838,7 +4823,7 @@ def aplicar_reglas_negocio_estructuradas(
             return decision
 
         # ----------------------------------------------------
-        # PASO 4: MÉTODO FILADELFIA
+        # PASO 4: EXPLICAR MÉTODO FILADELFIA
         # ----------------------------------------------------
 
         if (
@@ -4849,7 +4834,7 @@ def aplicar_reglas_negocio_estructuradas(
                 "accion": "EXPLICAR_METODO_FILADELFIA",
                 "motivo": (
                     "La familia ya recibió la presentación "
-                    "general y corresponde explicar el "
+                    "general. Corresponde explicar el "
                     "Método Filadelfia."
                 ),
                 "requiere_admin": False,
@@ -4864,7 +4849,7 @@ def aplicar_reglas_negocio_estructuradas(
             return decision
 
         # ----------------------------------------------------
-        # PASO 5: ÁREA DE INTERÉS
+        # PASO 5: IDENTIFICAR ÁREA DE INTERÉS
         # ----------------------------------------------------
 
         area_interes_confirmada = bool(
@@ -4877,10 +4862,9 @@ def aplicar_reglas_negocio_estructuradas(
             decision.update({
                 "accion": "PREGUNTAR_AREA_INTERES",
                 "motivo": (
-                    "La familia ya conoce la propuesta "
-                    "general y el Método Filadelfia; ahora "
-                    "corresponde identificar qué aspecto "
-                    "educativo considera más importante."
+                    "La familia ya conoce la propuesta y el "
+                    "Método Filadelfia. Corresponde identificar "
+                    "qué área desea fortalecer."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -4894,7 +4878,7 @@ def aplicar_reglas_negocio_estructuradas(
             return decision
 
         # ----------------------------------------------------
-        # PASO 6: PROFUNDIZACIÓN PERSONALIZADA
+        # PASO 6: RESPUESTA PERSONALIZADA
         # ----------------------------------------------------
 
         if (
@@ -4904,9 +4888,9 @@ def aplicar_reglas_negocio_estructuradas(
             decision.update({
                 "accion": "PROFUNDIZAR_AREA_INTERES",
                 "motivo": (
-                    "La familia expresó un área de interés "
-                    "y corresponde responder de manera "
-                    "personalizada antes de invitarla a visitar."
+                    "La familia expresó el área que desea "
+                    "fortalecer. Corresponde responder con "
+                    "información institucional relacionada."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -4923,16 +4907,20 @@ def aplicar_reglas_negocio_estructuradas(
         # PASO 7: INVITACIÓN A VISITA
         # ----------------------------------------------------
 
-        if not (
+        if (
             "ACEPTO_VISITA"
-            in hitos_comerciales
+            not in hitos_comerciales
+            and "CITA_SOLICITADA"
+            not in hitos_comerciales
+            and "CITA_CONFIRMADA"
+            not in hitos_comerciales
         ):
             decision.update({
                 "accion": "INVITAR_CITA",
                 "motivo": (
-                    "La familia ya recibió información "
-                    "suficiente para ser invitada a conocer "
-                    "el colegio presencialmente."
+                    "La familia ya recibió la información "
+                    "estratégica y corresponde invitarla "
+                    "a conocer el colegio presencialmente."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -4944,7 +4932,7 @@ def aplicar_reglas_negocio_estructuradas(
             ] = "INVITACION_VISITA"
 
             return decision
-        
+            
     # ========================================================
     # 8. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
     # ========================================================
@@ -5524,27 +5512,64 @@ def construir_plan_respuesta_estructurada(
     if accion == "PRESENTAR_PROPUESTA_VALOR":
         plan.update({
             "objetivo": (
-                "Presentar de manera breve y atractiva la "
-                "propuesta general de valor del colegio."
+                "Presentar la propuesta general de valor del "
+                "colegio y cerrar obligatoriamente preguntando "
+                "si conoce el Método Filadelfia."
             ),
             "debe_incluir": [
                 (
-                    "Una explicación breve de que el colegio "
-                    "busca desarrollar integralmente a sus alumnos."
+                    "Iniciar con una transición natural equivalente "
+                    "a: Permítame contarle brevemente por qué muchas "
+                    "familias eligen Valle de Filadelfia Campus "
+                    "Santa Cruz."
                 ),
                 (
-                    "Una pregunta abierta y sencilla que permita "
-                    "continuar la conversación."
+                    "Explicar el Método Filadelfia como una enseñanza "
+                    "activa y personalizada que potencia los talentos "
+                    "de cada alumno y cuida su desarrollo físico, "
+                    "emocional e intelectual."
+                ),
+                (
+                    "Mencionar tecnología de vanguardia: iPads, "
+                    "salones inteligentes, aplicaciones, videos, "
+                    "realidad virtual y realidad aumentada."
+                ),
+                (
+                    "Mencionar clases de inglés y francés desde "
+                    "temprana edad, además de ciencias y finanzas "
+                    "impartidas en inglés."
+                ),
+                (
+                    "Mencionar actividades como judo, robótica, "
+                    "violín Suzuki, aritmética mental ALOHA y LEGO."
+                ),
+                (
+                    "Explicar que todo se desarrolla en un ambiente "
+                    "seguro, colaborativo y lleno de entusiasmo."
+                ),
+                (
+                    "Finalizar exactamente con la pregunta: "
+                    "¿Ha escuchado hablar del Método Filadelfia?"
                 ),
             ],
             "no_debe_incluir": (
                 plan["no_debe_incluir"]
                 + [
-                    "Explicar todavía todo el Método Filadelfia.",
+                    "Pedir nombre, edad, grado o fecha de nacimiento.",
+                    "Preguntar qué busca en un colegio.",
+                    "Preguntar todavía qué área desea fortalecer.",
+                    "Hacer preguntas sobre experiencia escolar previa.",
+                    "Profundizar únicamente en un tema mencionado antes.",
                     "Invitar todavía a una visita.",
                     "Ofrecer folletos, enlaces o llamadas.",
-                    "Pedir varios datos al mismo tiempo.",
+                    "Sustituir la pregunta final obligatoria.",
                     "Formular más de una pregunta.",
+                    (
+                        "Repetir innecesariamente el nombre completo "
+                        "del colegio. Después de la primera mención, "
+                        "usar el colegio, nuestro colegio, el campus "
+                        "o nuestra propuesta."
+                    ),
                 ]
             ),
         })
@@ -5554,33 +5579,71 @@ def construir_plan_respuesta_estructurada(
     if accion == "EXPLICAR_METODO_FILADELFIA":
         plan.update({
             "objetivo": (
-                "Explicar claramente qué es el Método "
-                "Filadelfia y cómo se refleja en el "
-                "aprendizaje de los alumnos."
+                "Explicar obligatoriamente el Método Filadelfia, "
+                "sin importar si el prospecto dijo que lo conoce "
+                "o que no lo conoce."
             ),
             "debe_incluir": [
                 (
-                    "Una explicación breve, comprensible y "
-                    "centrada en el valor educativo del método."
+                    "Explicar que el Método Filadelfia se centra "
+                    "en cada niño o niña y adapta contenidos y "
+                    "retos a sus necesidades."
                 ),
                 (
-                    "Una sola pregunta abierta para mantener "
-                    "la conversación."
+                    "Explicar que combina conocimientos, habilidades "
+                    "y actitudes útiles para la vida diaria."
+                ),
+                (
+                    "Explicar sus tres pilares: desarrollo lógico "
+                    "matemático, estimulación artístico musical "
+                    "y fortalecimiento físico de ligamentos "
+                    "y articulaciones."
+                ),
+                (
+                    "Mencionar desarrollo emocional, emprendimiento, "
+                    "finanzas y salud física."
+                ),
+                (
+                    "Mencionar apoyo neuromotor y el programa de "
+                    "violín basado en el método Suzuki."
+                ),
+                (
+                    "Explicar que el violín Suzuki favorece conexiones "
+                    "cerebrales relacionadas con memoria, aprendizaje "
+                    "y pensamiento ágil."
+                ),
+                (
+                    "Transmitir que aprender se convierte en una "
+                    "experiencia práctica, positiva y significativa."
+                ),
+                (
+                    "Finalizar exactamente con la pregunta: "
+                    "¿Qué área le interesa más fortalecer "
+                    "en su hijo(a)?"
                 ),
             ],
             "no_debe_incluir": (
                 plan["no_debe_incluir"]
                 + [
+                    "Pedir nombre, edad, grado o fecha de nacimiento.",
+                    "Preguntar si desea que se le explique el método.",
+                    "Omitir la explicación porque el prospecto diga que sí lo conoce.",
+                    "Hacer preguntas escolares adicionales.",
                     "Invitar todavía a una visita.",
                     "Ofrecer llamadas, folletos o enlaces.",
-                    "Pedir nombre, edad, grado y zona juntos.",
+                    "Sustituir la pregunta final obligatoria.",
                     "Formular más de una pregunta.",
+                    (
+                        "Repetir el nombre completo del colegio. "
+                        "Usar el colegio, nuestro colegio, "
+                        "nuestro método o nuestra propuesta."
+                    ),
                 ]
             ),
         })
 
         return plan
-
+        
     if accion == "PREGUNTAR_AREA_INTERES":
         plan.update({
             "objetivo": (
