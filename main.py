@@ -7324,33 +7324,77 @@ def procesar_mensaje_prospecto_estructurado(
         )
         
         if analisis_fallo:
-            decision_fallback = (
-                crear_decision_negocio_vacia()
+            clasificacion_zona_respaldo = (
+                clasificar_zona_determinista(
+                    mensaje_usuario=mensaje,
+                    zona_mencionada=mensaje,
+                    campus_mencionado="",
+                )
             )
 
-            decision_fallback.update({
-                "accion": "FALLBACK_CONVERSACIONAL",
-                "motivo": (
-                    "Gemini no devolvió un análisis válido "
-                    "después de los reintentos automáticos."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": False,
-                "zona_validada": False,
-                "debe_finalizar_conversacion": False,
-                "datos_detectados": {},
-            })
+            if (
+                clasificacion_zona_respaldo.get(
+                    "clasificacion"
+                )
+                != "NO_MENCIONADA"
+            ):
+                analisis = (
+                    crear_analisis_mensaje_vacio()
+                )
 
-            return {
-                "version": "1.0",
-                "flujo": "estructurado",
-                "procesado": True,
-                "analisis": analisis,
-                "decision": decision_fallback,
-                "error": (
-                    "ANALISIS_IA_INVALIDO_RECUPERADO"
-                ),
-            }
+                analisis.update({
+                    "intencion_principal": (
+                        "RESPONDER_ZONA"
+                    ),
+                    "zona_mencionada": mensaje,
+                    "clasificacion_zona": (
+                        "VALIDA"
+                        if clasificacion_zona_respaldo.get(
+                            "es_zona_validada"
+                        )
+                        else "DUDOSA"
+                    ),
+                    "datos_detectados": [
+                        "zona_interes"
+                    ],
+                    "accion_recomendada": (
+                        "CONTINUAR_CONVERSACION"
+                    ),
+                    "confianza": 1.0,
+                })
+
+            else:
+                decision_fallback = (
+                    crear_decision_negocio_vacia()
+                )
+
+                decision_fallback.update({
+                    "accion": (
+                        "FALLBACK_CONVERSACIONAL"
+                    ),
+                    "motivo": (
+                        "Gemini no devolvió un análisis "
+                        "válido después de los reintentos "
+                        "automáticos."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": False,
+                    "zona_validada": False,
+                    "debe_finalizar_conversacion": False,
+                    "datos_detectados": {},
+                })
+
+                return {
+                    "version": "1.0",
+                    "flujo": "estructurado",
+                    "procesado": True,
+                    "analisis": analisis,
+                    "decision": decision_fallback,
+                    "error": (
+                        "ANALISIS_IA_INVALIDO_RECUPERADO"
+                    ),
+                }
+                
             
         decision = aplicar_reglas_negocio_estructuradas(
             analisis=analisis,
