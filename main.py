@@ -11979,14 +11979,17 @@ def procesar_buffer_whatsapp_estructurado(
             )
         )
 
+        resultado_json = json.dumps(
+            resultado_estructurado,
+            ensure_ascii=False,
+            default=str,
+        )
+
         print(
             "✅ Buffer estructurado procesado: "
-            f"{json.dumps(
-                resultado_estructurado,
-                ensure_ascii=False,
-                default=str,
-            )}"
+            + resultado_json
         )
+        
 
     except Exception as e:
         db_buffer.rollback()
