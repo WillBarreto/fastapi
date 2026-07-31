@@ -7121,6 +7121,14 @@ INSTRUCCIONES:
 - Usa trato institucional de usted, salvo que el historial
   muestre claramente que debe conservarse otro tratamiento.
 - No agregues un saludo si el prospecto no saludó.
+- No agradezcas automáticamente cada dato o respuesta del prospecto.
+- Evita iniciar con "muchas gracias", "agradecemos",
+  "gracias por compartir", "gracias por confirmar" o expresiones
+  equivalentes, salvo que exista una razón conversacional real.
+- Avanza directamente a la siguiente idea o pregunta del flujo.
+- No repitas ni reformules innecesariamente la información que el
+  prospecto acaba de proporcionar.
+- Usa transiciones breves y naturales.
 - No uses expresiones como "qué gusto saludarte",
   "qué gusto" o "mucho gusto" como frases de relleno.
 - No muestres análisis, pasos, listas ni razonamientos.
@@ -7332,11 +7340,24 @@ def procesar_mensaje_prospecto_estructurado(
                 )
             )
 
-            if (
+            clasificacion_respaldo = str(
                 clasificacion_zona_respaldo.get(
-                    "clasificacion"
+                    "clasificacion",
+                    "",
                 )
-                != "NO_MENCIONADA"
+                or ""
+            ).strip().upper()
+
+            clasificaciones_geograficas_utiles = {
+                "ZONA_VALIDA_DIRECTA",
+                "ZONA_VALIDA_CONECTIVIDAD",
+                "ZONA_EXTERNA",
+                "CAMPUS_EXTERNO",
+            }
+
+            if (
+                clasificacion_respaldo
+                in clasificaciones_geograficas_utiles
             ):
                 analisis = (
                     crear_analisis_mensaje_vacio()
