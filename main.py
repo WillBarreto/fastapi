@@ -11912,11 +11912,22 @@ def procesar_buffer_whatsapp_estructurado(
 
     mensajes_buffer = []
 
-    with MESSAGE_BUFFER_LOCK:
-        buffer_actual = MESSAGE_BUFFERS.get(
+    numero_normalizado = (
+        normalizar_numero_whatsapp(
             from_number
         )
+    )
 
+    clave_buffer = (
+        numero_normalizado
+        or str(from_number or "").strip()
+    )
+
+    with MESSAGE_BUFFER_LOCK:
+        buffer_actual = MESSAGE_BUFFERS.get(
+            clave_buffer
+        )
+        
         if not buffer_actual:
             return
 
@@ -11934,7 +11945,7 @@ def procesar_buffer_whatsapp_estructurado(
         )
 
         MESSAGE_BUFFERS.pop(
-            from_number,
+            clave_buffer,
             None,
         )
 
