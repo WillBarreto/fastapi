@@ -12520,24 +12520,22 @@ def procesar_mensaje_whatsapp_estructurado_real(
         return resultado_final
 
     # --------------------------------------------------------
-    # ADMISIONES: CONTINÚA EL FLUJO COMERCIAL
+    # DECISIÓN DE CONTINUIDAD DEL FLUJO
     # --------------------------------------------------------
 
-    if not clasificacion_exitosa:
+    continuar_flujo_conversacional = (
+        not clasificacion_exitosa
+        or categoria_alcance in {
+            "ADMISIONES",
+            "AMBIGUO",
+        }
+    )
+
+    if continuar_flujo_conversacional:
         print(
-            "⚠️ Clasificación de alcance no disponible. "
-            "Continúa el flujo conversacional existente."
+            "✅ Continúa el flujo conversacional existente: "
+            f"{categoria_alcance}"
         )
-
-    elif categoria_alcance == "ADMISIONES":
-        print(
-            "✅ Alcance ADMISIONES. "
-            "Continúa el flujo comercial."
-        )
-
-    # --------------------------------------------------------
-    # OTROS ALCANCES: BLOQUEAR EL EMBUDO DE ADMISIONES
-    # --------------------------------------------------------
 
     else:
         respuestas_por_alcance = {
