@@ -12203,6 +12203,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
     resultado_final = {
         "flujo": "estructurado_real",
+        "alcance_conversacion": {},
         "procesado": False,
         "mensaje_enviado": False,
         "respuesta": "",
@@ -12237,7 +12238,398 @@ def procesar_mensaje_whatsapp_estructurado_real(
         resultado_final["error"] = "CONTACTO_NO_DISPONIBLE"
         return resultado_final
 
-        # --------------------------------------------------------
+    # ========================================================
+    # PUERTA PREVIA DE CLASIFICACIÓN DEL ALCANCE
+    # ========================================================
+
+    history_alcance = (
+        db.query(Message)
+        .filter(
+            Message.contact_id == contact.id
+        )
+        .order_by(
+            Message.timestamp.asc()
+        )
+        .all()
+    )
+
+    historial_alcance = []
+
+    for item in history_alcance[-10:]:
+        direccion = str(
+            getattr(
+                item,
+                "direction",
+                "",
+            )
+            or ""
+        ).strip().lower()
+
+        contenido = str(
+            getattr(
+                item,
+                "content",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not contenido:
+            continue
+
+        if direccion == "incoming":
+            emisor = "Usuario"
+
+        elif direccion == "outgoing":
+            emisor = "Asistente"
+
+        else:
+            emisor = "Conversación"
+
+        historial_alcance.append(
+            f"{emisor}: {contenido}"
+        )
+
+    try:
+        resultado_clasificacion_alcance = (
+            clasificar_alcance_conversacion_con_ia(
+                mensaje_usuario=mensaje,
+                historial_lista=historial_alcance,
+            )
+        )
+
+    except Exception as error_alcance:
+        print(
+            "⚠️ Error en puerta previa de alcance: "
+            f"{error_alcance}"
+        )
+
+        resultado_clasificacion_alcance = {
+            "exitoso": False,
+            "alcance": (
+                crear_alcance_conversacion_vacio()
+            ),
+            "modelo_usado": "",
+            "intentos_realizados": 0,
+            "errores": [
+                str(error_alcance)
+            ],
+        }
+
+    alcance_detectado = (
+        resultado_clasificacion_alcance.get(
+            "alcance",
+            {},
+        )
+    )
+
+    if not isinstance(
+        alcance_detectado,
+        dict,
+    ):
+        alcance_detectado = (
+            crear_alcance_conversacion_vacio()
+        )
+
+    categoria_alcance = str(
+        alcance_detectado.get(
+            "alcance_conversacion",
+            "AMBIGUO",
+        )
+        or "AMBIGUO"
+    ).strip().upper()
+
+    clasificacion_exitosa = bool(
+        resultado_clasificacion_alcance.get(
+            "exitoso"
+        )
+    )
+
+    resultado_final[
+        "alcance_conversacion"
+    ] = {
+        "clasificacion_exitosa": (
+            clasificacion_exitosa
+        ),
+        "categoria": categoria_alcance,
+        "detalle": alcance_detectado,
+        "modelo_usado": (
+            resultado_clasificacion_alcance.get(
+                "modelo_usado",
+                "",
+            )
+        ),
+        "errores": (
+            resultado_clasificacion_alcance.get(
+                "errores",
+                [],
+            )
+        ),
+    }
+
+    print(
+        "🚦 PUERTA DE ALCANCE: "
+        + json.dumps(
+            resultado_final[
+                "alcance_conversacion"
+            ],
+            ensure_ascii=False,
+            default=str,
+        )
+    )
+
+    # --------------------------------------------------------
+    # RESPUESTA PREVIA PARA ALCANCE AMBIGUO
+    # --------------------------------------------------------
+
+    if (
+        not clasificacion_exitosa
+        or categoria_alcance == "AMBIGUO"
+    ):
+        respuesta_alcance = (
+            "Claro. ¿Busca información para inscribir "
+            "a un alumno o se comunica por otro motivo?"
+        )
+
+        resultado_twilio = (
+            enviar_respuesta_twilio(
+                numero_destino,
+                respuesta_alcance,
+            )
+        )
+
+        twilio_sid = None
+
+        if (
+            isinstance(
+                resultado_twilio,
+                str,
+            )
+            and "SID:" in resultado_twilio
+        ):
+            twilio_sid = (
+                resultado_twilio
+                .split(
+                    "SID:",
+                    1,
+                )[1]
+                .strip()
+            )
+
+        envio_exitoso = bool(
+            isinstance(
+                resultado_twilio,
+                str,
+            )
+            and resultado_twilio.startswith(
+                "✅"
+            )
+        )
+
+        if envio_exitoso:
+            save_message(
+                db,
+                contact.id,
+                "outgoing",
+                respuesta_alcance,
+                twilio_sid,
+            )
+
+            db.commit()
+
+        resultado_final.update({
+            "procesado": envio_exitoso,
+            "mensaje_enviado": envio_exitoso,
+            "respuesta": respuesta_alcance,
+            "twilio_resultado": resultado_twilio,
+            "twilio_sid": twilio_sid,
+            "resultado_orquestador": {
+                "version": "1.0",
+                "flujo": "clasificacion_alcance",
+                "procesado": envio_exitoso,
+                "alcance": alcance_detectado,
+                "ruta": "ACLARAR_MOTIVO",
+                "respuesta_generada": (
+                    respuesta_alcance
+                ),
+                "requiere_admin": False,
+                "error": "",
+            },
+            "error": (
+                ""
+                if envio_exitoso
+                else "ERROR_ENVIANDO_ACLARACION_ALCANCE"
+            ),
+        })
+
+        return resultado_final
+
+    # --------------------------------------------------------
+    # ADMISIONES: CONTINÚA EL FLUJO COMERCIAL
+    # --------------------------------------------------------
+
+    if categoria_alcance == "ADMISIONES":
+        print(
+            "✅ Alcance ADMISIONES. "
+            "Continúa el flujo comercial."
+        )
+
+    # --------------------------------------------------------
+    # OTROS ALCANCES: BLOQUEAR EL EMBUDO DE ADMISIONES
+    # --------------------------------------------------------
+
+    else:
+        respuestas_por_alcance = {
+            "EMPLEO": (
+                "Gracias por escribirnos. Identificamos que "
+                "su consulta corresponde a una vacante o "
+                "proceso de empleo. Para brindarle información "
+                "correcta, su solicitud requiere revisión del "
+                "área correspondiente. Continuaremos la atención "
+                "por este medio."
+            ),
+            "ALUMNOS_ACTUALES": (
+                "Gracias por escribirnos. Identificamos que "
+                "su consulta corresponde a una familia o alumno "
+                "actual. Para atender correctamente su solicitud, "
+                "necesitamos canalizarla con el área "
+                "correspondiente. Continuaremos la atención "
+                "por este medio."
+            ),
+            "TRAMITES_ADMINISTRATIVOS": (
+                "Gracias por escribirnos. Identificamos que "
+                "su solicitud corresponde a un trámite "
+                "administrativo. Para proporcionarle información "
+                "correcta, necesitamos revisar su caso. "
+                "Continuaremos la atención por este medio."
+            ),
+            "PROVEEDORES": (
+                "Gracias por comunicarse con nosotros. "
+                "Identificamos que desea presentar un producto, "
+                "servicio o propuesta comercial. Su mensaje "
+                "requiere revisión antes de continuar la atención."
+            ),
+            "OTRO_CONFIGURADO": (
+                "Gracias por escribirnos. Identificamos el motivo "
+                "de su consulta y continuaremos la atención por "
+                "la ruta correspondiente."
+            ),
+            "SIN_RUTA_CONFIGURADA": (
+                "Gracias por escribirnos. Su solicitud requiere "
+                "una revisión particular para poder brindarle "
+                "información correcta. Continuaremos la atención "
+                "por este medio."
+            ),
+        }
+
+        respuesta_alcance = (
+            respuestas_por_alcance.get(
+                categoria_alcance,
+                (
+                    "Gracias por escribirnos. Para atender "
+                    "correctamente su solicitud, necesitamos "
+                    "revisar el motivo de su consulta. "
+                    "Continuaremos la atención por este medio."
+                ),
+            )
+        )
+
+        resultado_twilio = (
+            enviar_respuesta_twilio(
+                numero_destino,
+                respuesta_alcance,
+            )
+        )
+
+        twilio_sid = None
+
+        if (
+            isinstance(
+                resultado_twilio,
+                str,
+            )
+            and "SID:" in resultado_twilio
+        ):
+            twilio_sid = (
+                resultado_twilio
+                .split(
+                    "SID:",
+                    1,
+                )[1]
+                .strip()
+            )
+
+        envio_exitoso = bool(
+            isinstance(
+                resultado_twilio,
+                str,
+            )
+            and resultado_twilio.startswith(
+                "✅"
+            )
+        )
+
+        if envio_exitoso:
+            save_message(
+                db,
+                contact.id,
+                "outgoing",
+                respuesta_alcance,
+                twilio_sid,
+            )
+
+            db.commit()
+
+        resultado_final.update({
+            "procesado": envio_exitoso,
+            "mensaje_enviado": envio_exitoso,
+            "respuesta": respuesta_alcance,
+            "twilio_resultado": resultado_twilio,
+            "twilio_sid": twilio_sid,
+            "resultado_orquestador": {
+                "version": "1.0",
+                "flujo": "clasificacion_alcance",
+                "procesado": envio_exitoso,
+                "alcance": alcance_detectado,
+                "ruta": categoria_alcance,
+                "respuesta_generada": (
+                    respuesta_alcance
+                ),
+                "requiere_admin": (
+                    categoria_alcance
+                    == "SIN_RUTA_CONFIGURADA"
+                ),
+                "error": "",
+            },
+            "memoria_historica": {
+                "omitida": True,
+                "motivo": (
+                    "ALCANCE_FUERA_DE_ADMISIONES"
+                ),
+            },
+            "contexto_comercial": {
+                "omitido": True,
+                "motivo": (
+                    "ALCANCE_FUERA_DE_ADMISIONES"
+                ),
+            },
+            "contexto_comercial_enriquecido": {
+                "omitido": True,
+                "motivo": (
+                    "ALCANCE_FUERA_DE_ADMISIONES"
+                ),
+            },
+            "error": (
+                ""
+                if envio_exitoso
+                else "ERROR_ENVIANDO_RESPUESTA_ALCANCE"
+            ),
+        })
+
+        return resultado_final
+        
+
+    # --------------------------------------------------------
     # RESPUESTA DETERMINISTA A CORTESÍAS Y CIERRES BREVES
     # --------------------------------------------------------
 
