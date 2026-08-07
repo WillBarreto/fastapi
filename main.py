@@ -323,7 +323,12 @@ def normalizar_alcance_conversacion(
     # Reglas internas de consistencia.
     if alcance == "AMBIGUO":
         ruta_configurada = False
-        requiere_aclaracion = True
+        requiere_aclaracion = normalizar_booleano(
+            datos_crudos.get(
+                "requiere_aclaracion"
+            ),
+            predeterminado=True,
+        )
         requiere_admin = False
 
     elif alcance == "SIN_RUTA_CONFIGURADA":
@@ -1439,8 +1444,43 @@ el motivo que la persona está intentando resolver ahora.
 - PROVEEDORES
 - OTRO_CONFIGURADO
 
-7. "requiere_aclaracion" debe ser true exclusivamente cuando
-la clasificación sea AMBIGUO.
+7. La categoría AMBIGUO puede representar dos situaciones distintas:
+
+A. APERTURA SOCIAL SIN SOLICITUD
+
+Ejemplos conceptuales:
+
+- un saludo;
+- una cortesía;
+- una apertura social;
+- una expresión que todavía no contiene ninguna solicitud.
+
+En estos casos:
+
+- "alcance_conversacion" debe ser "AMBIGUO";
+- "requiere_aclaracion" debe ser false;
+- "motivo_principal" debe indicar que se trata de una apertura
+  social sin solicitud concreta;
+- no inventes que la persona está pidiendo informes;
+- el sistema podrá responder de forma conversacional y natural.
+
+B. CONSULTA INCOMPLETA O MOTIVO INDEFINIDO
+
+Se presenta cuando la persona sí parece intentar iniciar una
+consulta, pero todavía no permite saber si corresponde a
+admisiones, empleo, proveedores, alumnos actuales, trámites
+administrativos u otro motivo.
+
+En estos casos:
+
+- "alcance_conversacion" debe ser "AMBIGUO";
+- "requiere_aclaracion" debe ser true;
+- "motivo_principal" debe explicar qué parte de la intención
+  permanece indefinida.
+
+No utilices listas rígidas de frases para decidir entre ambos
+casos. Interpreta conversacionalmente si existe una solicitud
+real o solamente una apertura social.
 
 8. "requiere_admin" debe ser true cuando la clasificación sea
 SIN_RUTA_CONFIGURADA.
@@ -12382,9 +12422,19 @@ def procesar_mensaje_whatsapp_estructurado_real(
     # RESPUESTA PREVIA PARA ALCANCE AMBIGUO
     # --------------------------------------------------------
 
+    requiere_aclaracion_alcance = bool(
+        alcance_detectado.get(
+            "requiere_aclaracion",
+            True,
+        )
+    )
+
     if (
         not clasificacion_exitosa
-        or categoria_alcance == "AMBIGUO"
+        or (
+            categoria_alcance == "AMBIGUO"
+            and requiere_aclaracion_alcance
+        )
     ):
         respuesta_alcance = (
             "Claro. ¿Busca información para inscribir "
