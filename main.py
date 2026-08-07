@@ -1598,9 +1598,6 @@ No redactes una respuesta para el contacto.
                         genai.types.GenerationConfig(
                             max_output_tokens=1000,
                             temperature=0.0,
-                            response_mime_type=(
-                                "application/json"
-                            ),
                         )
                     ),
                 )
@@ -12526,7 +12523,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
     # ADMISIONES: CONTINÚA EL FLUJO COMERCIAL
     # --------------------------------------------------------
 
-    if categoria_alcance == "ADMISIONES":
+    if not clasificacion_exitosa:
+        print(
+            "⚠️ Clasificación de alcance no disponible. "
+            "Continúa el flujo conversacional existente."
+        )
+
+    elif categoria_alcance == "ADMISIONES":
         print(
             "✅ Alcance ADMISIONES. "
             "Continúa el flujo comercial."
