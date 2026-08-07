@@ -1598,6 +1598,9 @@ No redactes una respuesta para el contacto.
                         genai.types.GenerationConfig(
                             max_output_tokens=1000,
                             temperature=0.0,
+                            response_mime_type=(
+                                "application/json"
+                            ),
                         )
                     ),
                 )
@@ -12429,12 +12432,17 @@ def procesar_mensaje_whatsapp_estructurado_real(
         )
     )
 
-    if (
-        not clasificacion_exitosa
-        or (
-            categoria_alcance == "AMBIGUO"
-            and requiere_aclaracion_alcance
+    if not clasificacion_exitosa:
+        print(
+            "⚠️ La puerta de alcance no pudo clasificar "
+            "el mensaje. Se permite continuar al flujo "
+            "conversacional existente."
         )
+
+    if (
+        clasificacion_exitosa
+        and categoria_alcance == "AMBIGUO"
+        and requiere_aclaracion_alcance
     ):
         respuesta_alcance = (
             "Claro. ¿Busca información para inscribir "
