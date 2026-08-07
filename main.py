@@ -208,6 +208,203 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
 }
 
 # ============================================================
+# CONTRATO DE CLASIFICACIÓN DEL ALCANCE DE LA CONVERSACIÓN
+# ============================================================
+
+ALCANCES_CONVERSACION_VALIDOS = {
+    "AMBIGUO",
+    "ADMISIONES",
+    "EMPLEO",
+    "ALUMNOS_ACTUALES",
+    "TRAMITES_ADMINISTRATIVOS",
+    "PROVEEDORES",
+    "OTRO_CONFIGURADO",
+    "SIN_RUTA_CONFIGURADA",
+}
+
+
+class AlcanceConversacion(BaseModel):
+    """
+    Representa el motivo general por el que una persona
+    se comunica con el colegio.
+
+    Este contrato se evalúa antes del análisis comercial
+    de admisiones.
+
+    No genera respuestas.
+    No modifica el CRM.
+    No cambia estados.
+    No crea tareas administrativas.
+    """
+
+    version: str = "1.0"
+
+    alcance_conversacion: str = "AMBIGUO"
+
+    motivo_principal: str = ""
+
+    resumen_solicitud: str = ""
+
+    ruta_configurada: bool = False
+
+    requiere_aclaracion: bool = True
+
+    requiere_admin: bool = False
+
+    motivo_escalacion: str = ""
+
+    confianza: float = 0.0
+
+
+def crear_alcance_conversacion_vacio() -> Dict[str, Any]:
+    """
+    Devuelve una clasificación de alcance segura
+    con valores iniciales.
+
+    Se utiliza cuando todavía no existe suficiente
+    información o cuando falla la clasificación.
+    """
+
+    return AlcanceConversacion().model_dump()
+
+
+def normalizar_alcance_conversacion(
+    datos_crudos: Any,
+) -> Dict[str, Any]:
+    """
+    Limpia y valida el resultado de la clasificación
+    general de alcance.
+
+    No ejecuta rutas.
+    No modifica contactos.
+    No inicia el embudo de admisiones.
+    """
+
+    base = crear_alcance_conversacion_vacio()
+
+    if not isinstance(datos_crudos, dict):
+        return base
+
+    alcance = str(
+        datos_crudos.get(
+            "alcance_conversacion",
+            "AMBIGUO",
+        )
+        or "AMBIGUO"
+    ).strip().upper()
+
+    if alcance not in ALCANCES_CONVERSACION_VALIDOS:
+        alcance = "AMBIGUO"
+
+    ruta_configurada = normalizar_booleano(
+        datos_crudos.get(
+            "ruta_configurada"
+        )
+    )
+
+    requiere_aclaracion = normalizar_booleano(
+        datos_crudos.get(
+            "requiere_aclaracion"
+        ),
+        predeterminado=(
+            alcance == "AMBIGUO"
+        ),
+    )
+
+    requiere_admin = normalizar_booleano(
+        datos_crudos.get(
+            "requiere_admin"
+        ),
+        predeterminado=(
+            alcance == "SIN_RUTA_CONFIGURADA"
+        ),
+    )
+
+    # Reglas internas de consistencia.
+    if alcance == "AMBIGUO":
+        ruta_configurada = False
+        requiere_aclaracion = True
+        requiere_admin = False
+
+    elif alcance == "SIN_RUTA_CONFIGURADA":
+        ruta_configurada = False
+        requiere_aclaracion = False
+        requiere_admin = True
+
+    elif alcance in {
+        "ADMISIONES",
+        "EMPLEO",
+        "ALUMNOS_ACTUALES",
+        "TRAMITES_ADMINISTRATIVOS",
+        "PROVEEDORES",
+        "OTRO_CONFIGURADO",
+    }:
+        ruta_configurada = True
+        requiere_aclaracion = False
+
+    resultado_normalizado = {
+        "version": "1.0",
+
+        "alcance_conversacion": alcance,
+
+        "motivo_principal": str(
+            datos_crudos.get(
+                "motivo_principal",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "resumen_solicitud": str(
+            datos_crudos.get(
+                "resumen_solicitud",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "ruta_configurada": ruta_configurada,
+
+        "requiere_aclaracion": (
+            requiere_aclaracion
+        ),
+
+        "requiere_admin": requiere_admin,
+
+        "motivo_escalacion": str(
+            datos_crudos.get(
+                "motivo_escalacion",
+                "",
+            )
+            or ""
+        ).strip(),
+
+        "confianza": normalizar_confianza(
+            datos_crudos.get(
+                "confianza"
+            )
+        ),
+    }
+
+    try:
+        alcance_validado = (
+            AlcanceConversacion.model_validate(
+                resultado_normalizado
+            )
+        )
+
+        return alcance_validado.model_dump()
+
+    except Exception as e:
+        print(
+            "⚠️ Error validando contrato de alcance: "
+            f"{e}"
+        )
+
+        return base
+        
+
+# ============================================================
 # CONTRATO COMERCIAL Y CONVERSACIONAL DEL NUEVO FLUJO
 # ============================================================
 
