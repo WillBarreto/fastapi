@@ -1198,6 +1198,503 @@ def extraer_json_de_texto(texto: str) -> Optional[Dict[str, Any]]:
     return None
 
 # ============================================================
+# CLASIFICACIÓN IA DEL ALCANCE GENERAL DE LA CONVERSACIÓN
+# ============================================================
+
+def clasificar_alcance_conversacion_con_ia(
+    mensaje_usuario: str,
+    historial_lista: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Clasifica el motivo general por el que una persona
+    se comunica con el colegio.
+
+    Esta función se ejecutará antes del análisis comercial
+    de admisiones.
+
+    No genera una respuesta para el contacto.
+    No modifica la base de datos.
+    No modifica el CRM.
+    No cambia FLOW_STATE.
+    No crea tareas administrativas.
+    No envía mensajes por Twilio.
+    """
+
+    resultado_fallo = {
+        "exitoso": False,
+        "alcance": crear_alcance_conversacion_vacio(),
+        "modelo_usado": "",
+        "intentos_realizados": 0,
+        "errores": [],
+    }
+
+    mensaje = str(
+        mensaje_usuario or ""
+    ).strip()
+
+    if not mensaje:
+        resultado_fallo["errores"].append(
+            "MENSAJE_USUARIO_VACIO"
+        )
+
+        return resultado_fallo
+
+    historial_seguro = (
+        historial_lista
+        if isinstance(historial_lista, list)
+        else []
+    )
+
+    historial_limpio = []
+
+    for elemento in historial_seguro[-10:]:
+        texto = str(
+            elemento or ""
+        ).strip()
+
+        if texto:
+            historial_limpio.append(
+                texto
+            )
+
+    historial_texto = (
+        "\n".join(historial_limpio)
+        if historial_limpio
+        else "Sin historial previo disponible."
+    )
+
+    contrato_json = json.dumps(
+        crear_alcance_conversacion_vacio(),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+    categorias_json = json.dumps(
+        sorted(
+            ALCANCES_CONVERSACION_VALIDOS
+        ),
+        ensure_ascii=False,
+    )
+
+    prompt_base = f"""
+Eres un clasificador de alcance conversacional para el
+Colegio Valle de Filadelfia Campus Santa Cruz Atizapán.
+
+Tu única tarea es identificar el motivo general por el que
+la persona se comunica.
+
+No redactes una respuesta para la persona.
+No analices todavía zona, nivel escolar, grado, costos,
+referencias del colegio ni etapas del proceso de admisiones.
+No decidas todavía qué mensaje debe enviar el bot.
+
+CATEGORÍAS PERMITIDAS:
+
+{categorias_json}
+
+DEFINICIÓN DE CADA CATEGORÍA:
+
+1. AMBIGUO
+
+Utiliza AMBIGUO cuando todavía no sea posible conocer
+el motivo real del contacto.
+
+Ejemplos:
+
+- Hola.
+- Buenas tardes.
+- ¿Es el canal del colegio?
+- Vi su anuncio.
+- Quisiera información.
+
+Una frase prellenada automáticamente por una campaña de
+Facebook o WhatsApp no confirma por sí sola que la persona
+busque admisiones.
+
+2. ADMISIONES
+
+Utiliza ADMISIONES cuando exista intención de solicitar
+información para inscribir o evaluar el ingreso de un alumno
+a Maternal, Kínder, Primaria o Secundaria.
+
+También corresponde cuando solicitan información sobre:
+
+- colegiaturas para nuevo ingreso;
+- inscripción;
+- requisitos de admisión;
+- modelo educativo;
+- instalaciones;
+- horarios escolares;
+- becas de nuevo ingreso;
+- visita para conocer el colegio;
+- niveles o grados para un futuro alumno.
+
+3. EMPLEO
+
+Utiliza EMPLEO cuando la persona busque:
+
+- una vacante;
+- trabajo;
+- empleo;
+- entregar currículum;
+- participar en reclutamiento;
+- información sobre contratación;
+- trabajar como docente o personal administrativo.
+
+Una expresión como "profesor de secundaria" corresponde
+a EMPLEO y no significa interés de admisiones en Secundaria.
+
+4. ALUMNOS_ACTUALES
+
+Utiliza ALUMNOS_ACTUALES cuando la persona indique
+claramente que ya es:
+
+- madre, padre o tutor de un alumno inscrito;
+- alumno actual;
+- integrante de una familia actualmente inscrita.
+
+Puede preguntar sobre pagos, horarios, actividades,
+plataformas, uniformes, materiales, profesores o asuntos
+cotidianos del ciclo escolar.
+
+La condición de familia actual tiene prioridad sobre otras
+categorías administrativas.
+
+5. TRAMITES_ADMINISTRATIVOS
+
+Utiliza TRAMITES_ADMINISTRATIVOS cuando se solicite un
+trámite institucional concreto, por ejemplo:
+
+- constancias;
+- facturas;
+- recibos;
+- documentos;
+- certificados;
+- bajas;
+- aclaraciones administrativas;
+- referencias de pago;
+- asuntos de control escolar.
+
+Si la persona confirma que es familia de un alumno actual,
+prefiere ALUMNOS_ACTUALES y describe el trámite en
+"motivo_principal".
+
+6. PROVEEDORES
+
+Utiliza PROVEEDORES cuando una persona o empresa quiera:
+
+- ofrecer productos;
+- ofrecer servicios;
+- presentar una cotización;
+- solicitar contacto para ventas;
+- participar como proveedor;
+- establecer una alianza comercial.
+
+7. OTRO_CONFIGURADO
+
+Utiliza OTRO_CONFIGURADO únicamente cuando el motivo
+no sea admisiones, empleo, alumnos actuales, trámites o
+proveedores, pero exista una ruta institucional conocida
+y segura que pueda atenderse automáticamente.
+
+No utilices esta categoría solamente para evitar
+SIN_RUTA_CONFIGURADA.
+
+8. SIN_RUTA_CONFIGURADA
+
+Utiliza SIN_RUTA_CONFIGURADA cuando:
+
+- el motivo ya es comprensible;
+- no corresponde a ninguna ruta definida;
+- requiere una decisión humana;
+- faltan políticas institucionales confirmadas;
+- responder obligaría a inventar datos o procedimientos;
+- existe una situación inusual que debe revisar el
+  administrador.
+
+REGLAS DE CLASIFICACIÓN:
+
+1. Analiza el mensaje actual junto con el historial reciente.
+
+2. El mensaje actual tiene prioridad, pero debes utilizar
+el historial para resolver referencias como "sí", "eso",
+"la vacante", "mi hijo" o "el pago".
+
+3. No clasifiques automáticamente como ADMISIONES porque
+la conversación provenga de una campaña publicitaria.
+
+4. No extraigas niveles escolares cuando el contexto sea
+EMPLEO, PROVEEDORES, TRÁMITES o cualquier categoría
+distinta de ADMISIONES.
+
+5. Si existen dos motivos, identifica como categoría principal
+el motivo que la persona está intentando resolver ahora.
+
+6. "ruta_configurada" debe ser true exclusivamente para:
+
+- ADMISIONES
+- EMPLEO
+- ALUMNOS_ACTUALES
+- TRAMITES_ADMINISTRATIVOS
+- PROVEEDORES
+- OTRO_CONFIGURADO
+
+7. "requiere_aclaracion" debe ser true exclusivamente cuando
+la clasificación sea AMBIGUO.
+
+8. "requiere_admin" debe ser true cuando la clasificación sea
+SIN_RUTA_CONFIGURADA.
+
+9. En "motivo_principal", describe el motivo de contacto en
+una frase breve y concreta.
+
+10. En "resumen_solicitud", resume únicamente lo que la
+persona está solicitando, sin inventar información.
+
+11. En "motivo_escalacion", explica brevemente por qué se
+requiere revisión humana. Déjalo vacío si no se requiere.
+
+12. "confianza" debe ser un número entre 0.0 y 1.0.
+
+13. Devuelve exclusivamente un objeto JSON válido.
+
+No uses Markdown.
+No agregues explicaciones.
+No escribas texto antes ni después del JSON.
+
+CONTRATO OBLIGATORIO:
+
+{contrato_json}
+
+HISTORIAL RECIENTE:
+
+{historial_texto}
+
+MENSAJE ACTUAL:
+
+{mensaje}
+"""
+
+    instrucciones_reintento = """
+
+REINTENTO OBLIGATORIO:
+
+La respuesta anterior no pudo validarse.
+
+Devuelve exclusivamente un objeto JSON válido.
+Respeta exactamente el contrato indicado.
+No uses Markdown.
+No agregues explicaciones.
+No redactes una respuesta para el contacto.
+"""
+
+    api_key = (
+        os.getenv(
+            "GOOGLE_AI_API_KEY"
+        )
+        or os.getenv(
+            "GEMINI_API_KEY"
+        )
+    )
+
+    if not api_key:
+        resultado_fallo["errores"].append(
+            "GEMINI_API_KEY_NO_CONFIGURADA"
+        )
+
+        return resultado_fallo
+
+    genai.configure(
+        api_key=api_key
+    )
+
+    modelos = obtener_modelos_gemini()
+
+    if not modelos:
+        resultado_fallo["errores"].append(
+            "NO_HAY_MODELOS_CONFIGURADOS"
+        )
+
+        return resultado_fallo
+
+    for indice_modelo, model_name in enumerate(
+        modelos
+    ):
+        intentos_permitidos = (
+            2
+            if indice_modelo == 0
+            else 1
+        )
+
+        for numero_intento in range(
+            1,
+            intentos_permitidos + 1,
+        ):
+            resultado_fallo[
+                "intentos_realizados"
+            ] += 1
+
+            prompt_intento = prompt_base
+
+            if numero_intento > 1:
+                prompt_intento += (
+                    instrucciones_reintento
+                )
+
+            try:
+                print(
+                    "🧭 Clasificación de alcance IA: "
+                    f"modelo={model_name}, "
+                    f"intento={numero_intento}"
+                )
+
+                model = genai.GenerativeModel(
+                    model_name
+                )
+
+                response = model.generate_content(
+                    prompt_intento,
+                    generation_config=(
+                        genai.types.GenerationConfig(
+                            max_output_tokens=1000,
+                            temperature=0.0,
+                        )
+                    ),
+                )
+
+                texto_respuesta = (
+                    extraer_texto_respuesta_gemini(
+                        response
+                    )
+                )
+
+                if not texto_respuesta:
+                    error = (
+                        f"{model_name}: "
+                        f"intento {numero_intento}: "
+                        "RESPUESTA_VACIA"
+                    )
+
+                    resultado_fallo[
+                        "errores"
+                    ].append(
+                        error
+                    )
+
+                    print(
+                        f"⚠️ {error}"
+                    )
+
+                    continue
+
+                datos_crudos = (
+                    extraer_json_de_texto(
+                        texto_respuesta
+                    )
+                )
+
+                if datos_crudos is None:
+                    error = (
+                        f"{model_name}: "
+                        f"intento {numero_intento}: "
+                        "JSON_INVALIDO"
+                    )
+
+                    resultado_fallo[
+                        "errores"
+                    ].append(
+                        error
+                    )
+
+                    print(
+                        f"⚠️ {error}"
+                    )
+
+                    continue
+
+                alcance_normalizado = (
+                    normalizar_alcance_conversacion(
+                        datos_crudos
+                    )
+                )
+
+                alcance_detectado = str(
+                    alcance_normalizado.get(
+                        "alcance_conversacion",
+                        "AMBIGUO",
+                    )
+                    or "AMBIGUO"
+                ).strip().upper()
+
+                confianza = normalizar_confianza(
+                    alcance_normalizado.get(
+                        "confianza"
+                    )
+                )
+
+                if (
+                    alcance_detectado
+                    not in ALCANCES_CONVERSACION_VALIDOS
+                ):
+                    error = (
+                        f"{model_name}: "
+                        f"intento {numero_intento}: "
+                        "ALCANCE_NO_VALIDO"
+                    )
+
+                    resultado_fallo[
+                        "errores"
+                    ].append(
+                        error
+                    )
+
+                    continue
+
+                print(
+                    "✅ Alcance conversacional válido: "
+                    f"{alcance_detectado}, "
+                    f"confianza={confianza}, "
+                    f"modelo={model_name}"
+                )
+
+                return {
+                    "exitoso": True,
+                    "alcance": alcance_normalizado,
+                    "modelo_usado": model_name,
+                    "intentos_realizados": (
+                        resultado_fallo[
+                            "intentos_realizados"
+                        ]
+                    ),
+                    "errores": (
+                        resultado_fallo[
+                            "errores"
+                        ]
+                    ),
+                }
+
+            except Exception as e:
+                error = (
+                    f"{model_name}: "
+                    f"intento {numero_intento}: "
+                    f"{e}"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    "⚠️ Error clasificando alcance: "
+                    f"{error}"
+                )
+
+    return resultado_fallo
+    
+
+# ============================================================
 # EXTRACCIÓN IA DE MEMORIA HISTÓRICA
 # ============================================================
 
