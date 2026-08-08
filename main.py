@@ -16244,6 +16244,52 @@ async def view_full_conversation(
                 border-radius: 15px;
                 font-size: 0.8em;
             }
+
+            /* ENVÍO MANUAL DE MENSAJES */
+            .message-composer {
+                background: #f0f2f5;
+                padding: 12px 18px;
+                border-top: 1px solid #ddd;
+            }
+            
+            .message-form {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                max-width: 1200px;
+                margin: 0 auto;
+            }
+            
+            .message-input {
+                flex: 1;
+                resize: none;
+                border: 1px solid #ddd;
+                border-radius: 20px;
+                padding: 12px 16px;
+                font-family: inherit;
+                font-size: 0.95em;
+                outline: none;
+                background: white;
+            }
+            
+            .message-input:focus {
+                border-color: #25D366;
+            }
+            
+            .send-button {
+                background: #25D366;
+                color: white;
+                border: none;
+                border-radius: 20px;
+                padding: 12px 20px;
+                font-weight: 600;
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            
+            .send-button:hover {
+                background: #1ebe5d;
+            }
             
             /* FOOTER */
             .footer {
@@ -16361,8 +16407,34 @@ async def view_full_conversation(
                 <div class="message-time">{msg_time}</div>
             </div>
         """)
-    
-    html_parts.append("""
+
+    telefono_url = clean_number.replace("+", "%2B")
+
+    html_parts.append(f"""
+        </div>
+
+        <div class="message-composer">
+            <form
+                action="/panel/conversations/{telefono_url}/send"
+                method="post"
+                class="message-form"
+            >
+                <textarea
+                    name="message"
+                    class="message-input"
+                    placeholder="Escribe un mensaje al prospecto..."
+                    rows="2"
+                    maxlength="1500"
+                    required
+                ></textarea>
+
+                <button
+                    type="submit"
+                    class="send-button"
+                >
+                    Enviar ➤
+                </button>
+            </form>
         </div>
         
         <div class="footer">
@@ -16375,25 +16447,114 @@ async def view_full_conversation(
         
         <script>
             // Auto-scroll al final
-            window.onload = function() {
+            window.onload = function() {{
                 const container = document.getElementById('messagesContainer');
-                if (container) {
+                if (container) {{
                     container.scrollTop = container.scrollHeight;
-                }
-            };
+                }}
+            }};
             
             // Hotkey ESC para volver
-            document.onkeydown = function(e) {
-                if (e.key === 'Escape') {
+            document.onkeydown = function(e) {{
+                if (e.key === 'Escape') {{
                     window.location.href = '/panel';
-                }
-            };
+                }}
+            }};
         </script>
     </body>
     </html>
     """)
     
     return HTMLResponse(content=''.join(html_parts))
+
+@app.post("/panel/conversations/{phone_number}/send")
+async def send_manual_message_from_panel(
+    phone_number: str,
+    message: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Envía manualmente un mensaje de WhatsApp al prospecto
+    desde el panel CRM utilizando el mismo número de Twilio.
+    """
+
+    # Limpiar número
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace("whatsapp:", "")
+    else:
+        clean_number = phone_number
+
+    # Buscar contacto existente
+    contact = db.query(Contact).filter(
+        Contact.phone_number == clean_number
+    ).first()
+
+    if not contact:
+        raise HTTPException(
+            status_code=404,
+            detail="Contacto no encontrado"
+        )
+
+    # Limpiar mensaje
+    mensaje_limpio = str(message or "").strip()
+
+    if not mensaje_limpio:
+        raise HTTPException(
+            status_code=400,
+            detail="El mensaje no puede estar vacío"
+        )
+
+    # Preparar destino WhatsApp
+    prospecto_to = f"whatsapp:{clean_number}"
+
+    # Enviar utilizando la función Twilio existente
+    resultado_envio = enviar_respuesta_twilio(
+        prospecto_to,
+        mensaje_limpio
+    )
+
+    # Validar resultado de Twilio
+    if not resultado_envio.startswith("✅"):
+        raise HTTPException(
+            status_code=500,
+            detail=resultado_envio
+        )
+
+    # Recuperar SID de Twilio
+    twilio_sid = None
+
+    if "SID:" in resultado_envio:
+        twilio_sid = resultado_envio.split(
+            "SID: ",
+            1
+        )[1].strip()
+
+    # Guardar mensaje saliente en el CRM
+    save_message(
+        db,
+        contact.id,
+        "outgoing",
+        mensaje_limpio,
+        twilio_sid
+    )
+
+    # Regresar automáticamente a la conversación
+    telefono_url = clean_number.replace("+", "%2B")
+
+    return HTMLResponse(
+        content=f"""
+        <html>
+        <head>
+            <meta http-equiv="refresh"
+                  content="0;url=/panel/conversations/{telefono_url}">
+        </head>
+        <body>
+            Mensaje enviado correctamente.
+        </body>
+        </html>
+        """
+    )
+    
 
 # ================= ENDPOINTS ADICIONALES =================
 @app.get("/panel/search")
