@@ -4849,6 +4849,31 @@ def aplicar_reglas_negocio_estructuradas(
         ) or ""
     ).strip()
 
+    contexto_zona = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else {}
+    )
+
+    zona_contexto = str(
+        contexto_zona.get(
+            "zona_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    # El dato del mensaje actual tiene prioridad.
+    # Si el usuario ya había proporcionado su zona,
+    # se reutiliza el dato confirmado del contexto.
+    zona_para_decision = (
+        zona_mencionada
+        or zona_contexto
+    )
+
     campus_mencionado = str(
         analisis_seguro.get(
             "campus_mencionado",
@@ -4859,11 +4884,10 @@ def aplicar_reglas_negocio_estructuradas(
     clasificacion_zona_determinista = (
         clasificar_zona_determinista(
             mensaje_usuario=mensaje_usuario,
-            zona_mencionada=zona_mencionada,
+            zona_mencionada=zona_para_decision,
             campus_mencionado=campus_mencionado,
         )
     )
-
     decision["datos_detectados"][
         "clasificacion_zona_determinista"
     ] = clasificacion_zona_determinista
@@ -4875,10 +4899,10 @@ def aplicar_reglas_negocio_estructuradas(
         False,
     ):
         localidad_para_validar = (
-            zona_mencionada
+            zona_para_decision
             or campus_mencionado
         )
-
+        
         validacion_geografica = (
             validar_zona_desconocida_con_google(
                 localidad_para_validar
@@ -5488,6 +5512,13 @@ def aplicar_reglas_negocio_estructuradas(
         in intenciones_secundarias
         or "PIDIO_INFORMES"
         in hitos_comerciales
+        or intencion_principal
+        in {
+            "RESPONDER_ZONA",
+            "RESPONDER_REFERENCIA",
+        }
+        or zona_para_decision
+        or analisis_seguro.get("nivel")
     )
 
     if tiene_proceso_comercial_iniciado:
@@ -13002,6 +13033,31 @@ def procesar_mensaje_whatsapp_estructurado_real(
             ] = "RESULTADO_ORQUESTADOR_INVALIDO"
 
             return resultado_final
+
+        # ----------------------------------------------------
+        # PERSISTENCIA DEL CONTEXTO ESTRUCTURADO
+        # ----------------------------------------------------
+
+        resultado_persistencia = (
+            persistir_resultado_estructurado(
+                db=db,
+                contact=contact,
+                resultado=resultado_orquestador,
+            )
+        )
+
+        resultado_final[
+            "persistencia_contexto"
+        ] = resultado_persistencia
+
+        print(
+            "💾 Contexto estructurado persistido: "
+            f"{json.dumps(
+                resultado_persistencia,
+                ensure_ascii=False,
+                default=str,
+            )}"
+        )
 
         respuesta_bot = str(
             resultado_orquestador.get(
