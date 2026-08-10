@@ -887,6 +887,59 @@ def normalizar_analisis_mensaje_ia(
     if accion_recomendada not in ACCIONES_RECOMENDADAS_VALIDAS:
         accion_recomendada = "CONTINUAR_CONVERSACION"
 
+    datos_detectados_crudos = normalizar_lista_textos(
+        datos_crudos.get("datos_detectados")
+    )
+
+    equivalencias_datos_detectados = {
+        "referencia": "referencia_colegio",
+        "referencia_colegio": "referencia_colegio",
+        "referencia_del_colegio": "referencia_colegio",
+
+        "zona": "zona_interes",
+        "zona_interes": "zona_interes",
+        "localidad": "zona_interes",
+        "municipio": "zona_interes",
+
+        "nivel": "nivel",
+        "nivel_interes": "nivel",
+
+        "grado": "grado_solicitado",
+        "grado_interes": "grado_solicitado",
+        "grado_solicitado": "grado_solicitado",
+    }
+
+    datos_detectados_normalizados = []
+
+    for dato in datos_detectados_crudos:
+        clave_dato = re.sub(
+            r"[^a-z0-9_]+",
+            "_",
+            unicodedata.normalize(
+                "NFD",
+                str(dato or "").strip().lower(),
+            ).encode(
+                "ascii",
+                "ignore",
+            ).decode(
+                "ascii"
+            ),
+        ).strip("_")
+
+        dato_canonico = equivalencias_datos_detectados.get(
+            clave_dato,
+            clave_dato,
+        )
+
+        if (
+            dato_canonico
+            and dato_canonico
+            not in datos_detectados_normalizados
+        ):
+            datos_detectados_normalizados.append(
+                dato_canonico
+            )
+
     analisis_normalizado = {
         "version": "1.0",
 
@@ -1037,9 +1090,7 @@ def normalizar_analisis_mensaje_ia(
             datos_crudos.get("pausa_conversacion")
         ),
 
-        "datos_detectados": normalizar_lista_textos(
-            datos_crudos.get("datos_detectados")
-        ),
+        "datos_detectados": datos_detectados_normalizados,
         "datos_faltantes": normalizar_lista_textos(
             datos_crudos.get("datos_faltantes")
         ),
@@ -8182,36 +8233,130 @@ def procesar_mensaje_prospecto_estructurado(
                 })
 
             else:
-                decision_fallback = (
-                    crear_decision_negocio_vacia()
+                contexto_rescate = (
+                    contexto_comercial
+                    if isinstance(
+                        contexto_comercial,
+                        dict,
+                    )
+                    else {}
                 )
 
-                decision_fallback.update({
-                    "accion": (
-                        "FALLBACK_CONVERSACIONAL"
-                    ),
-                    "motivo": (
-                        "Gemini no devolvió un análisis "
-                        "válido después de los reintentos "
-                        "automáticos."
-                    ),
-                    "requiere_admin": False,
-                    "puede_compartir_costos": False,
-                    "zona_validada": False,
-                    "debe_finalizar_conversacion": False,
-                    "datos_detectados": {},
-                })
+                hitos_contexto = (
+                    contexto_rescate.get(
+                        "hitos_comerciales",
+                        [],
+                    )
+                )
 
-                return {
-                    "version": "1.0",
-                    "flujo": "estructurado",
-                    "procesado": True,
-                    "analisis": analisis,
-                    "decision": decision_fallback,
-                    "error": (
-                        "ANALISIS_IA_INVALIDO_RECUPERADO"
-                    ),
-                }
+                if not isinstance(
+                    hitos_contexto,
+                    list,
+                ):
+                    hitos_contexto = []
+
+                etapa_contexto = str(
+                    contexto_rescate.get(
+                        "etapa_conversacional",
+                        "",
+                    )
+                    or ""
+                ).strip().upper()
+
+                zona_contexto = str(
+                    contexto_rescate.get(
+                        "zona_interes",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                referencia_contexto = str(
+                    contexto_rescate.get(
+                        "referencia_colegio",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                alumnos_contexto = (
+                    contexto_rescate.get(
+                        "alumnos",
+                        [],
+                    )
+                )
+
+                if not isinstance(
+                    alumnos_contexto,
+                    list,
+                ):
+                    alumnos_contexto = []
+
+                contexto_suficiente_para_continuar = bool(
+                    hitos_contexto
+                    or zona_contexto
+                    or referencia_contexto
+                    or alumnos_contexto
+                    or etapa_contexto
+                    not in {
+                        "",
+                        "CONTACTO_INICIAL",
+                    }
+                )
+
+                if contexto_suficiente_para_continuar:
+                    analisis = (
+                        crear_analisis_mensaje_vacio()
+                    )
+
+                    analisis.update({
+                        "accion_recomendada": (
+                            "CONTINUAR_CONVERSACION"
+                        ),
+                        "datos_detectados": [
+                            "contexto_recuperado"
+                        ],
+                        "confianza": 0.0,
+                    })
+
+                    print(
+                        "🧠 Fallo técnico del análisis IA: "
+                        "se conserva el contexto comercial "
+                        "y Python continúa desde la etapa "
+                        f"{etapa_contexto or 'NO_DEFINIDA'}."
+                    )
+
+                else:
+                    decision_fallback = (
+                        crear_decision_negocio_vacia()
+                    )
+
+                    decision_fallback.update({
+                        "accion": (
+                            "FALLBACK_CONVERSACIONAL"
+                        ),
+                        "motivo": (
+                            "No existe análisis IA válido ni "
+                            "contexto suficiente para continuar "
+                            "la conversación con seguridad."
+                        ),
+                        "requiere_admin": False,
+                        "puede_compartir_costos": False,
+                        "zona_validada": False,
+                        "debe_finalizar_conversacion": False,
+                        "datos_detectados": {},
+                    })
+
+                    return {
+                        "version": "1.0",
+                        "flujo": "estructurado",
+                        "procesado": True,
+                        "analisis": analisis,
+                        "decision": decision_fallback,
+                        "error": (
+                            "ANALISIS_IA_INVALIDO_SIN_CONTEXTO"
+                        ),
+                    }
                 
             
         decision = aplicar_reglas_negocio_estructuradas(
