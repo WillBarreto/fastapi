@@ -1140,39 +1140,494 @@ def obtener_modelos_gemini():
     return modelos
 
 
+# ============================================================
+# POLÍTICA CENTRAL DE EJECUCIÓN GEMINI
+# ============================================================
+
+IA_PRESUPUESTOS_SALIDA = {
+    # Respuestas que legítimamente deben ser muy pequeñas.
+    "ETIQUETA": {
+        "base": 1000,
+        "maximo": 2000,
+    },
+
+    # Fecha, hora o pequeños conjuntos de datos.
+    "EXTRACCION_CORTA": {
+        "base": 2000,
+        "maximo": 4000,
+    },
+
+    # Contratos JSON, análisis y extracción estructurada.
+    "JSON_ESTRUCTURADO": {
+        "base": 8000,
+        "maximo": 16000,
+    },
+
+    # Respuestas naturales dirigidas a personas.
+    "RESPUESTA_CONVERSACIONAL": {
+        "base": 8000,
+        "maximo": 16000,
+    },
+
+    # Reconstrucción o resumen de conversaciones extensas.
+    "MEMORIA_HISTORICA": {
+        "base": 12000,
+        "maximo": 20000,
+    },
+}
+
+
+def clasificar_tipo_tarea_gemini(
+    tarea: str,
+) -> str:
+    """
+    Determina el presupuesto técnico apropiado según la naturaleza
+    de la tarea.
+
+    No interpreta mensajes del usuario.
+    No modifica el flujo comercial.
+    """
+
+    tarea_normalizada = str(
+        tarea or ""
+    ).strip().lower()
+
+    if any(
+        expresion in tarea_normalizada
+        for expresion in [
+            "clasificación de alcance campus",
+            "clasificacion de alcance campus",
+            "clasificación de intención",
+            "clasificacion de intención",
+            "clasificación respuesta admin cita",
+            "clasificacion respuesta admin cita",
+        ]
+    ):
+        return "ETIQUETA"
+
+    if any(
+        expresion in tarea_normalizada
+        for expresion in [
+            "extracción hora cita",
+            "extraccion hora cita",
+        ]
+    ):
+        return "EXTRACCION_CORTA"
+
+    if any(
+        expresion in tarea_normalizada
+        for expresion in [
+            "análisis estructurado",
+            "analisis estructurado",
+            "clasificación de alcance ia",
+            "clasificacion de alcance ia",
+            "extracción datos cita",
+            "extraccion datos cita",
+        ]
+    ):
+        return "JSON_ESTRUCTURADO"
+
+    if any(
+        expresion in tarea_normalizada
+        for expresion in [
+            "memoria histórica",
+            "memoria historica",
+        ]
+    ):
+        return "MEMORIA_HISTORICA"
+
+    return "RESPUESTA_CONVERSACIONAL"
+
+
+def extraer_valor_generation_config(
+    generation_config,
+    campo: str,
+    predeterminado=None,
+):
+    """
+    Lee de forma tolerante un valor de GenerationConfig,
+    independientemente de que llegue como objeto o diccionario.
+    """
+
+    if generation_config is None:
+        return predeterminado
+
+    try:
+        if isinstance(
+            generation_config,
+            dict,
+        ):
+            return generation_config.get(
+                campo,
+                predeterminado,
+            )
+
+        valor = getattr(
+            generation_config,
+            campo,
+            predeterminado,
+        )
+
+        return (
+            predeterminado
+            if valor is None
+            else valor
+        )
+
+    except Exception:
+        return predeterminado
+
+
+def construir_generation_config_gemini(
+    generation_config=None,
+    max_output_tokens: Optional[int] = None,
+):
+    """
+    Construye una configuración compatible con las llamadas actuales.
+
+    Conserva los parámetros de generación ya utilizados por el bot,
+    pero permite administrar centralmente el techo de salida.
+    """
+
+    temperatura = extraer_valor_generation_config(
+        generation_config,
+        "temperature",
+        None,
+    )
+
+    argumentos = {}
+
+    if temperatura is not None:
+        argumentos["temperature"] = temperatura
+
+    if max_output_tokens is not None:
+        argumentos[
+            "max_output_tokens"
+        ] = int(max_output_tokens)
+
+    return genai.types.GenerationConfig(
+        **argumentos
+    )
+
+
+def normalizar_finish_reason_gemini(
+    valor,
+) -> str:
+    """
+    Convierte FinishReason a una etiqueta estable como:
+    STOP, MAX_TOKENS, SAFETY, OTHER, etc.
+    """
+
+    if valor is None:
+        return ""
+
+    try:
+        nombre = getattr(
+            valor,
+            "name",
+            None,
+        )
+
+        if nombre:
+            return str(nombre).strip().upper()
+    except Exception:
+        pass
+
+    texto = str(valor or "").strip().upper()
+
+    if "." in texto:
+        texto = texto.rsplit(
+            ".",
+            1,
+        )[-1]
+
+    return texto
+
+
+def extraer_metricas_respuesta_gemini(
+    response,
+) -> Dict[str, Any]:
+    """
+    Recupera motivo de finalización y consumo real de tokens
+    sin afectar la respuesta.
+
+    Todos los campos son tolerantes a SDKs/versiones donde algún
+    atributo no esté disponible.
+    """
+
+    metricas = {
+        "finish_reason": "",
+        "finish_message": "",
+        "prompt_tokens": None,
+        "output_tokens": None,
+        "thoughts_tokens": None,
+        "cached_tokens": None,
+        "total_tokens": None,
+    }
+
+    try:
+        candidates = getattr(
+            response,
+            "candidates",
+            None,
+        ) or []
+
+        if candidates:
+            candidate = candidates[0]
+
+            metricas[
+                "finish_reason"
+            ] = normalizar_finish_reason_gemini(
+                getattr(
+                    candidate,
+                    "finish_reason",
+                    None,
+                )
+            )
+
+            metricas[
+                "finish_message"
+            ] = str(
+                getattr(
+                    candidate,
+                    "finish_message",
+                    "",
+                )
+                or ""
+            ).strip()
+
+    except Exception:
+        pass
+
+    try:
+        usage = getattr(
+            response,
+            "usage_metadata",
+            None,
+        )
+
+        if usage is not None:
+            campos_usage = {
+                "prompt_tokens": (
+                    "prompt_token_count"
+                ),
+                "output_tokens": (
+                    "candidates_token_count"
+                ),
+                "thoughts_tokens": (
+                    "thoughts_token_count"
+                ),
+                "cached_tokens": (
+                    "cached_content_token_count"
+                ),
+                "total_tokens": (
+                    "total_token_count"
+                ),
+            }
+
+            for destino, origen in (
+                campos_usage.items()
+            ):
+                try:
+                    valor = getattr(
+                        usage,
+                        origen,
+                        None,
+                    )
+
+                    if valor is not None:
+                        metricas[destino] = int(
+                            valor
+                        )
+
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+    return metricas
+
+
 def generar_con_gemini_con_fallback(
     contenido,
     generation_config=None,
-    tarea: str = "gemini"
+    tarea: str = "gemini",
 ):
     """
-    Intenta generar contenido usando el modelo principal.
-    Si falla, prueba modelos de respaldo.
+    Administrador central de ejecución Gemini.
+
+    Principios:
+    - El límite de salida es un fusible técnico, no una forma
+      de recortar respuestas legítimas.
+    - Registra consumo real y motivo de finalización.
+    - Si Gemini termina por MAX_TOKENS, amplía automáticamente
+      el presupuesto antes de considerar fallida la generación.
+    - Mantiene fallback entre modelos.
     """
+
     ultimo_error = None
 
+    tipo_tarea = clasificar_tipo_tarea_gemini(
+        tarea
+    )
+
+    politica = IA_PRESUPUESTOS_SALIDA.get(
+        tipo_tarea,
+        IA_PRESUPUESTOS_SALIDA[
+            "RESPUESTA_CONVERSACIONAL"
+        ],
+    )
+
+    presupuesto_base = int(
+        politica["base"]
+    )
+
+    presupuesto_maximo = int(
+        politica["maximo"]
+    )
+
     for model_name in obtener_modelos_gemini():
-        try:
-            print(f"🧠 Probando Gemini para {tarea}: {model_name}")
 
-            model = genai.GenerativeModel(model_name)
+        presupuesto_actual = (
+            presupuesto_base
+        )
 
-            if generation_config:
+        intento_tokens = 0
+
+        while True:
+            intento_tokens += 1
+
+            try:
+                print(
+                    "🧠 Probando Gemini: "
+                    f"tarea={tarea}, "
+                    f"modelo={model_name}, "
+                    f"tipo={tipo_tarea}, "
+                    f"max_output_tokens="
+                    f"{presupuesto_actual}, "
+                    f"intento_tokens={intento_tokens}"
+                )
+
+                model = genai.GenerativeModel(
+                    model_name
+                )
+
+                config_efectiva = (
+                    construir_generation_config_gemini(
+                        generation_config=(
+                            generation_config
+                        ),
+                        max_output_tokens=(
+                            presupuesto_actual
+                        ),
+                    )
+                )
+
                 response = model.generate_content(
                     contenido,
-                    generation_config=generation_config
+                    generation_config=(
+                        config_efectiva
+                    ),
                 )
-            else:
-                response = model.generate_content(contenido)
 
-            print(f"✅ Gemini usado para {tarea}: {model_name}")
-            return response, model_name
+                metricas = (
+                    extraer_metricas_respuesta_gemini(
+                        response
+                    )
+                )
 
-        except Exception as e:
-            ultimo_error = e
-            print(f"⚠️ Falló Gemini para {tarea} con {model_name}: {e}")
+                metricas_log = {
+                    "tarea": tarea,
+                    "modelo": model_name,
+                    "tipo_tarea": tipo_tarea,
+                    "max_output_tokens": (
+                        presupuesto_actual
+                    ),
+                    **metricas,
+                }
 
-    raise RuntimeError(f"Todos los modelos Gemini fallaron para {tarea}. Último error: {ultimo_error}")
+                print(
+                    "📊 GEMINI_METRICAS: "
+                    + json.dumps(
+                        metricas_log,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+
+                finish_reason = str(
+                    metricas.get(
+                        "finish_reason",
+                        "",
+                    )
+                    or ""
+                ).strip().upper()
+
+                if (
+                    finish_reason
+                    == "MAX_TOKENS"
+                ):
+                    if (
+                        presupuesto_actual
+                        < presupuesto_maximo
+                    ):
+                        nuevo_presupuesto = min(
+                            presupuesto_actual * 2,
+                            presupuesto_maximo,
+                        )
+
+                        print(
+                            "⚠️ Gemini alcanzó "
+                            "MAX_TOKENS. "
+                            "Se regenerará la respuesta "
+                            "con mayor margen: "
+                            f"{presupuesto_actual} → "
+                            f"{nuevo_presupuesto}"
+                        )
+
+                        presupuesto_actual = (
+                            nuevo_presupuesto
+                        )
+
+                        continue
+
+                    ultimo_error = RuntimeError(
+                        "Gemini alcanzó MAX_TOKENS "
+                        "incluso con el presupuesto "
+                        "máximo de seguridad "
+                        f"({presupuesto_maximo})."
+                    )
+
+                    print(
+                        "⚠️ "
+                        f"{ultimo_error}"
+                    )
+
+                    break
+
+                print(
+                    "✅ Gemini usado para "
+                    f"{tarea}: {model_name}"
+                )
+
+                return response, model_name
+
+            except Exception as e:
+                ultimo_error = e
+
+                print(
+                    "⚠️ Falló Gemini para "
+                    f"{tarea} con {model_name}: {e}"
+                )
+
+                break
+
+    raise RuntimeError(
+        "Todos los modelos Gemini fallaron "
+        f"para {tarea}. "
+        f"Último error: {ultimo_error}"
+    )
 
 def extraer_texto_respuesta_gemini(response) -> str:
     """
