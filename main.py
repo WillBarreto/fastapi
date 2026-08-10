@@ -7458,9 +7458,16 @@ def generar_respuesta_final_estructurada(
             respuesta_limpia,
         ).strip()
 
+        texto_para_validar_cierre = re.sub(
+            r"\((?:a|o)\)",
+            "",
+            texto_sin_signos_finales,
+            flags=re.IGNORECASE,
+        )
+
         palabras_respuesta = re.findall(
             r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+",
-            texto_sin_signos_finales,
+            texto_para_validar_cierre,
         )
 
         ultima_palabra = (
@@ -7933,8 +7940,12 @@ REGLAS DE FORMATO PARA WHATSAPP:
   coloca una línea en blanco antes de la pregunta.
 - La pregunta principal debe aparecer en el último párrafo.
 - Formula como máximo una pregunta principal.
-- Usa como máximo dos párrafos, salvo que sea indispensable
-  un tercero.
+- Usa tantos párrafos breves como sean necesarios para que la
+  respuesta sea fácil de leer en WhatsApp.
+- En respuestas explicativas con varios conceptos o beneficios,
+  separa cada idea principal en su propio párrafo.
+- Prefiere claridad visual antes que compactar varias ideas en
+  un solo bloque.
 - No redactes bloques largos de texto.
 - Evita respuestas visualmente densas o amontonadas.
 - Conserva exactamente los saltos de línea en la respuesta final.
