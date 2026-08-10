@@ -12876,7 +12876,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
         ] = historial_completo
 
         # ----------------------------------------------------
-        # 2. MEMORIA HISTÓRICA
+        # 2. MEMORIA HISTÓRICA ADAPTATIVA
         # ----------------------------------------------------
 
         texto_conversacion = str(
@@ -12887,7 +12887,16 @@ def procesar_mensaje_whatsapp_estructurado_real(
             or ""
         ).strip()
 
-        if texto_conversacion:
+        total_mensajes_historial = len(
+            history or []
+        )
+
+        requiere_memoria_historica_ia = bool(
+            texto_conversacion
+            and total_mensajes_historial > 8
+        )
+
+        if requiere_memoria_historica_ia:
             resultado_memoria_historica = (
                 extraer_memoria_historica_con_ia(
                     texto_conversacion=(
@@ -12895,7 +12904,23 @@ def procesar_mensaje_whatsapp_estructurado_real(
                     )
                 )
             )
+
+            print(
+                "🧠 Memoria histórica IA utilizada: "
+                f"{total_mensajes_historial} mensajes "
+                "superan la ventana reciente de 8."
+            )
+
         else:
+            motivo_omision_memoria = (
+                "HISTORIAL_COMPLETO_VACIO"
+                if not texto_conversacion
+                else (
+                    "HISTORIAL_RECIENTE_COMPLETO "
+                    "YA_DISPONIBLE_EN_ANALIZADOR"
+                )
+            )
+
             resultado_memoria_historica = {
                 "exitoso": False,
                 "memoria": (
@@ -12903,11 +12928,19 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 ),
                 "modelo_usado": "",
                 "intentos_realizados": 0,
-                "errores": [
-                    "HISTORIAL_COMPLETO_VACIO"
-                ],
+                "errores": [],
+                "omitida": True,
+                "motivo": motivo_omision_memoria,
+                "total_mensajes": (
+                    total_mensajes_historial
+                ),
             }
 
+            print(
+                "⚡ Memoria histórica IA omitida: "
+                f"{motivo_omision_memoria}; "
+                f"mensajes={total_mensajes_historial}"
+            )
         resultado_final[
             "memoria_historica"
         ] = resultado_memoria_historica
