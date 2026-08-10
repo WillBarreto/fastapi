@@ -13052,11 +13052,11 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
         print(
             "💾 Contexto estructurado persistido: "
-            f"{json.dumps(
+            + json.dumps(
                 resultado_persistencia,
                 ensure_ascii=False,
                 default=str,
-            )}"
+            )
         )
 
         respuesta_bot = str(
