@@ -5556,11 +5556,31 @@ def aplicar_reglas_negocio_estructuradas(
         # PASO 2: REFERENCIA DEL COLEGIO
         # ----------------------------------------------------
 
+        datos_detectados_analisis = (
+            analisis_seguro.get(
+                "datos_detectados",
+                [],
+            )
+        )
+
+        if not isinstance(
+            datos_detectados_analisis,
+            list,
+        ):
+            datos_detectados_analisis = []
+
+        respondio_referencia_en_turno = (
+            "referencia_colegio"
+            in datos_detectados_analisis
+        )
+
         referencia_confirmada = bool(
             referencia_previa
             or "RESPONDIO_REFERENCIA"
             in hitos_comerciales
+            or respondio_referencia_en_turno
         )
+        
 
         if not referencia_confirmada:
             decision.update({
