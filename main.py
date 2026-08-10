@@ -12439,6 +12439,151 @@ def procesar_mensaje_whatsapp_estructurado_real(
         return resultado_final
 
     # --------------------------------------------------------
+    # SALIDA RÁPIDA PARA APERTURA SOCIAL SIN SOLICITUD
+    # --------------------------------------------------------
+
+    if (
+        clasificacion_exitosa
+        and categoria_alcance == "AMBIGUO"
+        and not requiere_aclaracion_alcance
+    ):
+        respuesta_social = (
+            crear_respuesta_saludo_simple_estructurado(
+                mensaje
+            )
+        )
+
+        if respuesta_social:
+            contexto_persistido = (
+                construir_contexto_comercial_desde_contacto(
+                    contact
+                )
+            )
+
+            nombre_tutor = str(
+                contexto_persistido.get(
+                    "nombre_tutor",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if nombre_tutor:
+                primer_nombre = (
+                    nombre_tutor.split()[0].strip()
+                )
+
+                saludo_base = (
+                    detectar_saludo_simple_estructurado(
+                        mensaje
+                    )
+                )
+
+                if saludo_base and primer_nombre:
+                    respuesta_social = (
+                        f"{saludo_base}, {primer_nombre}. "
+                        "¿En qué podemos ayudarle?"
+                    )
+
+            resultado_twilio = (
+                enviar_respuesta_twilio(
+                    numero_destino,
+                    respuesta_social,
+                )
+            )
+
+            twilio_sid = None
+
+            if (
+                isinstance(
+                    resultado_twilio,
+                    str,
+                )
+                and "SID:" in resultado_twilio
+            ):
+                twilio_sid = (
+                    resultado_twilio
+                    .split(
+                        "SID:",
+                        1,
+                    )[1]
+                    .strip()
+                )
+
+            envio_exitoso = bool(
+                isinstance(
+                    resultado_twilio,
+                    str,
+                )
+                and resultado_twilio.startswith(
+                    "✅"
+                )
+            )
+
+            if envio_exitoso:
+                save_message(
+                    db,
+                    contact.id,
+                    "outgoing",
+                    respuesta_social,
+                    twilio_sid,
+                )
+
+                db.commit()
+
+            resultado_final.update({
+                "procesado": envio_exitoso,
+                "mensaje_enviado": envio_exitoso,
+                "respuesta": respuesta_social,
+                "twilio_resultado": resultado_twilio,
+                "twilio_sid": twilio_sid,
+                "resultado_orquestador": {
+                    "version": "1.0",
+                    "flujo": "apertura_social_rapida",
+                    "procesado": envio_exitoso,
+                    "alcance": alcance_detectado,
+                    "respuesta_generada": (
+                        respuesta_social
+                    ),
+                    "gemini_adicional_utilizado": False,
+                    "contexto_persistido_utilizado": bool(
+                        nombre_tutor
+                    ),
+                    "error": "",
+                },
+                "memoria_historica": {
+                    "omitida": True,
+                    "motivo": (
+                        "APERTURA_SOCIAL_RESUELTA "
+                        "CON CONTEXTO_PERSISTIDO"
+                    ),
+                },
+                "contexto_comercial": (
+                    contexto_persistido
+                ),
+                "contexto_comercial_enriquecido": {
+                    "omitido": True,
+                    "motivo": (
+                        "NO_REQUIERE_RECONSTRUCCION_IA"
+                    ),
+                },
+                "error": (
+                    ""
+                    if envio_exitoso
+                    else "ERROR_ENVIANDO_APERTURA_SOCIAL"
+                ),
+            })
+
+            print(
+                "⚡ Apertura social resuelta sin "
+                "memoria IA ni orquestador completo: "
+                f"{respuesta_social}"
+            )
+
+            return resultado_final
+            
+
+    # --------------------------------------------------------
     # DECISIÓN DE CONTINUIDAD DEL FLUJO
     # --------------------------------------------------------
 
