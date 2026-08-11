@@ -2627,85 +2627,28 @@ def normalizar_memoria_historica_ia(
         return base
 
 
-def memoria_historica_contiene_informacion(
-    memoria: Dict[str, Any],
-) -> bool:
-    """
-    Determina si la memoria histórica contiene datos útiles.
-    """
-
-    if not isinstance(memoria, dict):
-        return False
-
-    campos_texto = [
-        "nombre_tutor",
-        "zona_interes",
-        "referencia_colegio",
-        "fecha_cita_texto",
-        "fecha_cita_iso",
-        "hora_cita_texto",
-        "hora_cita_24h",
-        "ultimo_mensaje_prospecto",
-        "ultima_respuesta_asistente",
-        "resumen_relacion",
-    ]
-
-    if any(
-        str(
-            memoria.get(
-                campo,
-                "",
-            )
-            or ""
-        ).strip()
-        for campo in campos_texto
-    ):
-        return True
-
-    campos_lista = [
-        "alumnos",
-        "niveles_interes",
-        "grados_interes",
-        "areas_interes",
-        "temas_explicados",
-        "objeciones_detectadas",
-        "hitos_comerciales",
-        "datos_confirmados",
-        "datos_inciertos",
-    ]
-
-    if any(
-        memoria.get(
-            campo
-        )
-        for campo in campos_lista
-    ):
-        return True
-
-    campos_booleanos = [
-        "solicito_costos",
-        "costos_presentados",
-        "acepto_visita",
-        "cita_solicitada",
-        "cita_confirmada",
-    ]
-
-    return any(
-        bool(
-            memoria.get(
-                campo
-            )
-        )
-        for campo in campos_booleanos
-    )
-
-
 def extraer_memoria_historica_con_ia(
     texto_conversacion: str,
 ) -> Dict[str, Any]:
     """
     Analiza el historial completo con Gemini y devuelve
     una memoria histórica validada.
+
+    Responsabilidades de esta función:
+    - Construir el prompt de memoria histórica.
+    - Realizar hasta dos intentos SEMÁNTICOS.
+    - Validar que Gemini entregue texto.
+    - Validar que el texto contenga JSON.
+    - Normalizar la memoria histórica.
+    - Rechazar memorias técnicamente válidas pero vacías.
+
+    Responsabilidades delegadas al administrador central Gemini:
+    - Selección de modelo.
+    - Fallback técnico entre modelos.
+    - Presupuesto de tokens.
+    - Detección de MAX_TOKENS.
+    - Ampliación automática del presupuesto.
+    - Registro de métricas técnicas.
 
     Esta función:
     - no modifica la base de datos;
@@ -2841,198 +2784,98 @@ HISTORIAL COMPLETO:
 {historial}
 """
 
-    modelos = obtener_modelos_gemini()
-
-    if not modelos:
-        resultado_fallo["errores"].append(
-            "NO_HAY_MODELOS_CONFIGURADOS"
-        )
-        return resultado_fallo
-
     instrucciones_reintento = """
 
-REINTENTO OBLIGATORIO:
+REINTENTO SEMÁNTICO OBLIGATORIO:
 
-La respuesta anterior no pudo validarse.
+La respuesta anterior fue recibida técnicamente, pero no pudo
+validarse como una memoria histórica útil.
 
-Devuelve exclusivamente JSON válido.
-Respeta exactamente el contrato.
+Vuelve a revisar TODO el historial de la conversación.
+
+Busca especialmente hechos que ya hayan quedado confirmados y que
+deben mantenerse disponibles aunque hayan ocurrido muchos mensajes atrás:
+
+- nombre del tutor;
+- nombre o nombres de los alumnos;
+- nivel o niveles de interés;
+- grado solicitado;
+- zona;
+- referencia del colegio;
+- áreas de interés;
+- temas ya explicados;
+- costos ya solicitados o presentados;
+- aceptación de una visita;
+- fecha y hora propuestas;
+- cita pendiente o confirmada;
+- hitos comerciales alcanzados;
+- último mensaje del prospecto;
+- última respuesta del asistente.
+
+No confundas preguntas del asistente con datos confirmados.
+
+No inventes información que no aparezca en la conversación.
+
+Devuelve exclusivamente un objeto JSON válido que respete
+exactamente el contrato solicitado.
+
 No uses Markdown.
 No agregues explicaciones.
+No escribas texto antes ni después del JSON.
+No dejes la memoria vacía si el historial contiene información
+comercial confirmada.
 """
 
-    for indice, model_name in enumerate(
-        modelos
+    total_intentos_semanticos = 2
+
+    for numero_intento in range(
+        1,
+        total_intentos_semanticos + 1,
     ):
-        intentos_permitidos = (
-            2
-            if indice == 0
-            else 1
-        )
+        resultado_fallo[
+            "intentos_realizados"
+        ] += 1
 
-        for numero_intento in range(
-            1,
-            intentos_permitidos + 1,
-        ):
-            resultado_fallo[
-                "intentos_realizados"
-            ] += 1
+        prompt_intento = prompt_base
 
-            prompt_intento = prompt_base
+        if numero_intento > 1:
+            prompt_intento += (
+                instrucciones_reintento
+            )
 
-            if numero_intento > 1:
-                prompt_intento += (
-                    instrucciones_reintento
-                )
+        try:
+            print(
+                "🧠 Memoria histórica IA: "
+                f"intento_semantico={numero_intento}"
+            )
 
-            try:
-                print(
-                    "🧠 Memoria histórica IA: "
-                    f"modelo={model_name}, "
-                    f"intento={numero_intento}"
-                )
-
-                model = genai.GenerativeModel(
-                    model_name
-                )
-
-                response = model.generate_content(
+            response, modelo_usado = (
+                generar_con_gemini_con_fallback(
                     prompt_intento,
                     generation_config=(
                         genai.types.GenerationConfig(
-                            max_output_tokens=12000,
                             temperature=0.0,
                         )
                     ),
-                )
-                
-                texto_respuesta = (
-                    extraer_texto_respuesta_gemini(
-                        response
-                    )
-                )
-
-                if not texto_respuesta:
-                    error = (
-                        f"{model_name}: "
-                        f"intento {numero_intento}: "
-                        "RESPUESTA_VACIA"
-                    )
-
-                    resultado_fallo[
-                        "errores"
-                    ].append(
-                        error
-                    )
-
-                    continue
-
-                datos_crudos = (
-                    extraer_json_de_texto(
-                        texto_respuesta
-                    )
-                )
-
-                if datos_crudos is None:
-                    muestra_inicio = (
-                        texto_respuesta[:500]
-                        .replace("\n", "\\n")
-                    )
-
-                    muestra_final = (
-                        texto_respuesta[-500:]
-                        .replace("\n", "\\n")
-                    )
-
-                    razon_terminacion = ""
-
-                    try:
-                        razon_terminacion = str(
-                            response.candidates[
-                                0
-                            ].finish_reason
-                        )
-                    except Exception:
-                        razon_terminacion = (
-                            "NO_DISPONIBLE"
-                        )
-
-                    print(
-                        "⚠️ JSON histórico no válido | "
-                        f"caracteres={len(texto_respuesta)} | "
-                        f"finish_reason={razon_terminacion}"
-                    )
-
-                    print(
-                        "⚠️ Inicio respuesta: "
-                        f"{muestra_inicio}"
-                    )
-
-                    print(
-                        "⚠️ Final respuesta: "
-                        f"{muestra_final}"
-                    )
-
-                    error = (
-                        f"{model_name}: "
-                        f"intento {numero_intento}: "
-                        "JSON_INVALIDO"
-                    )
-                    
-                    resultado_fallo[
-                        "errores"
-                    ].append(
-                        error
-                    )
-
-                    continue
-
-                memoria = (
-                    normalizar_memoria_historica_ia(
-                        datos_crudos
-                    )
-                )
-
-                if not (
-                    memoria_historica_contiene_informacion(
-                        memoria
-                    )
-                ):
-                    error = (
-                        f"{model_name}: "
-                        f"intento {numero_intento}: "
-                        "MEMORIA_VACIA"
-                    )
-
-                    resultado_fallo[
-                        "errores"
-                    ].append(
-                        error
-                    )
-
-                    continue
-
-                return {
-                    "exitoso": True,
-                    "memoria": memoria,
-                    "modelo_usado": model_name,
-                    "intentos_realizados": (
-                        resultado_fallo[
-                            "intentos_realizados"
-                        ]
+                    tarea=(
+                        "memoria histórica "
+                        f"intento {numero_intento}"
                     ),
-                    "errores": (
-                        resultado_fallo[
-                            "errores"
-                        ]
-                    ),
-                }
+                )
+            )
 
-            except Exception as e:
+            texto_respuesta = (
+                extraer_texto_respuesta_gemini(
+                    response
+                )
+            )
+
+            if not texto_respuesta:
                 error = (
-                    f"{model_name}: "
-                    f"intento {numero_intento}: "
-                    f"{e}"
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "RESPUESTA_VACIA"
                 )
 
                 resultado_fallo[
@@ -3042,11 +2885,140 @@ No agregues explicaciones.
                 )
 
                 print(
-                    "⚠️ Error memoria histórica IA: "
-                    f"{error}"
+                    f"⚠️ {error}"
                 )
 
+                continue
+
+            datos_crudos = (
+                extraer_json_de_texto(
+                    texto_respuesta
+                )
+            )
+
+            if datos_crudos is None:
+                muestra_inicio = (
+                    texto_respuesta[:500]
+                    .replace(
+                        "\n",
+                        "\\n",
+                    )
+                )
+
+                muestra_final = (
+                    texto_respuesta[-500:]
+                    .replace(
+                        "\n",
+                        "\\n",
+                    )
+                )
+
+                error = (
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "JSON_INVALIDO"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    "⚠️ JSON histórico no válido | "
+                    f"caracteres={len(texto_respuesta)}"
+                )
+
+                print(
+                    "⚠️ Inicio respuesta memoria: "
+                    f"{muestra_inicio}"
+                )
+
+                print(
+                    "⚠️ Final respuesta memoria: "
+                    f"{muestra_final}"
+                )
+
+                continue
+
+            memoria = (
+                normalizar_memoria_historica_ia(
+                    datos_crudos
+                )
+            )
+
+            if not (
+                memoria_historica_contiene_informacion(
+                    memoria
+                )
+            ):
+                error = (
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "MEMORIA_VACIA"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    f"⚠️ {error}"
+                )
+
+                continue
+
+            print(
+                "✅ Memoria histórica válida: "
+                f"modelo={modelo_usado}, "
+                f"intento_semantico="
+                f"{numero_intento}"
+            )
+
+            return {
+                "exitoso": True,
+                "memoria": memoria,
+                "modelo_usado": modelo_usado,
+                "intentos_realizados": (
+                    resultado_fallo[
+                        "intentos_realizados"
+                    ]
+                ),
+                "errores": (
+                    resultado_fallo[
+                        "errores"
+                    ]
+                ),
+            }
+
+        except Exception as e:
+            error = (
+                "intento semántico "
+                f"{numero_intento}: "
+                f"FALLO_TECNICO_GEMINI: {e}"
+            )
+
+            resultado_fallo[
+                "errores"
+            ].append(
+                error
+            )
+
+            print(
+                "⚠️ Error técnico en memoria "
+                "histórica IA: "
+                f"{error}"
+            )
+
+            continue
+
     return resultado_fallo
+    
     
 
 def analisis_estructurado_contiene_informacion(
