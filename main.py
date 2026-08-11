@@ -13480,12 +13480,8 @@ def procesar_mensaje_whatsapp_estructurado_real(
     else:
         respuestas_por_alcance = {
             "EMPLEO": (
-                "Gracias por escribirnos. Identificamos que "
-                "su consulta corresponde a una vacante o "
-                "proceso de empleo. Para brindarle información "
-                "correcta, su solicitud requiere revisión del "
-                "área correspondiente. Continuaremos la atención "
-                "por este medio."
+                "¡Gracias por tu interés en colaborar con nosotros! Nos puedes enviar tu currículum por "
+                "WhatsApp a este número, por favor: 55 4812 3885."
             ),
             "ALUMNOS_ACTUALES": (
                 "Gracias por escribirnos. Identificamos que "
