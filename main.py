@@ -8561,7 +8561,6 @@ Comienza directamente con el mensaje dirigido a la familia.
                     prompt_intento,
                     generation_config=(
                         genai.types.GenerationConfig(
-                            max_output_tokens=1300,
                             temperature=0.2,
                         )
                     ),
@@ -10079,7 +10078,6 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=300,
                 temperature=0.0,
             ),
             tarea="clasificación de alcance campus"
@@ -10698,7 +10696,6 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt_clasificacion,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=300,
                 temperature=0.1,
             ),
             tarea="clasificación de intención"
@@ -14605,7 +14602,6 @@ def generar_respuesta_gemini(mensaje_usuario: str, contact, history):
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=4000,
                 temperature=0.7
             ),
             tarea="respuesta principal"
@@ -15530,7 +15526,6 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=300,
                 temperature=0.0
             ),
             tarea="clasificación respuesta admin cita"
@@ -15852,7 +15847,6 @@ REGLAS:
                 prompt,
                 generation_config=(
                     genai.types.GenerationConfig(
-                        max_output_tokens=100,
                         temperature=0.0,
                     )
                 ),
@@ -16077,7 +16071,6 @@ REGLAS:
                 prompt,
                 generation_config=(
                     genai.types.GenerationConfig(
-                        max_output_tokens=300,
                         temperature=0.0,
                     )
                 ),
@@ -16332,7 +16325,6 @@ REGLAS:
         response, modelo_usado = generar_con_gemini_con_fallback(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1200,
                 temperature=0.2
             ),
             tarea="respuesta admin para prospecto"
