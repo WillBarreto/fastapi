@@ -15698,7 +15698,10 @@ La IA adaptará su respuesta antes de enviarla al prospecto.
 Revisar conversación:
 https://fastapi-production-efb5.up.railway.app/panel"""
 
-    resultado = enviar_respuesta_twilio(admin_number, mensaje_alerta)
+    resultado = enviar_notificacion_admin_whatsapp(
+        admin_number,
+        mensaje_alerta,
+    )
     
     print(f"📣 Alerta interna enviada a: {admin_number}")
     print(f"📣 Resultado alerta interna: {resultado}")
