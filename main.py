@@ -14409,6 +14409,8 @@ def agregar_mensaje_al_buffer_whatsapp(
 async def whatsapp_webhook(
     From: str = Form(...),
     Body: str = Form(""),
+    ButtonText: str = Form(""),
+    ButtonPayload: str = Form(""),
     NumMedia: str = Form("0"),
     MediaUrl0: str = Form(""),
     MediaContentType0: str = Form(""),
