@@ -14485,6 +14485,10 @@ async def whatsapp_webhook(
             print(
                 "👑 Mensaje recibido desde WhatsApp maestro/admin"
             )
+            registrar_inbound_admin_whatsapp(
+                db,
+                From,
+            )
 
             button_payload_limpio = str(
                 ButtonPayload or ""
