@@ -2023,207 +2023,86 @@ MENSAJE ACTUAL:
 
     instrucciones_reintento = """
 
-REINTENTO OBLIGATORIO:
+REINTENTO SEMÁNTICO OBLIGATORIO:
 
-La respuesta anterior no pudo validarse.
+La respuesta anterior fue recibida técnicamente, pero no pudo
+validarse correctamente como una clasificación de alcance.
+
+Vuelve a interpretar el MENSAJE ACTUAL junto con el HISTORIAL
+RECIENTE.
+
+Recuerda especialmente:
+
+- El mensaje actual tiene prioridad.
+- El historial sirve para resolver respuestas breves o referencias.
+- Un saludo simple puede ser AMBIGUO sin requerir aclaración.
+- Una solicitud incompleta puede ser AMBIGUO y sí requerir aclaración.
+- No clasifiques automáticamente como ADMISIONES solo porque
+  el contacto provenga de una campaña.
+- No confundas una vacante docente con interés en un nivel escolar.
+- Si la persona ya dejó claro el motivo actual, conserva esa ruta
+  aunque el mensaje actual sea breve, como "sí", "no", "eso",
+  "perfecto", "gracias" o una precisión relacionada.
+- No inventes una ruta que el contexto no respalde.
 
 Devuelve exclusivamente un objeto JSON válido.
 Respeta exactamente el contrato indicado.
 No uses Markdown.
 No agregues explicaciones.
 No redactes una respuesta para el contacto.
+No escribas texto antes ni después del JSON.
 """
 
-    api_key = (
-        os.getenv(
-            "GOOGLE_AI_API_KEY"
-        )
-        or os.getenv(
-            "GEMINI_API_KEY"
-        )
-    )
+    total_intentos_semanticos = 2
 
-    if not api_key:
-        resultado_fallo["errores"].append(
-            "GEMINI_API_KEY_NO_CONFIGURADA"
-        )
-
-        return resultado_fallo
-
-    genai.configure(
-        api_key=api_key
-    )
-
-    modelos = obtener_modelos_gemini()
-
-    if not modelos:
-        resultado_fallo["errores"].append(
-            "NO_HAY_MODELOS_CONFIGURADOS"
-        )
-
-        return resultado_fallo
-
-    for indice_modelo, model_name in enumerate(
-        modelos
+    for numero_intento in range(
+        1,
+        total_intentos_semanticos + 1,
     ):
-        intentos_permitidos = (
-            2
-            if indice_modelo == 0
-            else 1
-        )
+        resultado_fallo[
+            "intentos_realizados"
+        ] += 1
 
-        for numero_intento in range(
-            1,
-            intentos_permitidos + 1,
-        ):
-            resultado_fallo[
-                "intentos_realizados"
-            ] += 1
+        prompt_intento = prompt_base
 
-            prompt_intento = prompt_base
+        if numero_intento > 1:
+            prompt_intento += (
+                instrucciones_reintento
+            )
 
-            if numero_intento > 1:
-                prompt_intento += (
-                    instrucciones_reintento
-                )
+        try:
+            print(
+                "🧭 Clasificación de alcance IA: "
+                f"intento_semantico={numero_intento}"
+            )
 
-            try:
-                print(
-                    "🧭 Clasificación de alcance IA: "
-                    f"modelo={model_name}, "
-                    f"intento={numero_intento}"
-                )
-
-                model = genai.GenerativeModel(
-                    model_name
-                )
-
-                response = model.generate_content(
+            response, modelo_usado = (
+                generar_con_gemini_con_fallback(
                     prompt_intento,
                     generation_config=(
                         genai.types.GenerationConfig(
-                            max_output_tokens=1000,
                             temperature=0.0,
                         )
                     ),
-                )
-
-                texto_respuesta = (
-                    extraer_texto_respuesta_gemini(
-                        response
-                    )
-                )
-
-                if not texto_respuesta:
-                    error = (
-                        f"{model_name}: "
-                        f"intento {numero_intento}: "
-                        "RESPUESTA_VACIA"
-                    )
-
-                    resultado_fallo[
-                        "errores"
-                    ].append(
-                        error
-                    )
-
-                    print(
-                        f"⚠️ {error}"
-                    )
-
-                    continue
-
-                datos_crudos = (
-                    extraer_json_de_texto(
-                        texto_respuesta
-                    )
-                )
-
-                if datos_crudos is None:
-                    error = (
-                        f"{model_name}: "
-                        f"intento {numero_intento}: "
-                        "JSON_INVALIDO"
-                    )
-
-                    resultado_fallo[
-                        "errores"
-                    ].append(
-                        error
-                    )
-
-                    print(
-                        f"⚠️ {error}"
-                    )
-
-                    continue
-
-                alcance_normalizado = (
-                    normalizar_alcance_conversacion(
-                        datos_crudos
-                    )
-                )
-
-                alcance_detectado = str(
-                    alcance_normalizado.get(
-                        "alcance_conversacion",
-                        "AMBIGUO",
-                    )
-                    or "AMBIGUO"
-                ).strip().upper()
-
-                confianza = normalizar_confianza(
-                    alcance_normalizado.get(
-                        "confianza"
-                    )
-                )
-
-                if (
-                    alcance_detectado
-                    not in ALCANCES_CONVERSACION_VALIDOS
-                ):
-                    error = (
-                        f"{model_name}: "
-                        f"intento {numero_intento}: "
-                        "ALCANCE_NO_VALIDO"
-                    )
-
-                    resultado_fallo[
-                        "errores"
-                    ].append(
-                        error
-                    )
-
-                    continue
-
-                print(
-                    "✅ Alcance conversacional válido: "
-                    f"{alcance_detectado}, "
-                    f"confianza={confianza}, "
-                    f"modelo={model_name}"
-                )
-
-                return {
-                    "exitoso": True,
-                    "alcance": alcance_normalizado,
-                    "modelo_usado": model_name,
-                    "intentos_realizados": (
-                        resultado_fallo[
-                            "intentos_realizados"
-                        ]
+                    tarea=(
+                        "clasificación de alcance IA "
+                        f"intento {numero_intento}"
                     ),
-                    "errores": (
-                        resultado_fallo[
-                            "errores"
-                        ]
-                    ),
-                }
+                )
+            )
 
-            except Exception as e:
+            texto_respuesta = (
+                extraer_texto_respuesta_gemini(
+                    response
+                )
+            )
+
+            if not texto_respuesta:
                 error = (
-                    f"{model_name}: "
-                    f"intento {numero_intento}: "
-                    f"{e}"
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "RESPUESTA_VACIA"
                 )
 
                 resultado_fallo[
@@ -2233,12 +2112,152 @@ No redactes una respuesta para el contacto.
                 )
 
                 print(
-                    "⚠️ Error clasificando alcance: "
-                    f"{error}"
+                    f"⚠️ {error}"
                 )
 
-    return resultado_fallo
-    
+                continue
+
+            datos_crudos = (
+                extraer_json_de_texto(
+                    texto_respuesta
+                )
+            )
+
+            if datos_crudos is None:
+                muestra_inicio = (
+                    texto_respuesta[:500]
+                    .replace(
+                        "\n",
+                        "\\n",
+                    )
+                )
+
+                muestra_final = (
+                    texto_respuesta[-500:]
+                    .replace(
+                        "\n",
+                        "\\n",
+                    )
+                )
+
+                error = (
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "JSON_INVALIDO"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    f"⚠️ {error}"
+                )
+
+                print(
+                    "⚠️ Inicio respuesta alcance: "
+                    f"{muestra_inicio}"
+                )
+
+                print(
+                    "⚠️ Final respuesta alcance: "
+                    f"{muestra_final}"
+                )
+
+                continue
+
+            alcance_normalizado = (
+                normalizar_alcance_conversacion(
+                    datos_crudos
+                )
+            )
+
+            alcance_detectado = str(
+                alcance_normalizado.get(
+                    "alcance_conversacion",
+                    "AMBIGUO",
+                )
+                or "AMBIGUO"
+            ).strip().upper()
+
+            confianza = normalizar_confianza(
+                alcance_normalizado.get(
+                    "confianza"
+                )
+            )
+
+            if (
+                alcance_detectado
+                not in ALCANCES_CONVERSACION_VALIDOS
+            ):
+                error = (
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "ALCANCE_NO_VALIDO"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    f"⚠️ {error}"
+                )
+
+                continue
+
+            print(
+                "✅ Alcance conversacional válido: "
+                f"{alcance_detectado}, "
+                f"confianza={confianza}, "
+                f"modelo={modelo_usado}, "
+                f"intento_semantico={numero_intento}"
+            )
+
+            return {
+                "exitoso": True,
+                "alcance": alcance_normalizado,
+                "modelo_usado": modelo_usado,
+                "intentos_realizados": (
+                    resultado_fallo[
+                        "intentos_realizados"
+                    ]
+                ),
+                "errores": (
+                    resultado_fallo[
+                        "errores"
+                    ]
+                ),
+            }
+
+        except Exception as e:
+            error = (
+                "intento semántico "
+                f"{numero_intento}: "
+                f"FALLO_TECNICO_GEMINI: {e}"
+            )
+
+            resultado_fallo[
+                "errores"
+            ].append(
+                error
+            )
+
+            print(
+                "⚠️ Error técnico clasificando "
+                "alcance: "
+                f"{error}"
+            )
+
+            continue
+
+    return resultado_fallo 
 
 # ============================================================
 # EXTRACCIÓN IA DE MEMORIA HISTÓRICA
