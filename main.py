@@ -14713,10 +14713,53 @@ async def whatsapp_webhook(
 
         respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(mensaje_entrada, contact, history)
         
-        print(f"🧭 Estado flujo usado para responder: {estado_actual}")
-        print(f"➡️ Estado flujo siguiente: {estado_siguiente}")
+        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(
+            mensaje_entrada,
+            contact,
+            history,
+        )
+        
+        print(
+            f"🧭 Estado flujo usado para responder: "
+            f"{estado_actual}"
+        )
+        print(
+            f"➡️ Estado flujo siguiente: "
+            f"{estado_siguiente}"
+        )
 
-        resultado = enviar_respuesta_twilio(From, respuesta)
+        # ====================================================
+        # BARRERA FINAL DE SALIDA COMERCIAL AL PROSPECTO
+        # ====================================================
+
+        validacion_salida = (
+            validar_salida_comercial_prospecto(
+                respuesta
+            )
+        )
+
+        if validacion_salida.get(
+            "bloqueada",
+            False,
+        ):
+            print(
+                "🛡️ Respuesta original sustituida "
+                "antes de enviar al prospecto."
+            )
+
+            respuesta = str(
+                validacion_salida.get(
+                    "mensaje_seguro",
+                    "",
+                )
+                or ""
+            ).strip()
+
+        resultado = enviar_respuesta_twilio(
+            From,
+            respuesta,
+        )
+        
 
         twilio_sid = None
         if "SID:" in resultado:
