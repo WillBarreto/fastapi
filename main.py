@@ -1407,6 +1407,46 @@ def extraer_metricas_respuesta_gemini(
         )
 
         if usage is not None:
+            try:
+                print(
+                    "🔬 GEMINI_USAGE_DEBUG: "
+                    + json.dumps(
+                        {
+                            "response_type": (
+                                type(response).__name__
+                            ),
+                            "usage_type": (
+                                type(usage).__name__
+                            ),
+                            "usage_repr": repr(usage),
+                            "usage_dict": (
+                                getattr(
+                                    usage,
+                                    "__dict__",
+                                    None,
+                                )
+                            ),
+                            "usage_dir_filtrado": [
+                                atributo
+                                for atributo in dir(usage)
+                                if (
+                                    "token" in atributo.lower()
+                                    or "prompt" in atributo.lower()
+                                    or "candidate" in atributo.lower()
+                                    or "cached" in atributo.lower()
+                                    or "thought" in atributo.lower()
+                                )
+                            ],
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+            except Exception as e:
+                print(
+                    "⚠️ No se pudo imprimir "
+                    f"GEMINI_USAGE_DEBUG: {e}"
+                )
             campos_usage = {
                 "prompt_tokens": (
                     "prompt_token_count"
