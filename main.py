@@ -14729,7 +14729,13 @@ async def whatsapp_webhook(
         
         if detecta_condicion_consulta_admin(respuesta):
             tarea_admin = crear_tarea_admin_pendiente(db, contact, mensaje_entrada, respuesta)
-            enviar_alerta_admin_whatsapp(contact, mensaje_entrada, respuesta, tarea_admin.id)
+            enviar_alerta_admin_whatsapp(
+                db,
+                contact,
+                mensaje_entrada,
+                respuesta,
+                tarea_admin.id,
+            )
         
         nuevo_estado = actualizar_estado_segun_intencion(mensaje_entrada, respuesta, contact, db)
         print(f"🎯 Análisis de intención: {nuevo_estado}")
@@ -15493,6 +15499,7 @@ def enviar_template_alerta_admin_whatsapp(
         )
 
 def enviar_notificacion_admin_whatsapp(
+    db: Session,
     to_number: str,
     mensaje_libre: str,
 ) -> str:
@@ -15500,43 +15507,42 @@ def enviar_notificacion_admin_whatsapp(
     Envía una notificación al WhatsApp administrador.
 
     Estrategia:
-    1. Intenta primero texto libre.
-    2. Si Twilio acepta el envío, termina.
-    3. Si el texto libre falla, intenta automáticamente
-       la plantilla aprobada ADMIN_WHATSAPP_TEMPLATE_SID.
-
-    De esta forma, Twilio determina en la práctica si
-    la ventana de 24 horas está disponible.
+    - Si el administrador escribió durante las últimas
+      24 horas, envía el detalle completo como texto libre.
+    - Si la ventana está cerrada o no puede determinarse,
+      envía directamente la plantilla aprobada.
     """
 
-    resultado_libre = enviar_respuesta_twilio(
-        to_number,
-        mensaje_libre,
+    ventana_abierta = (
+        admin_whatsapp_tiene_ventana_abierta(
+            db,
+            to_number,
+        )
     )
 
-    if resultado_libre.startswith(
-        "✅ Mensaje enviado."
-    ):
+    if ventana_abierta:
         print(
-            "📣 Notificación admin enviada "
-            "como texto libre"
+            "📣 Ventana admin abierta. "
+            "Se enviará texto libre."
+        )
+
+        resultado_libre = (
+            enviar_respuesta_twilio(
+                to_number,
+                mensaje_libre,
+            )
+        )
+
+        print(
+            "📣 Resultado texto libre admin: "
+            f"{resultado_libre}"
         )
 
         return resultado_libre
 
     print(
-        "⚠️ No fue posible enviar texto libre "
-        "al administrador."
-    )
-
-    print(
-        "⚠️ Resultado texto libre: "
-        f"{resultado_libre}"
-    )
-
-    print(
-        "📨 Intentando plantilla WhatsApp "
-        "aprobada para administrador..."
+        "📨 Ventana admin cerrada o desconocida. "
+        "Se enviará template aprobado."
     )
 
     resultado_template = (
@@ -15550,17 +15556,8 @@ def enviar_notificacion_admin_whatsapp(
         f"{resultado_template}"
     )
 
-    if resultado_template.startswith(
-        "✅ Template admin enviado."
-    ):
-        return resultado_template
-
-    return (
-        "❌ Falló la notificación al administrador. "
-        f"Texto libre: {resultado_libre} | "
-        f"Template: {resultado_template}"
-    )
-
+    return resultado_template
+    
 def procesar_escalacion_admin_estructurada(
     db: Session,
     contact,
@@ -15786,6 +15783,7 @@ def procesar_escalacion_admin_estructurada(
         )
 
         resultado_alerta = enviar_alerta_admin_whatsapp(
+            db=db,
             contact=contact,
             mensaje_usuario=mensaje_usuario,
             respuesta_bot=respuesta_bot,
@@ -15888,7 +15886,14 @@ def construir_menu_tareas_pendientes(tareas):
     return "\n".join(lineas)
     
 
-def enviar_alerta_admin_whatsapp(contact, mensaje_usuario: str, respuesta_bot: str, tarea_id: int = None) -> str:
+def enviar_alerta_admin_whatsapp(
+    db: Session,
+    contact,
+    mensaje_usuario: str,
+    respuesta_bot: str,
+    tarea_id: int = None,
+) -> str:
+    
     """
     Envía una alerta interna al administrador cuando una conversación
     requiere atención humana.
@@ -15927,6 +15932,7 @@ Revisar conversación:
 https://fastapi-production-efb5.up.railway.app/panel"""
 
     resultado = enviar_notificacion_admin_whatsapp(
+        db,
         admin_number,
         mensaje_alerta,
     )
