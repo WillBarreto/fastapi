@@ -11117,6 +11117,45 @@ class AdminPendingTask(Base):
     created_at = Column(DateTime, default=func.now())
     resolved_at = Column(DateTime, nullable=True)
 
+class AdminWhatsappState(Base):
+    """
+    Estado persistente del canal WhatsApp administrador.
+
+    Se mantiene separado de Contact para evitar que el número
+    administrador aparezca como prospecto dentro del CRM.
+    """
+
+    __tablename__ = "admin_whatsapp_state"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    admin_number = Column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    last_inbound_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
 # ================= MANEJO SEGURO DE LA CREACIÓN DE TABLAS =================
 def setup_database():
     """Configura la base de datos de manera segura"""
