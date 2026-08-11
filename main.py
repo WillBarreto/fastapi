@@ -15264,6 +15264,75 @@ def enviar_template_alerta_admin_whatsapp(
             f"{str(e)}"
         )
 
+def enviar_notificacion_admin_whatsapp(
+    to_number: str,
+    mensaje_libre: str,
+) -> str:
+    """
+    Envía una notificación al WhatsApp administrador.
+
+    Estrategia:
+    1. Intenta primero texto libre.
+    2. Si Twilio acepta el envío, termina.
+    3. Si el texto libre falla, intenta automáticamente
+       la plantilla aprobada ADMIN_WHATSAPP_TEMPLATE_SID.
+
+    De esta forma, Twilio determina en la práctica si
+    la ventana de 24 horas está disponible.
+    """
+
+    resultado_libre = enviar_respuesta_twilio(
+        to_number,
+        mensaje_libre,
+    )
+
+    if resultado_libre.startswith(
+        "✅ Mensaje enviado."
+    ):
+        print(
+            "📣 Notificación admin enviada "
+            "como texto libre"
+        )
+
+        return resultado_libre
+
+    print(
+        "⚠️ No fue posible enviar texto libre "
+        "al administrador."
+    )
+
+    print(
+        "⚠️ Resultado texto libre: "
+        f"{resultado_libre}"
+    )
+
+    print(
+        "📨 Intentando plantilla WhatsApp "
+        "aprobada para administrador..."
+    )
+
+    resultado_template = (
+        enviar_template_alerta_admin_whatsapp(
+            to_number
+        )
+    )
+
+    print(
+        "📨 Resultado template admin: "
+        f"{resultado_template}"
+    )
+
+    if resultado_template.startswith(
+        "✅ Template admin enviado."
+    ):
+        return resultado_template
+
+    return (
+        "❌ Falló la notificación al administrador. "
+        f"Texto libre: {resultado_libre} | "
+        f"Template: {resultado_template}"
+    )
+
 def procesar_escalacion_admin_estructurada(
     db: Session,
     contact,
