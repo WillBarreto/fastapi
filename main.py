@@ -14911,6 +14911,106 @@ def registrar_inbound_admin_whatsapp(
 
         return None
 
+def admin_whatsapp_tiene_ventana_abierta(
+    db: Session,
+    admin_number: str,
+) -> bool:
+    """
+    Determina si el administrador escribió al bot
+    durante las últimas 24 horas.
+
+    Si no existe registro, no existe fecha de inbound
+    o ocurre cualquier error, se considera la ventana
+    cerrada para utilizar la plantilla aprobada.
+    """
+
+    admin_number_normalizado = (
+        normalizar_numero_whatsapp(
+            admin_number
+        )
+    )
+
+    if not admin_number_normalizado:
+        print(
+            "⚠️ Ventana admin: número inválido. "
+            "Se considera cerrada."
+        )
+        return False
+
+    try:
+        estado_admin = (
+            db.query(AdminWhatsappState)
+            .filter(
+                AdminWhatsappState.admin_number
+                == admin_number_normalizado
+            )
+            .first()
+        )
+
+        if estado_admin is None:
+            print(
+                "🕒 Ventana admin cerrada: "
+                "no existe registro previo."
+            )
+            return False
+
+        ultimo_inbound = (
+            estado_admin.last_inbound_at
+        )
+
+        if ultimo_inbound is None:
+            print(
+                "🕒 Ventana admin cerrada: "
+                "no existe last_inbound_at."
+            )
+            return False
+
+        # Protección para bases de datos o drivers que
+        # puedan devolver el timestamp sin tzinfo.
+        if ultimo_inbound.tzinfo is None:
+            ultimo_inbound = (
+                ultimo_inbound.replace(
+                    tzinfo=timezone.utc
+                )
+            )
+
+        ahora_utc = datetime.now(
+            timezone.utc
+        )
+
+        tiempo_transcurrido = (
+            ahora_utc - ultimo_inbound
+        )
+
+        ventana_abierta = (
+            timedelta(0)
+            <= tiempo_transcurrido
+            < timedelta(hours=24)
+        )
+
+        horas_transcurridas = (
+            tiempo_transcurrido.total_seconds()
+            / 3600
+        )
+
+        print(
+            "🕒 Estado ventana admin: "
+            f"abierta={ventana_abierta}, "
+            f"ultimo_inbound={ultimo_inbound}, "
+            f"horas_transcurridas="
+            f"{horas_transcurridas:.2f}"
+        )
+
+        return ventana_abierta
+
+    except Exception as e:
+        print(
+            "❌ Error consultando ventana "
+            f"WhatsApp admin: {e}"
+        )
+
+        return False
+    
 def get_conversation_history(db: Session, phone_number: str, limit: int = 10):
     """Obtiene el historial de conversación de un contacto"""
     if phone_number.startswith("whatsapp:"):
