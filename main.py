@@ -3126,14 +3126,24 @@ def ejecutar_analisis_estructurado_con_reintentos(
     """
     Ejecuta el análisis estructurado con recuperación automática.
 
-    Estrategia:
-    1. Intenta dos veces con el modelo principal.
-    2. Intenta una vez con cada modelo de respaldo.
-    3. Rechaza respuestas vacías, texto no JSON y contratos vacíos.
-    4. Devuelve información de auditoría sin lanzar el error
-       hacia el flujo conversacional.
+    Responsabilidades de esta función:
+    - Realizar hasta dos intentos SEMÁNTICOS.
+    - Validar que Gemini entregue texto.
+    - Validar que el texto contenga JSON.
+    - Normalizar el contrato.
+    - Rechazar contratos semánticamente vacíos.
+
+    Responsabilidades delegadas al administrador central Gemini:
+    - Selección de modelo.
+    - Fallback técnico entre modelos.
+    - Presupuesto de tokens.
+    - Detección de MAX_TOKENS.
+    - Ampliación automática del presupuesto.
+    - Registro de métricas técnicas.
+
+    Esto evita multiplicar bucles de modelos, reintentos
+    semánticos y reintentos técnicos.
     """
-    modelos = obtener_modelos_gemini()
 
     resultado_fallo = {
         "exitoso": False,
@@ -3143,152 +3153,224 @@ def ejecutar_analisis_estructurado_con_reintentos(
         "errores": [],
     }
 
-    if not modelos:
-        resultado_fallo["errores"].append(
-            "NO_HAY_MODELOS_CONFIGURADOS"
-        )
-        return resultado_fallo
-
     instrucciones_reintento = """
 
-REINTENTO OBLIGATORIO:
-La respuesta anterior no pudo validarse.
+REINTENTO SEMÁNTICO OBLIGATORIO:
+
+La respuesta anterior fue recibida técnicamente, pero no pudo
+validarse como un análisis estructurado útil.
+
+Revisa nuevamente TODO el contexto proporcionado, especialmente:
+
+- el mensaje actual del prospecto;
+- la última pregunta del asistente;
+- el historial reciente;
+- el contexto comercial enriquecido;
+- los datos previamente confirmados;
+- la etapa actual de la conversación.
+
+Si el mensaje actual es breve, como "sí", "no", "claro",
+"perfecto", una fecha, una hora, un nombre o una localidad,
+interpreta su significado como continuación de la conversación.
 
 Devuelve exclusivamente un objeto JSON válido que cumpla
 exactamente el contrato solicitado.
 
 No uses Markdown.
 No agregues explicaciones.
+No escribas texto antes ni después del JSON.
 No dejes la respuesta vacía.
+No devuelvas un contrato neutral o vacío si el contexto permite
+determinar el significado del mensaje actual.
 """
 
-    intentos_por_modelo = {}
+    total_intentos_semanticos = 2
 
-    for indice, model_name in enumerate(modelos):
-        intentos_permitidos = 2 if indice == 0 else 1
-        intentos_por_modelo[model_name] = intentos_permitidos
+    for numero_intento in range(
+        1,
+        total_intentos_semanticos + 1,
+    ):
+        resultado_fallo[
+            "intentos_realizados"
+        ] += 1
 
-    for model_name, intentos_permitidos in intentos_por_modelo.items():
-        for numero_intento in range(
-            1,
-            intentos_permitidos + 1,
-        ):
-            resultado_fallo["intentos_realizados"] += 1
+        prompt_intento = prompt_analisis
 
-            prompt_intento = prompt_analisis
+        if numero_intento > 1:
+            prompt_intento += instrucciones_reintento
 
-            if numero_intento > 1:
-                prompt_intento += instrucciones_reintento
+        try:
+            print(
+                "🧠 Análisis estructurado: "
+                f"intento_semantico={numero_intento}"
+            )
 
-            try:
-                print(
-                    "🧠 Análisis estructurado: "
-                    f"modelo={model_name}, "
-                    f"intento={numero_intento}"
-                )
-
-                model = genai.GenerativeModel(
-                    model_name
-                )
-
-                response = model.generate_content(
+            response, modelo_usado = (
+                generar_con_gemini_con_fallback(
                     prompt_intento,
                     generation_config=(
                         genai.types.GenerationConfig(
-                            max_output_tokens=3000,
                             temperature=0.0,
                         )
                     ),
-                )
-
-                texto_respuesta = (
-                    extraer_texto_respuesta_gemini(
-                        response
-                    )
-                )
-
-                if not texto_respuesta:
-                    error = (
-                        f"{model_name}: intento "
-                        f"{numero_intento}: "
-                        "RESPUESTA_VACIA"
-                    )
-                    resultado_fallo["errores"].append(
-                        error
-                    )
-                    print(f"⚠️ {error}")
-                    continue
-
-                datos_crudos = extraer_json_de_texto(
-                    texto_respuesta
-                )
-
-                if datos_crudos is None:
-                    error = (
-                        f"{model_name}: intento "
-                        f"{numero_intento}: "
-                        "JSON_INVALIDO"
-                    )
-                    resultado_fallo["errores"].append(
-                        error
-                    )
-                    print(f"⚠️ {error}")
-                    continue
-
-                analisis = normalizar_analisis_mensaje_ia(
-                    datos_crudos
-                )
-
-                if not (
-                    analisis_estructurado_contiene_informacion(
-                        analisis
-                    )
-                ):
-                    error = (
-                        f"{model_name}: intento "
-                        f"{numero_intento}: "
-                        "CONTRATO_VACIO"
-                    )
-                    resultado_fallo["errores"].append(
-                        error
-                    )
-                    print(f"⚠️ {error}")
-                    continue
-
-                print(
-                    "✅ Análisis estructurado válido: "
-                    f"modelo={model_name}, "
-                    f"intento={numero_intento}"
-                )
-
-                return {
-                    "exitoso": True,
-                    "analisis": analisis,
-                    "modelo_usado": model_name,
-                    "intentos_realizados": (
-                        resultado_fallo[
-                            "intentos_realizados"
-                        ]
+                    tarea=(
+                        "análisis estructurado "
+                        f"intento {numero_intento}"
                     ),
-                    "errores": (
-                        resultado_fallo["errores"]
-                    ),
-                }
+                )
+            )
 
-            except Exception as e:
+            texto_respuesta = (
+                extraer_texto_respuesta_gemini(
+                    response
+                )
+            )
+
+            if not texto_respuesta:
                 error = (
-                    f"{model_name}: intento "
-                    f"{numero_intento}: {e}"
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "RESPUESTA_VACIA"
                 )
 
-                resultado_fallo["errores"].append(
+                resultado_fallo[
+                    "errores"
+                ].append(
                     error
                 )
 
                 print(
-                    "⚠️ Error en análisis estructurado: "
-                    f"{error}"
+                    f"⚠️ {error}"
                 )
+
+                continue
+
+            datos_crudos = (
+                extraer_json_de_texto(
+                    texto_respuesta
+                )
+            )
+
+            if datos_crudos is None:
+                muestra_inicio = (
+                    texto_respuesta[:500]
+                    .replace(
+                        "\n",
+                        "\\n",
+                    )
+                )
+
+                muestra_final = (
+                    texto_respuesta[-500:]
+                    .replace(
+                        "\n",
+                        "\\n",
+                    )
+                )
+
+                error = (
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "JSON_INVALIDO"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    f"⚠️ {error}"
+                )
+
+                print(
+                    "⚠️ Inicio respuesta análisis: "
+                    f"{muestra_inicio}"
+                )
+
+                print(
+                    "⚠️ Final respuesta análisis: "
+                    f"{muestra_final}"
+                )
+
+                continue
+
+            analisis = (
+                normalizar_analisis_mensaje_ia(
+                    datos_crudos
+                )
+            )
+
+            if not (
+                analisis_estructurado_contiene_informacion(
+                    analisis
+                )
+            ):
+                error = (
+                    f"{modelo_usado}: "
+                    f"intento semántico "
+                    f"{numero_intento}: "
+                    "CONTRATO_VACIO"
+                )
+
+                resultado_fallo[
+                    "errores"
+                ].append(
+                    error
+                )
+
+                print(
+                    f"⚠️ {error}"
+                )
+
+                continue
+
+            print(
+                "✅ Análisis estructurado válido: "
+                f"modelo={modelo_usado}, "
+                f"intento_semantico="
+                f"{numero_intento}"
+            )
+
+            return {
+                "exitoso": True,
+                "analisis": analisis,
+                "modelo_usado": modelo_usado,
+                "intentos_realizados": (
+                    resultado_fallo[
+                        "intentos_realizados"
+                    ]
+                ),
+                "errores": (
+                    resultado_fallo[
+                        "errores"
+                    ]
+                ),
+            }
+
+        except Exception as e:
+            error = (
+                "intento semántico "
+                f"{numero_intento}: "
+                f"FALLO_TECNICO_GEMINI: {e}"
+            )
+
+            resultado_fallo[
+                "errores"
+            ].append(
+                error
+            )
+
+            print(
+                "⚠️ Error técnico en análisis "
+                "estructurado: "
+                f"{error}"
+            )
+
+            continue
 
     return resultado_fallo
     
