@@ -14822,6 +14822,91 @@ def save_message(db: Session, contact_id: int, direction: str, content: str, twi
     db.commit()
     return message
 
+def registrar_inbound_admin_whatsapp(
+    db: Session,
+    from_number: str,
+):
+    """
+    Registra de forma persistente la última vez que el
+    administrador escribió al número WhatsApp del bot.
+
+    Este registro se mantiene fuera del CRM de prospectos.
+    """
+
+    admin_number_normalizado = (
+        normalizar_numero_whatsapp(
+            from_number
+        )
+    )
+
+    if not admin_number_normalizado:
+        print(
+            "⚠️ No se pudo registrar inbound admin: "
+            "número vacío o inválido"
+        )
+        return None
+
+    ahora_utc = datetime.now(
+        timezone.utc
+    )
+
+    try:
+        estado_admin = (
+            db.query(AdminWhatsappState)
+            .filter(
+                AdminWhatsappState.admin_number
+                == admin_number_normalizado
+            )
+            .first()
+        )
+
+        if estado_admin is None:
+            estado_admin = AdminWhatsappState(
+                admin_number=(
+                    admin_number_normalizado
+                ),
+                last_inbound_at=ahora_utc,
+                created_at=ahora_utc,
+                updated_at=ahora_utc,
+            )
+
+            db.add(
+                estado_admin
+            )
+
+        else:
+            estado_admin.last_inbound_at = (
+                ahora_utc
+            )
+
+            estado_admin.updated_at = (
+                ahora_utc
+            )
+
+        db.commit()
+        db.refresh(
+            estado_admin
+        )
+
+        print(
+            "🕒 Inbound admin registrado: "
+            f"numero={admin_number_normalizado}, "
+            f"last_inbound_at="
+            f"{estado_admin.last_inbound_at}"
+        )
+
+        return estado_admin
+
+    except Exception as e:
+        db.rollback()
+
+        print(
+            "❌ Error registrando inbound "
+            f"del administrador: {e}"
+        )
+
+        return None
+
 def get_conversation_history(db: Session, phone_number: str, limit: int = 10):
     """Obtiene el historial de conversación de un contacto"""
     if phone_number.startswith("whatsapp:"):
