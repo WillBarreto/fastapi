@@ -17387,7 +17387,65 @@ async def send_manual_message_from_panel(
         twilio_sid
     )
 
+    # ============================================================
+    # CERRAR TAREAS ADMIN PENDIENTES ATENDIDAS DESDE EL PANEL
+    # ============================================================
+    #
+    # Si el administrador respondió manualmente desde el CRM,
+    # cualquier tarea pendiente de ese contacto relacionada con
+    # confirmación/atención humana deja de estar pendiente.
+    #
+    # Esto evita que conversaciones ya atendidas vuelvan a aparecer
+    # posteriormente en el menú del WhatsApp maestro.
+    #
+
+    tareas_pendientes_contacto = (
+        db.query(AdminPendingTask)
+        .filter(
+            AdminPendingTask.contact_id == contact.id,
+            AdminPendingTask.status == "PENDIENTE",
+        )
+        .all()
+    )
+
+    if tareas_pendientes_contacto:
+        ahora_utc = datetime.now(timezone.utc)
+
+        for tarea_pendiente in tareas_pendientes_contacto:
+            tarea_pendiente.status = "RESUELTA"
+            tarea_pendiente.admin_response = (
+                "RESPUESTA_MANUAL_DESDE_PANEL"
+            )
+            tarea_pendiente.final_response = mensaje_limpio
+            tarea_pendiente.resolved_at = ahora_utc
+
+        db.commit()
+
+        ids_tareas_resueltas = [
+            tarea.id
+            for tarea in tareas_pendientes_contacto
+        ]
+
+        print(
+            "✅ Tareas admin cerradas desde panel: "
+            f"contact_id={contact.id}, "
+            f"tareas={ids_tareas_resueltas}"
+        )
+
+        # Una selección temporal del administrador podría apuntar
+        # a alguna de estas tareas. Se elimina para evitar referencias
+        # obsoletas.
+        for admin_key_guardado, tarea_id_guardada in list(
+            ADMIN_SELECTED_TASKS.items()
+        ):
+            if tarea_id_guardada in ids_tareas_resueltas:
+                ADMIN_SELECTED_TASKS.pop(
+                    admin_key_guardado,
+                    None,
+                )
+
     # Regresar automáticamente a la conversación
+
     telefono_url = clean_number.replace("+", "%2B")
 
     return HTMLResponse(
