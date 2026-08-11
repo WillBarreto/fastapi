@@ -17904,6 +17904,62 @@ async def debug_time():
         "nota": "Hora México: UTC-6 (invierno), UTC-5 (verano)"
     }
 
+@app.get("/test-admin-template")
+async def test_admin_template():
+    """
+    Endpoint temporal para probar exclusivamente el envío
+    de la plantilla WhatsApp aprobada al administrador.
+
+    No crea tareas.
+    No modifica contactos.
+    No modifica conversaciones.
+    No envía mensajes a prospectos.
+    """
+
+    endpoint_habilitado = (
+        os.getenv(
+            "ENABLE_STRUCTURED_FLOW_TEST_ENDPOINT",
+            "false",
+        )
+        .strip()
+        .lower()
+        in ["true", "1", "yes", "si", "sí"]
+    )
+
+    if not endpoint_habilitado:
+        raise HTTPException(
+            status_code=404,
+            detail="Endpoint de prueba deshabilitado",
+        )
+
+    admin_number = os.getenv(
+        "ADMIN_WHATSAPP_NUMBER"
+    )
+
+    if not admin_number:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "ADMIN_WHATSAPP_NUMBER no configurado"
+            ),
+        )
+
+    resultado = (
+        enviar_template_alerta_admin_whatsapp(
+            admin_number
+        )
+    )
+
+    print(
+        "🧪 TEST TEMPLATE ADMIN: "
+        f"{resultado}"
+    )
+
+    return {
+        "status": "test_admin_template",
+        "resultado": resultado,
+    }
+
 @app.get("/test-gemini")
 async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
     """Endpoint para probar Gemini sin usar WhatsApp"""
