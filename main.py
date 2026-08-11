@@ -2685,6 +2685,110 @@ def normalizar_memoria_historica_ia(
 
         return base
 
+def memoria_historica_contiene_informacion(
+    memoria: Dict[str, Any],
+) -> bool:
+    """
+    Determina si una memoria histórica normalizada contiene
+    información comercial o conversacional realmente útil.
+
+    No considera como información suficiente:
+    - valores predeterminados del contrato;
+    - confianza por sí sola;
+    - CONTACTO_INICIAL;
+    - PROSPECTO_NUEVO.
+
+    No modifica datos ni ejecuta acciones.
+    """
+
+    if not isinstance(memoria, dict):
+        return False
+
+    campos_texto = [
+        "nombre_tutor",
+        "zona_interes",
+        "referencia_colegio",
+        "fecha_cita_texto",
+        "fecha_cita_iso",
+        "hora_cita_texto",
+        "hora_cita_24h",
+        "ultimo_mensaje_prospecto",
+        "ultima_respuesta_asistente",
+        "resumen_relacion",
+    ]
+
+    for campo in campos_texto:
+        if str(
+            memoria.get(
+                campo,
+                "",
+            )
+            or ""
+        ).strip():
+            return True
+
+    campos_lista = [
+        "alumnos",
+        "niveles_interes",
+        "grados_interes",
+        "areas_interes",
+        "temas_explicados",
+        "objeciones_detectadas",
+        "hitos_comerciales",
+        "datos_confirmados",
+        "datos_inciertos",
+    ]
+
+    for campo in campos_lista:
+        valor = memoria.get(
+            campo,
+            [],
+        )
+
+        if isinstance(valor, list) and valor:
+            return True
+
+    campos_booleanos = [
+        "solicito_costos",
+        "costos_presentados",
+        "acepto_visita",
+        "cita_solicitada",
+        "cita_confirmada",
+    ]
+
+    for campo in campos_booleanos:
+        if memoria.get(campo) is True:
+            return True
+
+    etapa = str(
+        memoria.get(
+            "etapa_conversacional_sugerida",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        etapa
+        and etapa != "CONTACTO_INICIAL"
+    ):
+        return True
+
+    estado = str(
+        memoria.get(
+            "estado_comercial_sugerido",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        estado
+        and estado != "PROSPECTO_NUEVO"
+    ):
+        return True
+
+    return False
 
 def extraer_memoria_historica_con_ia(
     texto_conversacion: str,
