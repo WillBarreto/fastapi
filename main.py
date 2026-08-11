@@ -14440,9 +14440,119 @@ async def whatsapp_webhook(
 
         # ===== RESPUESTA DE ADMINISTRADOR / WHATSAPP MAESTRO =====
         # El número administrador nunca entra al flujo normal del bot.
+        # ===== RESPUESTA DE ADMINISTRADOR / WHATSAPP MAESTRO =====
+        # El número administrador nunca entra al flujo normal del bot.
         if es_numero_admin(From):
-            print("👑 Mensaje recibido desde WhatsApp maestro/admin")
-            return procesar_respuesta_admin(db, From, mensaje_entrada)
+            print(
+                "👑 Mensaje recibido desde WhatsApp maestro/admin"
+            )
+
+            button_payload_limpio = str(
+                ButtonPayload or ""
+            ).strip().upper()
+
+            button_text_limpio = str(
+                ButtonText or ""
+            ).strip()
+
+            if button_payload_limpio:
+                print(
+                    "🔘 Quick Reply admin recibido: "
+                    f"payload={button_payload_limpio}, "
+                    f"text={button_text_limpio!r}"
+                )
+
+            if button_payload_limpio == "VER_MENSAJE":
+                ADMIN_SELECTED_TASKS.pop(
+                    normalizar_numero_whatsapp(From),
+                    None,
+                )
+
+                tareas_pendientes = (
+                    obtener_tareas_admin_pendientes(db)
+                )
+
+                if not tareas_pendientes:
+                    respuesta_admin = (
+                        "No hay conversaciones pendientes "
+                        "de confirmación en este momento."
+                    )
+
+                    resultado = enviar_respuesta_twilio(
+                        From,
+                        respuesta_admin,
+                    )
+
+                    print(
+                        "📣 Botón VER_MENSAJE sin pendientes: "
+                        f"{resultado}"
+                    )
+
+                    return {
+                        "status": (
+                            "admin_quick_reply_no_pending"
+                        )
+                    }
+
+                if len(tareas_pendientes) == 1:
+                    tarea = tareas_pendientes[0]
+
+                    ADMIN_SELECTED_TASKS[
+                        normalizar_numero_whatsapp(From)
+                    ] = tarea.id
+
+                    respuesta_admin = (
+                        "🔔 Tienes una solicitud pendiente "
+                        "de atención.\n\n"
+                        f"Prospecto: "
+                        f"{tarea.prospect_phone or 'No disponible'}\n\n"
+                        "Último mensaje:\n"
+                        f"{tarea.trigger_message or 'Sin mensaje'}\n\n"
+                        "¿Qué deseas que le responda?"
+                    )
+
+                    resultado = enviar_respuesta_twilio(
+                        From,
+                        respuesta_admin,
+                    )
+
+                    print(
+                        "📋 Quick Reply abrió tarea admin "
+                        f"{tarea.id}: {resultado}"
+                    )
+
+                    return {
+                        "status": (
+                            "admin_quick_reply_task_opened"
+                        ),
+                        "task_id": tarea.id,
+                    }
+
+                menu = construir_menu_tareas_pendientes(
+                    tareas_pendientes
+                )
+
+                resultado = enviar_respuesta_twilio(
+                    From,
+                    menu,
+                )
+
+                print(
+                    "📋 Quick Reply abrió menú de pendientes: "
+                    f"{resultado}"
+                )
+
+                return {
+                    "status": (
+                        "admin_quick_reply_menu_sent"
+                    )
+                }
+
+            return procesar_respuesta_admin(
+                db,
+                From,
+                mensaje_entrada,
+            )
 
         # ===== FALLBACK SI FALLÓ LA TRANSCRIPCIÓN =====
         if mensaje_entrada in [
