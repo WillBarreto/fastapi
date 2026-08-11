@@ -15195,6 +15195,75 @@ def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     except Exception as e:
         return f"❌ Error Twilio: {str(e)}"
 
+def enviar_template_alerta_admin_whatsapp(
+    to_number: str,
+) -> str:
+    """
+    Envía al administrador la plantilla WhatsApp aprobada
+    para reabrir la ventana de conversación cuando no sea
+    posible enviar texto libre.
+
+    La plantilla no contiene información del prospecto.
+    Su única función es avisar al administrador y permitirle
+    pulsar el Quick Reply VER_MENSAJE.
+    """
+
+    account_sid = os.getenv(
+        "TWILIO_ACCOUNT_SID"
+    )
+
+    api_key = os.getenv(
+        "TWILIO_API_KEY"
+    )
+
+    api_secret = os.getenv(
+        "TWILIO_API_SECRET"
+    )
+
+    twilio_number = os.getenv(
+        "TWILIO_WHATSAPP_NUMBER"
+    )
+
+    template_sid = os.getenv(
+        "ADMIN_WHATSAPP_TEMPLATE_SID"
+    )
+
+    if not all([
+        account_sid,
+        api_key,
+        api_secret,
+        twilio_number,
+        template_sid,
+    ]):
+        return (
+            "❌ Faltan credenciales Twilio o "
+            "ADMIN_WHATSAPP_TEMPLATE_SID"
+        )
+
+    try:
+        client = Client(
+            api_key,
+            api_secret,
+            account_sid,
+        )
+
+        message = client.messages.create(
+            from_=twilio_number,
+            to=to_number,
+            content_sid=template_sid,
+        )
+
+        return (
+            "✅ Template admin enviado. "
+            f"SID: {message.sid}"
+        )
+
+    except Exception as e:
+        return (
+            "❌ Error Twilio enviando template admin: "
+            f"{str(e)}"
+        )
+
 def procesar_escalacion_admin_estructurada(
     db: Session,
     contact,
