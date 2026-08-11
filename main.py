@@ -15407,6 +15407,209 @@ def actualizar_estado_segun_intencion(mensaje_usuario: str, respuesta_gemini: st
 def generar_respuesta_inteligente(mensaje: str, contact, history):
     """Función principal que decide qué motor de respuesta usar"""
     return generar_respuesta_gemini(mensaje, contact, history)
+
+def validar_salida_comercial_prospecto(
+    mensaje: str,
+) -> Dict[str, Any]:
+    """
+    Valida la respuesta final destinada a un prospecto antes
+    de enviarla por WhatsApp.
+
+    Política comercial:
+    - No se deben entregar montos de colegiaturas,
+      inscripciones, descuentos, becas o planes de pago
+      directamente por WhatsApp.
+    - La conversación sí puede hablar conceptualmente de
+      costos, becas, descuentos u opciones.
+    - Números no económicos como horarios, fechas, grados,
+      distancias o teléfonos no deben bloquearse.
+
+    Esta función todavía no envía ni modifica mensajes.
+    """
+
+    texto = str(
+        mensaje or ""
+    ).strip()
+
+    resultado = {
+        "valida": True,
+        "bloqueada": False,
+        "motivos": [],
+        "mensaje_original": texto,
+        "mensaje_seguro": texto,
+    }
+
+    if not texto:
+        resultado["valida"] = False
+        resultado["bloqueada"] = True
+        resultado["motivos"].append(
+            "RESPUESTA_VACIA"
+        )
+
+        resultado["mensaje_seguro"] = (
+            "Con gusto le orientamos. "
+            "¿En qué podemos apoyarle?"
+        )
+
+        return resultado
+
+    # ========================================================
+    # 1. DETECCIÓN DE MONTOS ECONÓMICOS EXPLÍCITOS
+    # ========================================================
+
+    patrones_monto = [
+        # $5,600 / $ 5,600.00 / $3400
+        r"\$\s*\d[\d\s,\.]*",
+
+        # 5,600 MXN / 3400 pesos / 5 mil pesos
+        (
+            r"\b\d[\d\s,\.]*\s*"
+            r"(?:mxn|pesos?|peso\s+mexicano(?:s)?)\b"
+        ),
+
+        # 5 mil / 5 mil pesos
+        (
+            r"\b\d+(?:[\.,]\d+)?\s*mil"
+            r"(?:\s+(?:mxn|pesos?))?\b"
+        ),
+    ]
+
+    montos_detectados = []
+
+    for patron in patrones_monto:
+        coincidencias = re.findall(
+            patron,
+            texto,
+            flags=re.IGNORECASE,
+        )
+
+        for coincidencia in coincidencias:
+            coincidencia_limpia = str(
+                coincidencia
+            ).strip()
+
+            if (
+                coincidencia_limpia
+                and coincidencia_limpia
+                not in montos_detectados
+            ):
+                montos_detectados.append(
+                    coincidencia_limpia
+                )
+
+    if montos_detectados:
+        resultado["motivos"].append(
+            "CONTIENE_MONTO_ECONOMICO"
+        )
+
+    # ========================================================
+    # 2. DETECCIÓN DE PORCENTAJES ECONÓMICOS
+    # ========================================================
+
+    texto_normalizado = (
+        normalizar_texto_geografico(
+            texto
+        )
+    )
+
+    contiene_porcentaje = bool(
+        re.search(
+            r"\b\d+(?:[\.,]\d+)?\s*%",
+            texto,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    contexto_economico = any(
+        termino in texto_normalizado
+        for termino in [
+            "beca",
+            "becas",
+            "descuento",
+            "descuentos",
+            "promocion",
+            "promociones",
+            "colegiatura",
+            "colegiaturas",
+            "inscripcion",
+            "mensualidad",
+            "mensualidades",
+            "pago",
+            "pagos",
+        ]
+    )
+
+    if (
+        contiene_porcentaje
+        and contexto_economico
+    ):
+        resultado["motivos"].append(
+            "CONTIENE_PORCENTAJE_ECONOMICO"
+        )
+
+    # ========================================================
+    # 3. DETECCIÓN DE CONDICIONES DE PAGO NO AUTORIZADAS
+    # ========================================================
+
+    patrones_condiciones_pago = [
+        r"\bpagos?\s+semanales?\b",
+        r"\bpagos?\s+quincenales?\b",
+        r"\bmensualidades?\s+semanales?\b",
+        r"\bplan(?:es)?\s+de\s+pago\s+semanal(?:es)?\b",
+        r"\bplan(?:es)?\s+de\s+pago\s+quincenal(?:es)?\b",
+    ]
+
+    condicion_pago_detectada = any(
+        re.search(
+            patron,
+            texto_normalizado,
+            flags=re.IGNORECASE,
+        )
+        for patron in patrones_condiciones_pago
+    )
+
+    if condicion_pago_detectada:
+        resultado["motivos"].append(
+            "CONDICION_PAGO_NO_AUTORIZADA"
+        )
+
+    # ========================================================
+    # 4. DECISIÓN FINAL
+    # ========================================================
+
+    if resultado["motivos"]:
+        resultado["valida"] = False
+        resultado["bloqueada"] = True
+
+        resultado["mensaje_seguro"] = (
+            "Con gusto le orientamos sobre colegiaturas "
+            "y las opciones disponibles.\n\n"
+            "Esta información la revisamos de manera "
+            "personalizada, ya que puede variar según el "
+            "nivel y las condiciones aplicables.\n\n"
+            "Lo ideal es explicarle todos los detalles "
+            "durante una visita al campus. "
+            "Si gusta, puedo ayudarle a coordinarla."
+        )
+
+        print(
+            "🛡️ Salida comercial bloqueada: "
+            f"motivos={resultado['motivos']}"
+        )
+
+        if montos_detectados:
+            print(
+                "🛡️ Montos detectados en respuesta: "
+                f"{montos_detectados}"
+            )
+
+        return resultado
+
+    print(
+        "✅ Salida comercial prospecto validada"
+    )
+
+    return resultado
     
 def enviar_respuesta_twilio(to_number: str, mensaje: str) -> str:
     """Envía mensaje de vuelta via Twilio API usando API Key"""
