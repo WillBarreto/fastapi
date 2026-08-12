@@ -9854,6 +9854,381 @@ def enriquecer_contexto_comercial_con_memoria(
 
         return contexto_comercial
 
+def calcular_transicion_comercial_post_envio(
+    resultado: Dict[str, Any],
+    contexto_actual: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Calcula cómo debe evolucionar el contexto comercial DESPUÉS
+    de que una respuesta haya sido enviada exitosamente.
+
+    Importante:
+    - No modifica la base de datos.
+    - No modifica contact.
+    - No realiza commits.
+    - No cambia FLOW_STATE.
+    - No asume que el mensaje fue enviado.
+    - Solamente devuelve la transición propuesta.
+
+    La persistencia real se realizará posteriormente, únicamente
+    después de confirmar un envío exitoso por Twilio.
+    """
+
+    contexto = (
+        contexto_actual
+        if isinstance(contexto_actual, dict)
+        else {}
+    )
+
+    resultado_seguro = (
+        resultado
+        if isinstance(resultado, dict)
+        else {}
+    )
+
+    decision = resultado_seguro.get(
+        "decision"
+    )
+
+    if not isinstance(decision, dict):
+        decision = {}
+
+    analisis = resultado_seguro.get(
+        "analisis"
+    )
+
+    if not isinstance(analisis, dict):
+        analisis = {}
+
+    accion = str(
+        decision.get(
+            "accion",
+            "CONTINUAR_CONVERSACION",
+        )
+        or "CONTINUAR_CONVERSACION"
+    ).strip().upper()
+
+    etapa_actual = str(
+        contexto.get(
+            "etapa_conversacional",
+            "CONTACTO_INICIAL",
+        )
+        or "CONTACTO_INICIAL"
+    ).strip().upper()
+
+    estado_actual = str(
+        contexto.get(
+            "estado_comercial",
+            "PROSPECTO_NUEVO",
+        )
+        or "PROSPECTO_NUEVO"
+    ).strip().upper()
+
+    hitos_previos = contexto.get(
+        "hitos_comerciales",
+        [],
+    )
+
+    if not isinstance(hitos_previos, list):
+        hitos_previos = []
+
+    hitos_resultado = []
+
+    for hito in hitos_previos:
+        hito_normalizado = str(
+            hito or ""
+        ).strip().upper()
+
+        if (
+            hito_normalizado
+            in HITOS_COMERCIALES_VALIDOS
+            and hito_normalizado
+            not in hitos_resultado
+        ):
+            hitos_resultado.append(
+                hito_normalizado
+            )
+
+    transicion = {
+        "accion": accion,
+        "etapa_anterior": etapa_actual,
+        "estado_anterior": estado_actual,
+        "etapa_conversacional": etapa_actual,
+        "estado_comercial": estado_actual,
+        "hitos_comerciales": hitos_resultado,
+        "hitos_nuevos": [],
+        "transicion_aplicable": False,
+        "motivo": "",
+    }
+
+    def agregar_hito(
+        hito: str,
+    ) -> None:
+        hito_normalizado = str(
+            hito or ""
+        ).strip().upper()
+
+        if (
+            hito_normalizado
+            not in HITOS_COMERCIALES_VALIDOS
+        ):
+            return
+
+        if (
+            hito_normalizado
+            not in transicion["hitos_comerciales"]
+        ):
+            transicion[
+                "hitos_comerciales"
+            ].append(
+                hito_normalizado
+            )
+
+        if (
+            hito_normalizado
+            not in transicion["hitos_nuevos"]
+        ):
+            transicion[
+                "hitos_nuevos"
+            ].append(
+                hito_normalizado
+            )
+
+    # ========================================================
+    # TRANSICIONES SEGURAS DERIVADAS DE LA RESPUESTA ENVIADA
+    # ========================================================
+
+    if accion == "PEDIR_ZONA":
+        transicion.update({
+            "etapa_conversacional": (
+                "VALIDACION_ZONA"
+            ),
+            "estado_comercial": (
+                "EN_CALIFICACION"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se solicitó validación de zona."
+            ),
+        })
+
+    elif accion == "PEDIR_REFERENCIA":
+        transicion.update({
+            "etapa_conversacional": (
+                "REFERENCIA_COLEGIO"
+            ),
+            "estado_comercial": (
+                "EN_CALIFICACION"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se solicitó la referencia del colegio."
+            ),
+        })
+
+    elif accion == "PRESENTAR_PROPUESTA_VALOR":
+        transicion.update({
+            "etapa_conversacional": (
+                "PRESENTACION_VALOR"
+            ),
+            "estado_comercial": (
+                "PROSPECTO_INFORMADO"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "La propuesta general de valor fue enviada."
+            ),
+        })
+
+        agregar_hito(
+            "RECIBIO_PRESENTACION_VALOR"
+        )
+
+    elif accion == "EXPLICAR_METODO_FILADELFIA":
+        transicion.update({
+            "etapa_conversacional": (
+                "EXPLICACION_METODO"
+            ),
+            "estado_comercial": (
+                "PROSPECTO_INFORMADO"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "La explicación del Método Filadelfia "
+                "fue enviada."
+            ),
+        })
+
+        agregar_hito(
+            "RECIBIO_EXPLICACION_METODO"
+        )
+
+    elif accion == "PREGUNTAR_AREA_INTERES":
+        transicion.update({
+            "etapa_conversacional": (
+                "IDENTIFICACION_INTERES"
+            ),
+            "estado_comercial": (
+                "PROSPECTO_INFORMADO"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se solicitó identificar el área de interés."
+            ),
+        })
+
+    elif accion in {
+        "PROFUNDIZAR_AREA_INTERES",
+        "RESPONDER_TEMA",
+    }:
+        transicion.update({
+            "etapa_conversacional": (
+                "PROFUNDIZACION_INTERES"
+            ),
+            "estado_comercial": (
+                "PROSPECTO_INFORMADO"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se envió una respuesta personalizada "
+                "sobre el interés de la familia."
+            ),
+        })
+
+        agregar_hito(
+            "RECIBIO_RESPUESTA_PERSONALIZADA"
+        )
+
+    elif accion == "INVITAR_CITA":
+        transicion.update({
+            "etapa_conversacional": (
+                "INVITACION_VISITA"
+            ),
+            "estado_comercial": (
+                "PENDIENTE_DE_AGENDAR"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se envió una invitación para visitar "
+                "el campus."
+            ),
+        })
+
+    elif accion in {
+        "PEDIR_FECHA_CITA",
+        "PEDIR_HORA_CITA",
+    }:
+        transicion.update({
+            "etapa_conversacional": (
+                "NEGOCIACION_CITA"
+            ),
+            "estado_comercial": (
+                "PENDIENTE_DE_AGENDAR"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "La conversación avanzó a negociación "
+                "de fecha u horario de visita."
+            ),
+        })
+
+    elif accion == "CONSULTAR_ADMIN":
+        tiene_contexto_cita = bool(
+            analisis.get("pide_cita")
+            or analisis.get(
+                "seguimiento_cita"
+            )
+            or analisis.get(
+                "fecha_cita_texto"
+            )
+            or analisis.get(
+                "fecha_cita_iso"
+            )
+            or analisis.get(
+                "hora_cita_texto"
+            )
+            or analisis.get(
+                "hora_cita_24h"
+            )
+        )
+
+        if tiene_contexto_cita:
+            transicion.update({
+                "etapa_conversacional": (
+                    "ESPERANDO_CONFIRMACION_ADMIN"
+                ),
+                "estado_comercial": (
+                    "CITA_PENDIENTE_CONFIRMACION"
+                ),
+                "transicion_aplicable": True,
+                "motivo": (
+                    "La disponibilidad de la visita quedó "
+                    "pendiente de confirmación administrativa."
+                ),
+            })
+
+            agregar_hito(
+                "CITA_SOLICITADA"
+            )
+
+    elif accion == "SEGUIMIENTO":
+        transicion.update({
+            "etapa_conversacional": (
+                "SEGUIMIENTO"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "La conversación quedó temporalmente "
+                "en seguimiento."
+            ),
+        })
+
+    # ========================================================
+    # VALIDACIÓN FINAL
+    # ========================================================
+
+    etapa_resultante = str(
+        transicion.get(
+            "etapa_conversacional",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        etapa_resultante
+        not in ETAPAS_CONVERSACIONALES_VALIDAS
+    ):
+        transicion[
+            "etapa_conversacional"
+        ] = etapa_actual
+
+        transicion[
+            "transicion_aplicable"
+        ] = False
+
+    estado_resultante = str(
+        transicion.get(
+            "estado_comercial",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        estado_resultante
+        not in ESTADOS_COMERCIALES_VALIDOS
+    ):
+        transicion[
+            "estado_comercial"
+        ] = estado_actual
+
+        transicion[
+            "transicion_aplicable"
+        ] = False
+
+    return transicion
+
 # ============================================================
 # PERSISTENCIA DEL NUEVO FLUJO ESTRUCTURADO
 # ============================================================
