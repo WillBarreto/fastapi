@@ -14781,9 +14781,37 @@ def procesar_mensaje_whatsapp_estructurado_real(
         db.commit()
 
         # ----------------------------------------------------
-        # 7. ESCALACIÓN ADMINISTRATIVA
+        # 7. PERSISTENCIA COMERCIAL POST-ENVÍO
         # ----------------------------------------------------
 
+        resultado_transicion_post_envio = (
+            persistir_transicion_comercial_post_envio(
+                db=db,
+                contact=contact,
+                resultado=resultado_orquestador,
+                contexto_actual=(
+                    contexto_comercial_enriquecido
+                ),
+            )
+        )
+
+        resultado_final[
+            "transicion_comercial_post_envio"
+        ] = resultado_transicion_post_envio
+
+        print(
+            "🧭 Transición comercial post-envío: "
+            + json.dumps(
+                resultado_transicion_post_envio,
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+
+        # ----------------------------------------------------
+        # 8. ESCALACIÓN ADMINISTRATIVA
+        # ----------------------------------------------------
+        
         resultado_escalacion = (
             procesar_escalacion_admin_estructurada(
                 db=db,
