@@ -10229,6 +10229,383 @@ def calcular_transicion_comercial_post_envio(
 
     return transicion
 
+def persistir_transicion_comercial_post_envio(
+    db: Session,
+    contact,
+    resultado: Dict[str, Any],
+    contexto_actual: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Persiste la transición comercial calculada DESPUÉS de que
+    una respuesta haya sido enviada exitosamente al prospecto.
+
+    IMPORTANTE:
+    - Esta función NO envía mensajes.
+    - Esta función NO decide si Twilio tuvo éxito.
+    - Debe llamarse únicamente después de confirmar envio_exitoso=True.
+    - Utiliza calcular_transicion_comercial_post_envio() como
+      única fuente para determinar la transición resultante.
+    - Persiste etapa conversacional, estado comercial,
+      FLOW_STATE compatible e hitos comerciales.
+    - Realiza un solo commit al finalizar.
+    """
+
+    if contact is None:
+        return {
+            "persistido": False,
+            "transicion_aplicada": False,
+            "etapa_conversacional": "",
+            "estado_comercial": "",
+            "flow_state": "",
+            "hitos_comerciales": [],
+            "hitos_nuevos": [],
+            "campos_actualizados": [],
+            "error": "CONTACTO_NO_DISPONIBLE",
+        }
+
+    if not isinstance(resultado, dict):
+        return {
+            "persistido": False,
+            "transicion_aplicada": False,
+            "etapa_conversacional": "",
+            "estado_comercial": "",
+            "flow_state": "",
+            "hitos_comerciales": [],
+            "hitos_nuevos": [],
+            "campos_actualizados": [],
+            "error": "RESULTADO_INVALIDO",
+        }
+
+    contexto = (
+        contexto_actual
+        if isinstance(contexto_actual, dict)
+        else construir_contexto_comercial_desde_contacto(
+            contact
+        )
+    )
+
+    transicion = (
+        calcular_transicion_comercial_post_envio(
+            resultado=resultado,
+            contexto_actual=contexto,
+        )
+    )
+
+    if not isinstance(transicion, dict):
+        return {
+            "persistido": False,
+            "transicion_aplicada": False,
+            "etapa_conversacional": "",
+            "estado_comercial": "",
+            "flow_state": "",
+            "hitos_comerciales": [],
+            "hitos_nuevos": [],
+            "campos_actualizados": [],
+            "error": "TRANSICION_INVALIDA",
+        }
+
+    if not transicion.get(
+        "transicion_aplicable",
+        False,
+    ):
+        return {
+            "persistido": True,
+            "transicion_aplicada": False,
+            "etapa_conversacional": str(
+                transicion.get(
+                    "etapa_conversacional",
+                    "",
+                )
+                or ""
+            ),
+            "estado_comercial": str(
+                transicion.get(
+                    "estado_comercial",
+                    "",
+                )
+                or ""
+            ),
+            "flow_state": get_flow_state(contact),
+            "hitos_comerciales": (
+                transicion.get(
+                    "hitos_comerciales",
+                    [],
+                )
+                if isinstance(
+                    transicion.get(
+                        "hitos_comerciales",
+                        [],
+                    ),
+                    list,
+                )
+                else []
+            ),
+            "hitos_nuevos": (
+                transicion.get(
+                    "hitos_nuevos",
+                    [],
+                )
+                if isinstance(
+                    transicion.get(
+                        "hitos_nuevos",
+                        [],
+                    ),
+                    list,
+                )
+                else []
+            ),
+            "campos_actualizados": [],
+            "error": "",
+        }
+
+    etapa = str(
+        transicion.get(
+            "etapa_conversacional",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    estado = str(
+        transicion.get(
+            "estado_comercial",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if etapa not in ETAPAS_CONVERSACIONALES_VALIDAS:
+        return {
+            "persistido": False,
+            "transicion_aplicada": False,
+            "etapa_conversacional": etapa,
+            "estado_comercial": estado,
+            "flow_state": "",
+            "hitos_comerciales": [],
+            "hitos_nuevos": [],
+            "campos_actualizados": [],
+            "error": "ETAPA_CONVERSACIONAL_INVALIDA",
+        }
+
+    if estado not in ESTADOS_COMERCIALES_VALIDOS:
+        return {
+            "persistido": False,
+            "transicion_aplicada": False,
+            "etapa_conversacional": etapa,
+            "estado_comercial": estado,
+            "flow_state": "",
+            "hitos_comerciales": [],
+            "hitos_nuevos": [],
+            "campos_actualizados": [],
+            "error": "ESTADO_COMERCIAL_INVALIDO",
+        }
+
+    hitos = transicion.get(
+        "hitos_comerciales",
+        [],
+    )
+
+    if not isinstance(hitos, list):
+        hitos = []
+
+    hitos_validos = []
+
+    for hito in hitos:
+        hito_normalizado = str(
+            hito or ""
+        ).strip().upper()
+
+        if (
+            hito_normalizado
+            in HITOS_COMERCIALES_VALIDOS
+            and hito_normalizado
+            not in hitos_validos
+        ):
+            hitos_validos.append(
+                hito_normalizado
+            )
+
+    hitos_nuevos = transicion.get(
+        "hitos_nuevos",
+        [],
+    )
+
+    if not isinstance(hitos_nuevos, list):
+        hitos_nuevos = []
+
+    hitos_nuevos_validos = []
+
+    for hito in hitos_nuevos:
+        hito_normalizado = str(
+            hito or ""
+        ).strip().upper()
+
+        if (
+            hito_normalizado
+            in HITOS_COMERCIALES_VALIDOS
+            and hito_normalizado
+            not in hitos_nuevos_validos
+        ):
+            hitos_nuevos_validos.append(
+                hito_normalizado
+            )
+
+    equivalencias_etapa_flow_state = {
+        "CONTACTO_INICIAL": "SALUDO_INICIAL",
+        "REFERENCIA_COLEGIO": "ESPERANDO_REFERENCIA",
+        "VALIDACION_ZONA": "VALIDACION_ZONA",
+        "PRESENTACION_VALOR": "PRESENTACION_VALOR",
+        "EXPLICACION_METODO": "EXPLICACION_METODO",
+        "IDENTIFICACION_INTERES": "ESPERANDO_AREA_INTERES",
+        "PROFUNDIZACION_INTERES": "PROFUNDIZACION_INTERES",
+        "INVITACION_VISITA": "INVITACION_CITA",
+        "NEGOCIACION_CITA": "ESPERANDO_FECHA_CITA",
+        "ESPERANDO_CONFIRMACION_ADMIN": (
+            "ESPERANDO_CONFIRMACION_ADMIN"
+        ),
+        "ESPERANDO_DATOS_CITA": "ESPERANDO_DATOS_CITA",
+        "VISITA_CONFIRMADA": "CITA_DATOS_COMPLETOS",
+        "SEGUIMIENTO_VISITA": "SEGUIMIENTO_ACORDADO",
+        "POST_VISITA_COSTOS": "SEGUIMIENTO_ACORDADO",
+        "SEGUIMIENTO_INSCRIPCION": "SEGUIMIENTO_ACORDADO",
+        "CIERRE_INSCRIPCION": "SEGUIMIENTO_ACORDADO",
+        "SEGUIMIENTO": "SEGUIMIENTO_ACORDADO",
+    }
+
+    flow_state = equivalencias_etapa_flow_state.get(
+        etapa,
+        get_flow_state(contact),
+    )
+
+    campos_actualizados = []
+
+    try:
+        etapa_anterior_guardada = get_note_value(
+            contact,
+            "ETAPA_CONVERSACIONAL",
+        )
+
+        if etapa_anterior_guardada != etapa:
+            set_note_value(
+                contact,
+                "ETAPA_CONVERSACIONAL",
+                etapa,
+            )
+
+            campos_actualizados.append(
+                "ETAPA_CONVERSACIONAL"
+            )
+
+        estado_anterior = str(
+            getattr(
+                contact,
+                "status",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        if estado_anterior != estado:
+            contact.status = estado
+
+            campos_actualizados.append(
+                "contact.status"
+            )
+
+        flow_state_anterior = get_flow_state(
+            contact
+        )
+
+        if flow_state_anterior != flow_state:
+            set_flow_state(
+                contact,
+                flow_state,
+            )
+
+            campos_actualizados.append(
+                "FLOW_STATE"
+            )
+
+        hitos_texto = json.dumps(
+            hitos_validos,
+            ensure_ascii=False,
+        )
+
+        hitos_anteriores_texto = get_note_value(
+            contact,
+            "HITOS_COMERCIALES",
+        )
+
+        if hitos_anteriores_texto != hitos_texto:
+            set_note_value(
+                contact,
+                "HITOS_COMERCIALES",
+                hitos_texto,
+            )
+
+            campos_actualizados.append(
+                "HITOS_COMERCIALES"
+            )
+
+        db.commit()
+        db.refresh(contact)
+
+        return {
+            "persistido": True,
+            "transicion_aplicada": True,
+            "accion": str(
+                transicion.get(
+                    "accion",
+                    "",
+                )
+                or ""
+            ),
+            "etapa_conversacional": etapa,
+            "estado_comercial": estado,
+            "flow_state": flow_state,
+            "hitos_comerciales": hitos_validos,
+            "hitos_nuevos": hitos_nuevos_validos,
+            "campos_actualizados": (
+                campos_actualizados
+            ),
+            "motivo": str(
+                transicion.get(
+                    "motivo",
+                    "",
+                )
+                or ""
+            ),
+            "error": "",
+        }
+
+    except Exception as e:
+        db.rollback()
+
+        print(
+            "⚠️ Error persistiendo transición "
+            "comercial post-envío: "
+            f"{e}"
+        )
+
+        return {
+            "persistido": False,
+            "transicion_aplicada": False,
+            "accion": str(
+                transicion.get(
+                    "accion",
+                    "",
+                )
+                or ""
+            ),
+            "etapa_conversacional": etapa,
+            "estado_comercial": estado,
+            "flow_state": flow_state,
+            "hitos_comerciales": hitos_validos,
+            "hitos_nuevos": hitos_nuevos_validos,
+            "campos_actualizados": [],
+            "error": str(e),
+        }
+
 # ============================================================
 # PERSISTENCIA DEL NUEVO FLUJO ESTRUCTURADO
 # ============================================================
