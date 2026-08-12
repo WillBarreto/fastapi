@@ -479,6 +479,22 @@ HITOS_COMERCIALES_VALIDOS = {
     "SEGUIMIENTO_SIN_RESPUESTA",
 }
 
+# ============================================================
+# OBJETIVOS PENDIENTES DEL FLUJO CONVERSACIONAL
+# ============================================================
+
+OBJETIVOS_PENDIENTES_VALIDOS = {
+    "",
+    "OBTENER_ZONA",
+    "OBTENER_REFERENCIA_COLEGIO",
+    "OBTENER_AREA_INTERES",
+    "OBTENER_DECISION_VISITA",
+    "OBTENER_FECHA_CITA",
+    "OBTENER_HORA_CITA",
+    "ESPERAR_CONFIRMACION_ADMIN",
+    "ESPERAR_REACTIVACION_PROSPECTO",
+}
+
 
 class ContextoComercialConversacion(BaseModel):
     """
@@ -493,11 +509,12 @@ class ContextoComercialConversacion(BaseModel):
 
     etapa_conversacional: str = "CONTACTO_INICIAL"
     estado_comercial: str = "PROSPECTO_NUEVO"
+    objetivo_pendiente: str = ""
 
     hitos_comerciales: List[str] = Field(
         default_factory=list
     )
-
+    
     nombre_tutor: str = ""
     zona_interes: str = ""
 
@@ -9442,6 +9459,24 @@ def construir_contexto_comercial_desde_contacto(
     ] = etapa_conversacional
 
     # --------------------------------------------------------
+    # OBJETIVO PENDIENTE
+    # --------------------------------------------------------
+
+    objetivo_pendiente = leer_nota(
+        "OBJETIVO_PENDIENTE",
+    ).upper()
+
+    if (
+        objetivo_pendiente
+        not in OBJETIVOS_PENDIENTES_VALIDOS
+    ):
+        objetivo_pendiente = ""
+
+    contexto[
+        "objetivo_pendiente"
+    ] = objetivo_pendiente
+
+    # --------------------------------------------------------
     # DATOS DE LA FAMILIA
     # --------------------------------------------------------
 
@@ -9961,18 +9996,33 @@ def calcular_transicion_comercial_post_envio(
                 hito_normalizado
             )
 
+    objetivo_actual = str(
+        contexto.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        objetivo_actual
+        not in OBJETIVOS_PENDIENTES_VALIDOS
+    ):
+        objetivo_actual = ""
+
     transicion = {
         "accion": accion,
         "etapa_anterior": etapa_actual,
         "estado_anterior": estado_actual,
         "etapa_conversacional": etapa_actual,
         "estado_comercial": estado_actual,
+        "objetivo_pendiente": objetivo_actual,
         "hitos_comerciales": hitos_resultado,
         "hitos_nuevos": [],
         "transicion_aplicable": False,
         "motivo": "",
     }
-
+    
     def agregar_hito(
         hito: str,
     ) -> None:
@@ -10196,6 +10246,46 @@ def calcular_transicion_comercial_post_envio(
         })
 
     # ========================================================
+    # OBJETIVO PENDIENTE DERIVADO DE LA RESPUESTA ENVIADA
+    # ========================================================
+
+    if transicion.get(
+        "transicion_aplicable",
+        False,
+    ):
+        objetivos_por_accion = {
+            "PEDIR_ZONA": "OBTENER_ZONA",
+            "PEDIR_REFERENCIA": (
+                "OBTENER_REFERENCIA_COLEGIO"
+            ),
+            "PREGUNTAR_AREA_INTERES": (
+                "OBTENER_AREA_INTERES"
+            ),
+            "INVITAR_CITA": (
+                "OBTENER_DECISION_VISITA"
+            ),
+            "PEDIR_FECHA_CITA": (
+                "OBTENER_FECHA_CITA"
+            ),
+            "PEDIR_HORA_CITA": (
+                "OBTENER_HORA_CITA"
+            ),
+            "CONSULTAR_ADMIN": (
+                "ESPERAR_CONFIRMACION_ADMIN"
+            ),
+            "SEGUIMIENTO": (
+                "ESPERAR_REACTIVACION_PROSPECTO"
+            ),
+        }
+
+        transicion[
+            "objetivo_pendiente"
+        ] = objetivos_por_accion.get(
+            accion,
+            "",
+        )
+
+    # ========================================================
     # VALIDACIÓN FINAL
     # ========================================================
 
@@ -10386,6 +10476,20 @@ def persistir_transicion_comercial_post_envio(
         or ""
     ).strip().upper()
 
+    objetivo_pendiente = str(
+        transicion.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        objetivo_pendiente
+        not in OBJETIVOS_PENDIENTES_VALIDOS
+    ):
+        objetivo_pendiente = ""
+
     if etapa not in ETAPAS_CONVERSACIONALES_VALIDAS:
         return {
             "persistido": False,
@@ -10489,6 +10593,19 @@ def persistir_transicion_comercial_post_envio(
         get_flow_state(contact),
     )
 
+    if etapa == "NEGOCIACION_CITA":
+        if (
+            objetivo_pendiente
+            == "OBTENER_HORA_CITA"
+        ):
+            flow_state = "ESPERANDO_HORA_CITA"
+
+        elif (
+            objetivo_pendiente
+            == "OBTENER_FECHA_CITA"
+        ):
+            flow_state = "ESPERANDO_FECHA_CITA"
+
     campos_actualizados = []
 
     try:
@@ -10538,6 +10655,25 @@ def persistir_transicion_comercial_post_envio(
                 "FLOW_STATE"
             )
 
+        objetivo_anterior = get_note_value(
+            contact,
+            "OBJETIVO_PENDIENTE",
+        ).strip().upper()
+
+        if (
+            objetivo_anterior
+            != objetivo_pendiente
+        ):
+            set_note_value(
+                contact,
+                "OBJETIVO_PENDIENTE",
+                objetivo_pendiente,
+            )
+
+            campos_actualizados.append(
+                "OBJETIVO_PENDIENTE"
+            )
+
         hitos_texto = json.dumps(
             hitos_validos,
             ensure_ascii=False,
@@ -10574,6 +10710,7 @@ def persistir_transicion_comercial_post_envio(
             ),
             "etapa_conversacional": etapa,
             "estado_comercial": estado,
+            "objetivo_pendiente": objetivo_pendiente,
             "flow_state": flow_state,
             "hitos_comerciales": hitos_validos,
             "hitos_nuevos": hitos_nuevos_validos,
