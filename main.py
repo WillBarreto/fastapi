@@ -14711,7 +14711,6 @@ async def whatsapp_webhook(
         print(f"🧠 Usando Gemini: {bool(GEMINI_API_KEY)}")
         print(f"📊 Historial disponible: {len(history)} mensajes")
 
-        respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(mensaje_entrada, contact, history)
         
         respuesta, estado_actual, estado_siguiente = generar_respuesta_inteligente(
             mensaje_entrada,
