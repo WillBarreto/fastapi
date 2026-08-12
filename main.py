@@ -6942,6 +6942,18 @@ def construir_plan_respuesta_estructurada(
             "Detalles técnicos de Google Places o Google Routes.",
             "Distancias, coordenadas, límites internos o cálculos.",
             "Explicaciones sobre reglas internas del sistema.",
+            (
+                "Repetir innecesariamente el nombre completo "
+                "'Colegio Valle de Filadelfia Campus Santa Cruz "
+                "Atizapán' o 'Campus Santa Cruz Atizapán'. "
+                "Si el campus ya quedó identificado en la conversación, "
+                "usar de forma natural expresiones como el colegio, "
+                "nuestro colegio, el campus, nuestra propuesta o "
+                "durante la visita. Repetir el nombre completo solamente "
+                "cuando sea necesario aclarar qué campus se atiende, "
+                "ante una duda de sede o al proporcionar información "
+                "logística donde la ubicación sea relevante."
+            ),
         ],
         "tono": (
             "Cordial, natural, breve y orientado a admisiones."
@@ -11785,13 +11797,23 @@ if DATABASE_URL.startswith("postgresql://"):
     from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
     
     contact_status_enum = PG_ENUM(
-        "PROSPECTO_NUEVO", 
-        "PROSPECTO_INFORMADO", 
-        "VISITA_AGENDADA", 
-        "INSCRIPCION_PENDIENTE", 
-        "ALUMNO_ACTIVO", 
-        "ALUMNO_INACTIVO", 
-        "COMPETENCIA", 
+        "PROSPECTO_NUEVO",
+        "EN_CALIFICACION",
+        "PROSPECTO_INFORMADO",
+        "PENDIENTE_DE_AGENDAR",
+        "CITA_PENDIENTE_CONFIRMACION",
+        "VISITA_CONFIRMADA",
+        "VISITA_AGENDADA",
+        "VISITA_REALIZADA",
+        "VISITA_NO_ASISTIO",
+        "COSTOS_PRESENTADOS",
+        "INSCRIPCION_PENDIENTE",
+        "INSCRITO",
+        "NO_INSCRITO",
+        "DESCARTADO",
+        "COMPETENCIA",
+        "ALUMNO_ACTIVO",
+        "ALUMNO_INACTIVO",
         "EX_ALUMNO",
         name="contact_status_enum",
         create_type=True
@@ -11939,6 +11961,44 @@ def setup_database():
                             'EX_ALUMNO'
                         )
                     """))
+                # Mantener sincronizado el ENUM existente con
+                # los estados comerciales actuales del CRM.
+                valores_contact_status_requeridos = [
+                    "PROSPECTO_NUEVO",
+                    "EN_CALIFICACION",
+                    "PROSPECTO_INFORMADO",
+                    "PENDIENTE_DE_AGENDAR",
+                    "CITA_PENDIENTE_CONFIRMACION",
+                    "VISITA_CONFIRMADA",
+                    "VISITA_AGENDADA",
+                    "VISITA_REALIZADA",
+                    "VISITA_NO_ASISTIO",
+                    "COSTOS_PRESENTADOS",
+                    "INSCRIPCION_PENDIENTE",
+                    "INSCRITO",
+                    "NO_INSCRITO",
+                    "DESCARTADO",
+                    "COMPETENCIA",
+                    "ALUMNO_ACTIVO",
+                    "ALUMNO_INACTIVO",
+                    "EX_ALUMNO",
+                ]
+
+                for valor_status in valores_contact_status_requeridos:
+                    conn.execute(
+                        text(
+                            "ALTER TYPE contact_status_enum "
+                            f"ADD VALUE IF NOT EXISTS "
+                            f"'{valor_status}'"
+                        )
+                    )
+
+                conn.commit()
+
+                print(
+                    "✅ ENUM contact_status_enum "
+                    "sincronizado correctamente"
+                )
                 
                 # Verificar si existe el enum de message_direction
                 result = conn.execute(text("""
