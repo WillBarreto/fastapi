@@ -18535,13 +18535,46 @@ Te muestro nuevamente el menú actualizado:
 
     prospecto_to = f"whatsapp:{contact.phone_number}"
 
-    resultado_envio = enviar_respuesta_twilio(prospecto_to, mensaje_para_prospecto)
+    resultado_envio = enviar_respuesta_twilio(
+        prospecto_to,
+        mensaje_para_prospecto,
+    )
+
+    envio_exitoso = str(
+        resultado_envio or ""
+    ).strip().startswith("✅")
+
+    if not envio_exitoso:
+        db.rollback()
+
+        print(
+            "❌ No se persistirá la respuesta del admin "
+            "porque falló el envío al prospecto: "
+            f"{resultado_envio}"
+        )
+
+        return {
+            "status": "admin_response_send_failed",
+            "prospect_phone": contact.phone_number,
+            "error": str(resultado_envio),
+        }
 
     twilio_sid = None
-    if "SID:" in resultado_envio:
-        twilio_sid = resultado_envio.split("SID: ")[1].strip()
 
-    save_message(db, contact.id, "outgoing", mensaje_para_prospecto, twilio_sid)
+    if "SID:" in resultado_envio:
+        twilio_sid = (
+            resultado_envio
+            .split("SID: ")[1]
+            .strip()
+        )
+
+    save_message(
+        db,
+        contact.id,
+        "outgoing",
+        mensaje_para_prospecto,
+        twilio_sid,
+    )
 
     tarea.status = "RESUELTA"
     tarea.admin_response = mensaje_limpio
