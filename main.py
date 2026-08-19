@@ -6518,6 +6518,51 @@ def aplicar_reglas_negocio_estructuradas(
         if str(hito or "").strip()
     }
 
+    # --------------------------------------------------------
+    # BARRERA POST-CITA CONFIRMADA
+    # --------------------------------------------------------
+    #
+    # Una cita confirmada es un punto de no retorno para el
+    # embudo comercial previo a la visita.
+    #
+    # Desde este momento ya no se deben ejecutar automáticamente:
+    # - referencia;
+    # - propuesta general de valor;
+    # - Método Filadelfia;
+    # - área de interés;
+    # - profundización;
+    # - invitación a visita.
+    #
+    # La familia todavía puede hacer preguntas concretas como
+    # costos, ubicación u otros temas, pero esas solicitudes se
+    # atienden por sus rutas específicas, no reabriendo el embudo.
+    # --------------------------------------------------------
+
+    etapa_comercial_actual = str(
+        contexto_secuencial.get(
+            "etapa_conversacional",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    estado_comercial_actual = str(
+        contexto_secuencial.get(
+            "estado_comercial",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    cita_ya_confirmada = bool(
+        "CITA_CONFIRMADA"
+        in hitos_comerciales
+        or etapa_comercial_actual
+        == "VISITA_CONFIRMADA"
+        or estado_comercial_actual
+        == "VISITA_CONFIRMADA"
+    )
+
     referencia_previa = str(
         contexto_secuencial.get(
             "referencia_colegio",
@@ -6575,7 +6620,10 @@ def aplicar_reglas_negocio_estructuradas(
         or analisis_seguro.get("nivel")
     )
 
-    if tiene_proceso_comercial_iniciado:
+    if (
+        tiene_proceso_comercial_iniciado
+        and not cita_ya_confirmada
+    ):
 
         # ----------------------------------------------------
         # PASO 1: VALIDAR ZONA
