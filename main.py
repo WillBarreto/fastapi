@@ -8203,6 +8203,55 @@ def generar_respuesta_final_estructurada(
         errores = []
 
         # ====================================================
+        # INTEGRIDAD DE ENLACES GOOGLE MAPS
+        # ====================================================
+
+        urls_detectadas = re.findall(
+            r"https?://[^\s]+",
+            respuesta_limpia,
+            flags=re.IGNORECASE,
+        )
+
+        urls_maps_detectadas = [
+            url.rstrip(
+                ".,;:!?)]}"
+            )
+            for url in urls_detectadas
+            if (
+                "google.com/maps"
+                in url.lower()
+                or "maps.app.goo.gl"
+                in url.lower()
+            )
+        ]
+
+        if urls_maps_detectadas:
+
+            ubicacion_autorizada = (
+                obtener_ubicacion_institucional_campus()
+            )
+
+            url_autorizada = str(
+                ubicacion_autorizada.get(
+                    "url",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            for url_detectada in (
+                urls_maps_detectadas
+            ):
+                if (
+                    not url_autorizada
+                    or url_detectada
+                    != url_autorizada
+                ):
+                    errores.append(
+                        "ENLACE_MAPS_NO_AUTORIZADO"
+                    )
+
+        # ====================================================
         # FORMATO VISUAL PARA WHATSAPP
         # ====================================================
 
