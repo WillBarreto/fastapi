@@ -492,6 +492,7 @@ OBJETIVOS_PENDIENTES_VALIDOS = {
     "OBTENER_FECHA_CITA",
     "OBTENER_HORA_CITA",
     "ESPERAR_CONFIRMACION_ADMIN",
+    "OBTENER_DATOS_CITA",
     "ESPERAR_REACTIVACION_PROSPECTO",
 }
 
@@ -18402,31 +18403,132 @@ Te muestro nuevamente el menú actualizado:
 
     # Si el admin está confirmando definitivamente la cita,
     # primero enriquecemos el mensaje antes de enviarlo al prospecto.
-    if admin_confirma_cita_final(mensaje_limpio, tarea):
-        contact.status = "VISITA_AGENDADA"
+    if admin_confirma_cita_final(
+        mensaje_limpio,
+        tarea,
+    ):
+        # ----------------------------------------------------
+        # CITA CONFIRMADA POR ADMINISTRACIÓN
+        # ----------------------------------------------------
+        #
+        # A partir de este punto ya no estamos esperando
+        # confirmación administrativa.
+        #
+        # El siguiente objetivo real es completar únicamente
+        # los datos faltantes necesarios para registrar la cita.
+        # ----------------------------------------------------
 
-        # Agrega fecha exacta si el mensaje dice algo como:
-        # "este lunes a las 8:00 a.m."
-        # para convertirlo en:
-        # "este lunes 20 de julio a las 8:00 a.m."
-        mensaje_para_prospecto = enriquecer_fecha_cita_en_mensaje(mensaje_para_prospecto)
+        contact.status = "VISITA_CONFIRMADA"
 
-        hora_cita = extraer_hora_cita_confirmada(
-            mensaje_para_prospecto,
-            respaldo=tarea.trigger_message or ""
+        set_note_value(
+            contact,
+            "ETAPA_CONVERSACIONAL",
+            "VISITA_CONFIRMADA",
+        )
+
+        set_note_value(
+            contact,
+            "OBJETIVO_PENDIENTE",
+            "OBTENER_DATOS_CITA",
+        )
+
+        set_flow_state(
+            contact,
+            "ESPERANDO_DATOS_CITA",
+        )
+
+        # ----------------------------------------------------
+        # HITO CITA_CONFIRMADA
+        # ----------------------------------------------------
+
+        hitos_actuales_raw = get_note_value(
+            contact,
+            "HITOS_COMERCIALES",
+        )
+
+        hitos_actuales = []
+
+        if hitos_actuales_raw:
+            try:
+                hitos_decodificados = json.loads(
+                    hitos_actuales_raw
+                )
+
+                if isinstance(
+                    hitos_decodificados,
+                    list,
+                ):
+                    hitos_actuales = [
+                        str(hito).strip().upper()
+                        for hito in hitos_decodificados
+                        if str(hito).strip()
+                    ]
+
+            except Exception:
+                hitos_actuales = []
+
+        if (
+            "CITA_CONFIRMADA"
+            not in hitos_actuales
+        ):
+            hitos_actuales.append(
+                "CITA_CONFIRMADA"
+            )
+
+        set_note_value(
+            contact,
+            "HITOS_COMERCIALES",
+            json.dumps(
+                hitos_actuales,
+                ensure_ascii=False,
+            ),
+        )
+
+        # ----------------------------------------------------
+        # ENRIQUECIMIENTO DE LA CONFIRMACIÓN
+        # ----------------------------------------------------
+
+        mensaje_para_prospecto = (
+            enriquecer_fecha_cita_en_mensaje(
+                mensaje_para_prospecto
+            )
+        )
+
+        hora_cita = (
+            extraer_hora_cita_confirmada(
+                mensaje_para_prospecto,
+                respaldo=(
+                    tarea.trigger_message
+                    or ""
+                ),
+            )
         )
 
         if hora_cita:
-            set_note_value(contact, "HORA_CITA", hora_cita)
+            set_note_value(
+                contact,
+                "HORA_CITA",
+                hora_cita,
+            )
 
-        solicitud_datos = construir_solicitud_datos_cita(contact)
+        # ----------------------------------------------------
+        # SOLICITAR ÚNICAMENTE DATOS FALTANTES
+        # ----------------------------------------------------
 
-        if "nombre completo" not in mensaje_para_prospecto.lower():
-            mensaje_para_prospecto = f"""{mensaje_para_prospecto}
+        solicitud_datos = (
+            construir_solicitud_datos_cita(
+                contact
+            )
+        )
 
-{solicitud_datos}"""
-
-        set_flow_state(contact, "ESPERANDO_DATOS_CITA")
+        if (
+            "nombre completo"
+            not in mensaje_para_prospecto.lower()
+        ):
+            mensaje_para_prospecto = (
+                f"{mensaje_para_prospecto}\n\n"
+                f"{solicitud_datos}"
+            )
 
     print(f"👑 Texto admin original: {repr(mensaje_limpio)}")
     print(f"👑 Mensaje final para prospecto: {repr(mensaje_para_prospecto)}")
