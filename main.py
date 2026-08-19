@@ -18,6 +18,7 @@ import re
 import unicodedata
 import threading
 
+from urllib.parse import quote_plus
 from sqlalchemy.dialects.postgresql import ENUM
 from prompt_manager import PromptManager
 
@@ -129,6 +130,74 @@ def es_numero_prueba_flujo_estructurado(
         numero_normalizado
         in numeros_autorizados
     )
+
+def obtener_ubicacion_institucional_campus() -> Dict[str, str]:
+    """
+    Devuelve exclusivamente la ubicación institucional autorizada.
+
+    La URL de Google Maps nunca es generada por Gemini.
+
+    Estrategia:
+    1. Lee nombre y dirección desde configuración autorizada.
+    2. Construye una Google Maps URL universal.
+    3. Si existe un Place ID autorizado, lo incorpora.
+    4. Si falta configuración crítica, falla de forma segura.
+    """
+
+    nombre = str(
+        os.getenv(
+            "CAMPUS_MAPS_NAME",
+            "",
+        )
+        or ""
+    ).strip()
+
+    direccion = str(
+        os.getenv(
+            "CAMPUS_MAPS_ADDRESS",
+            "",
+        )
+        or ""
+    ).strip()
+
+    place_id = str(
+        os.getenv(
+            "CAMPUS_MAPS_PLACE_ID",
+            "",
+        )
+        or ""
+    ).strip()
+
+    resultado = {
+        "nombre": nombre,
+        "direccion": direccion,
+        "place_id": place_id,
+        "url": "",
+        "configurada": False,
+    }
+
+    if not nombre or not direccion:
+        return resultado
+
+    consulta = quote_plus(
+        f"{nombre}, {direccion}"
+    )
+
+    url = (
+        "https://www.google.com/maps/search/"
+        f"?api=1&query={consulta}"
+    )
+
+    if place_id:
+        url += (
+            "&query_place_id="
+            + quote_plus(place_id)
+        )
+
+    resultado["url"] = url
+    resultado["configurada"] = True
+
+    return resultado
     
 
 # ============================================================
@@ -139,6 +208,7 @@ INTENCIONES_PRINCIPALES_VALIDAS = {
     "SALUDO",
     "PEDIR_INFORMES",
     "PEDIR_COSTOS",
+    "PEDIR_UBICACION",
     "PEDIR_CITA",
     "PROPONER_FECHA_CITA",
     "PROPONER_HORA_CITA",
@@ -191,6 +261,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "CONTINUAR_INFORMES",
     "RESPONDER_TEMA",
     "RESPONDER_COSTOS",
+    "RESPONDER_UBICACION",
     "INVITAR_CITA",
     "PEDIR_FECHA_CITA",
     "PEDIR_HORA_CITA",
@@ -6174,6 +6245,60 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
+    # PRIORIDAD: SOLICITUD DE UBICACIÓN INSTITUCIONAL
+    # ========================================================
+    #
+    # Una consulta logística directa no debe obligar al
+    # prospecto a recorrer etapas comerciales pendientes.
+    #
+    # Gemini identifica la intención.
+    # Python decide la acción.
+    # Python proporcionará posteriormente el enlace autorizado.
+    # ========================================================
+
+    intencion_principal_actual = str(
+        analisis_seguro.get(
+            "intencion_principal",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    intenciones_secundarias_actuales = (
+        analisis_seguro.get(
+            "intenciones_secundarias",
+            [],
+        )
+    )
+
+    if not isinstance(
+        intenciones_secundarias_actuales,
+        list,
+    ):
+        intenciones_secundarias_actuales = []
+
+    solicita_ubicacion = bool(
+        intencion_principal_actual
+        == "PEDIR_UBICACION"
+        or "PEDIR_UBICACION"
+        in intenciones_secundarias_actuales
+    )
+
+    if solicita_ubicacion:
+        decision.update({
+            "accion": "RESPONDER_UBICACION",
+            "motivo": (
+                "El prospecto solicitó directamente "
+                "la ubicación del campus."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        return decision
+
+    # ========================================================
     # 7. PRIORIDAD: SOLICITUD EXPLÍCITA DE CITA
     # ========================================================
     #
@@ -7381,6 +7506,42 @@ def construir_plan_respuesta_estructurada(
         })
 
         return plan
+
+        return plan
+
+    if accion == "RESPONDER_UBICACION":
+        plan.update({
+            "objetivo": (
+                "Compartir directamente la ubicación "
+                "institucional autorizada del campus."
+            ),
+            "debe_incluir": [
+                (
+                    "Únicamente una introducción breve "
+                    "y el enlace institucional autorizado."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Inventar o reconstruir un enlace.",
+                    "Inventar coordenadas.",
+                    "Inventar un Place ID.",
+                    "Solicitar información adicional.",
+                    "Agregar una pregunta comercial.",
+                    "Explicar Google Maps.",
+                ]
+            ),
+        })
+
+        return plan
+
+    if accion == "RESPONDER_COSTOS":
+        plan.update({
+            "objetivo": (
+                "Compartir la información de costos que "
+                "corresponda al nivel solicitado."
+            ),
 
     if accion == "RESPONDER_COSTOS":
         plan.update({
