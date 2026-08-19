@@ -18123,21 +18123,78 @@ REGLAS:
 def construir_resumen_cita_admin(contact) -> str:
     """
     Construye el resumen final que se envía al WhatsApp maestro.
+
+    Mantiene separados:
+    - nivel educativo;
+    - grado específico;
+    - fecha de la cita;
+    - hora de la cita.
     """
-    padres = get_note_value(contact, "NOMBRE_PADRES")
-    alumno = get_note_value(contact, "NOMBRE_ALUMNO")
-    grado = get_note_value(contact, "GRADO_INTERES") or get_note_value(contact, "NIVEL_INTERES")
-    hora_cita = get_note_value(contact, "HORA_CITA")
+
+    padres = (
+        get_note_value(
+            contact,
+            "NOMBRE_PADRES",
+        )
+        or get_note_value(
+            contact,
+            "NOMBRE_TUTOR",
+        )
+    ).strip()
+
+    alumno = get_note_value(
+        contact,
+        "NOMBRE_ALUMNO",
+    ).strip()
+
+    nivel = get_note_value(
+        contact,
+        "NIVEL_INTERES",
+    ).strip()
+
+    grado = (
+        get_note_value(
+            contact,
+            "GRADO_INTERES",
+        )
+        or get_note_value(
+            contact,
+            "GRADO_SOLICITADO",
+        )
+    ).strip()
+
+    fecha_cita = (
+        get_note_value(
+            contact,
+            "FECHA_CITA",
+        )
+        or get_note_value(
+            contact,
+            "FECHA_CITA_TEXTO",
+        )
+        or get_note_value(
+            contact,
+            "FECHA_CITA_ISO",
+        )
+    ).strip()
+
+    hora_cita = get_note_value(
+        contact,
+        "HORA_CITA",
+    ).strip()
 
     return f"""📌 Cita registrada
 
-Padres: {padres or "Pendiente"}
+Tutor: {padres or "Pendiente"}
 Cel: {contact.phone_number}
-Alumno:
-{alumno or "Pendiente"}
-{grado or "Pendiente"}
-Hora cita: {hora_cita or "Pendiente"}"""
 
+Alumno: {alumno or "Pendiente"}
+Nivel: {nivel or "Pendiente"}
+Grado: {grado or "Pendiente"}
+
+Fecha: {fecha_cita or "Pendiente"}
+Hora: {hora_cita or "Pendiente"}"""
+    
 
 def enviar_resumen_cita_admin_whatsapp(contact):
     """
