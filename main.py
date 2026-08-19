@@ -13902,32 +13902,42 @@ async def debug_admin_whatsapp_test(
         "error": "",
     }
 
-def crear_respuesta_cortesia_estructurada(
+def evaluar_cortesia_estructurada(
     mensaje_usuario: str,
     contact=None,
-) -> str:
+) -> Dict[str, Any]:
     """
-    Responde de manera determinista a agradecimientos
-    y cierres breves.
+    Evalúa cierres sociales y agradecimientos breves.
 
-    Evita utilizar Gemini para mensajes como:
-    - gracias
-    - muchas gracias
-    - perfecto, gracias
-    - ok, gracias
-    - nos vemos
-    - hasta mañana
+    Devuelve una de tres acciones:
 
-    Devuelve una cadena vacía cuando el mensaje contiene
-    otra intención que debe procesar el flujo estructurado.
+    - NO_CORTESIA:
+      El mensaje contiene una intención sustantiva y debe
+      continuar por el flujo estructurado normal.
+
+    - RESPONDER:
+      Es la primera cortesía del cierre social y corresponde
+      responder una sola vez.
+
+    - SILENCIO:
+      Ya se respondió previamente al cierre social y el nuevo
+      mensaje es únicamente otra cortesía o confirmación breve.
+      No se debe enviar ningún mensaje ni modificar el estado
+      comercial.
     """
+
+    resultado = {
+        "accion": "NO_CORTESIA",
+        "respuesta": "",
+        "es_cortesia": False,
+    }
 
     mensaje_original = str(
         mensaje_usuario or ""
     ).strip()
 
     if not mensaje_original:
-        return ""
+        return resultado
 
     mensaje_normalizado = unicodedata.normalize(
         "NFD",
@@ -13952,27 +13962,108 @@ def crear_respuesta_cortesia_estructurada(
         mensaje_normalizado,
     ).strip()
 
-    expresiones_cortesia = {
+    # --------------------------------------------------------
+    # DETECCIÓN DE CORTESÍA BREVE
+    # --------------------------------------------------------
+    #
+    # Se evita depender de una lista enorme de frases exactas.
+    # Una cortesía social debe ser breve y estar formada
+    # únicamente por vocabulario de agradecimiento, despedida
+    # o confirmación social.
+    # --------------------------------------------------------
+
+    palabras = mensaje_normalizado.split()
+
+    vocabulario_social = {
         "gracias",
-        "muchas gracias",
-        "mil gracias",
-        "perfecto gracias",
-        "muy bien gracias",
-        "ok gracias",
-        "okay gracias",
-        "sale gracias",
-        "esta bien gracias",
-        "de acuerdo gracias",
-        "excelente gracias",
-        "nos vemos",
-        "hasta manana",
-        "hasta luego",
-        "buena tarde",
-        "buen dia",
+        "muchas",
+        "mil",
+        "muy",
+        "amable",
+        "perfecto",
+        "bien",
+        "excelente",
+        "ok",
+        "okay",
+        "sale",
+        "va",
+        "listo",
+        "de",
+        "acuerdo",
+        "esta",
+        "nos",
+        "vemos",
+        "hasta",
+        "luego",
+        "manana",
+        "buen",
+        "buena",
+        "bonito",
+        "bonita",
+        "dia",
+        "tarde",
+        "noche",
+        "igualmente",
+        "no",
     }
 
-    if mensaje_normalizado not in expresiones_cortesia:
-        return ""
+    es_cortesia = bool(
+        palabras
+        and len(palabras) <= 8
+        and all(
+            palabra in vocabulario_social
+            for palabra in palabras
+        )
+        and any(
+            palabra
+            in {
+                "gracias",
+                "amable",
+                "ok",
+                "okay",
+                "sale",
+                "va",
+                "listo",
+                "perfecto",
+                "vemos",
+                "luego",
+                "manana",
+                "dia",
+                "tarde",
+                "noche",
+                "igualmente",
+            }
+            for palabra in palabras
+        )
+    )
+
+    if not es_cortesia:
+        return resultado
+
+    resultado["es_cortesia"] = True
+
+    # --------------------------------------------------------
+    # ¿YA RESPONDIMOS AL CIERRE SOCIAL?
+    # --------------------------------------------------------
+
+    cierre_social_activo = ""
+
+    if contact is not None:
+        cierre_social_activo = str(
+            get_note_value(
+                contact,
+                "CIERRE_SOCIAL_ACTIVO",
+            )
+            or ""
+        ).strip().upper()
+
+    if cierre_social_activo == "SI":
+        resultado["accion"] = "SILENCIO"
+        return resultado
+
+    # --------------------------------------------------------
+    # PRIMERA CORTESÍA: RESPONDER UNA VEZ
+    # --------------------------------------------------------
 
     nombre_tutor = ""
 
@@ -13994,14 +14085,14 @@ def crear_respuesta_cortesia_estructurada(
                 contact,
                 "NOMBRE_MADRE",
             )
-        )
+            or ""
+        ).strip()
 
     primer_nombre = ""
 
     if nombre_tutor:
         primer_nombre = (
             nombre_tutor
-            .strip()
             .split()[0]
         )
 
@@ -14031,10 +14122,13 @@ def crear_respuesta_cortesia_estructurada(
     hora_cita = ""
 
     if contact is not None:
-        hora_cita = get_note_value(
-            contact,
-            "HORA_CITA",
-        )
+        hora_cita = str(
+            get_note_value(
+                contact,
+                "HORA_CITA",
+            )
+            or ""
+        ).strip()
 
     tiene_visita_confirmada = bool(
         estado_contacto
@@ -14050,28 +14144,34 @@ def crear_respuesta_cortesia_estructurada(
         or hora_cita
     )
 
+    resultado["accion"] = "RESPONDER"
+
     if tiene_visita_confirmada:
         if primer_nombre:
-            return (
+            resultado["respuesta"] = (
                 f"Con gusto, {primer_nombre}. "
                 "Los esperamos en su visita."
             )
+        else:
+            resultado["respuesta"] = (
+                "Con gusto. "
+                "Los esperamos en su visita."
+            )
 
-        return (
-            "Con gusto. "
-            "Los esperamos en su visita."
-        )
+        return resultado
 
     if primer_nombre:
-        return (
+        resultado["respuesta"] = (
             f"Con gusto, {primer_nombre}. "
-            "Quedamos atentos para apoyarle."
+            "Que tenga excelente día."
+        )
+    else:
+        resultado["respuesta"] = (
+            "Con gusto. "
+            "Que tenga excelente día."
         )
 
-    return (
-        "Con gusto. "
-        "Quedamos atentos para apoyarle."
-    )
+    return resultado
     
 # ============================================================
 # PUENTE PRODUCTIVO DEL NUEVO FLUJO ESTRUCTURADO
@@ -14684,19 +14784,72 @@ def procesar_mensaje_whatsapp_estructurado_real(
         
 
     # --------------------------------------------------------
-    # RESPUESTA DETERMINISTA A CORTESÍAS Y CIERRES BREVES
+    # CONTROL DETERMINISTA DE CIERRE SOCIAL
     # --------------------------------------------------------
 
-    respuesta_cortesia = (
-        crear_respuesta_cortesia_estructurada(
+    evaluacion_cortesia = (
+        evaluar_cortesia_estructurada(
             mensaje_usuario=mensaje,
             contact=contact,
         )
     )
 
-    if respuesta_cortesia:
+    accion_cortesia = str(
+        evaluacion_cortesia.get(
+            "accion",
+            "NO_CORTESIA",
+        )
+        or "NO_CORTESIA"
+    ).strip().upper()
+
+    # --------------------------------------------------------
+    # CORTESÍA REPETIDA: SILENCIO
+    # --------------------------------------------------------
+
+    if accion_cortesia == "SILENCIO":
         print(
-            "👋 Cortesía breve detectada. "
+            "🤫 Cierre social ya atendido. "
+            "No se enviará otra respuesta."
+        )
+
+        resultado_final.update({
+            "procesado": True,
+            "mensaje_enviado": False,
+            "respuesta": "",
+            "twilio_resultado": "",
+            "twilio_sid": None,
+            "resultado_orquestador": {
+                "version": "1.0",
+                "flujo": "estructurado",
+                "procesado": True,
+                "tipo_respuesta": (
+                    "CIERRE_SOCIAL_SILENCIOSO"
+                ),
+                "respuesta_generada": "",
+                "gemini_utilizado": False,
+                "error": "",
+            },
+            "error": "",
+        })
+
+        return resultado_final
+
+    # --------------------------------------------------------
+    # PRIMERA CORTESÍA: RESPONDER UNA SOLA VEZ
+    # --------------------------------------------------------
+
+    if accion_cortesia == "RESPONDER":
+
+        respuesta_cortesia = str(
+            evaluacion_cortesia.get(
+                "respuesta",
+                "",
+            )
+            or ""
+        ).strip()
+
+        print(
+            "👋 Primera cortesía de cierre detectada. "
             "Se omite Gemini."
         )
 
@@ -14744,6 +14897,12 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 twilio_sid,
             )
 
+            set_note_value(
+                contact,
+                "CIERRE_SOCIAL_ACTIVO",
+                "SI",
+            )
+
             db.commit()
 
         resultado_final.update({
@@ -14772,13 +14931,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
             ),
         })
 
-        print(
-            "👋 Respuesta de cortesía: "
-            f"{respuesta_cortesia}"
-        )
-
         return resultado_final
 
+    # --------------------------------------------------------
+    # MENSAJE SUSTANTIVO: REABRIR CONVERSACIÓN SOCIAL
+    # --------------------------------------------------------
+
+    cierre_social_previo = str(
+        get_note_value(
+            contact,
+            "CIERRE_SOCIAL_ACTIVO",
+        )
+        or ""
+    ).strip().upper()
+
+    if cierre_social_previo == "SI":
+        set_note_value(
+            contact,
+            "CIERRE_SOCIAL_ACTIVO",
+            "",
+        )
+
+        db.commit()
+
+        print(
+            "🔄 Nuevo mensaje sustantivo. "
+            "Se reabre la conversación después "
+            "del cierre social."
+        )
+        
     try:
         # ----------------------------------------------------
         # 1. HISTORIAL COMPLETO PARA EL ORQUESTADOR
