@@ -18012,6 +18012,7 @@ REGLAS:
 - Devuelve únicamente JSON válido.
 - No uses Markdown.
 - No agregues explicaciones.
+"""
 
     try:
         response, modelo_usado = (
