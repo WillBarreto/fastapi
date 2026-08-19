@@ -7507,7 +7507,6 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
-        return plan
 
     if accion == "RESPONDER_UBICACION":
         plan.update({
@@ -7536,12 +7535,6 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
-    if accion == "RESPONDER_COSTOS":
-        plan.update({
-            "objetivo": (
-                "Compartir la información de costos que "
-                "corresponda al nivel solicitado."
-            ),
 
     if accion == "RESPONDER_COSTOS":
         plan.update({
