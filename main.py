@@ -18402,13 +18402,16 @@ def extraer_datos_registro_cita(
     contact,
 ) -> dict:
     """
-    Extrae nombre del padre, madre o tutor, nombre del alumno
-    y grado o nivel de interés.
+    Extrae los datos necesarios para completar una cita confirmada.
 
-    Prioridad:
-    1. Extracción determinista desde expresiones comunes.
-    2. Gemini para completar datos que sigan faltando.
-    3. Conserva el nivel previamente registrado.
+    Soporta:
+    - nombre del padre, madre o tutor;
+    - uno o varios alumnos;
+    - nivel y grado cuando aparecen en el mensaje.
+
+    Mantiene compatibilidad con el flujo anterior mediante
+    la clave singular "alumno", que representa al primer alumno
+    detectado.
     """
 
     texto = str(
@@ -18438,6 +18441,7 @@ def extraer_datos_registro_cita(
     datos = {
         "padres": "",
         "alumno": "",
+        "alumnos": [],
         "nivel": nivel_conocido,
         "grado": grado_conocido,
     }
@@ -18446,12 +18450,13 @@ def extraer_datos_registro_cita(
         return datos
 
     # ========================================================
-    # 1. EXTRACCIÓN DETERMINISTA DE NOMBRES
+    # LIMPIEZA DE NOMBRES
     # ========================================================
 
     def limpiar_nombre_extraido(
         valor: str,
     ) -> str:
+
         nombre = str(
             valor or ""
         ).strip()
@@ -18468,24 +18473,65 @@ def extraer_datos_registro_cita(
 
         return nombre
 
+    # ========================================================
+    # 1. EXTRACCIÓN DETERMINISTA DEL TUTOR
+    # ========================================================
+
     patrones_tutor = [
         (
-            r"(?:yo\s+)?(?:me\s+llamo|mi\s+nombre\s+es|soy)"
+            r"(?:yo\s+)?"
+            r"(?:me\s+llamo|mi\s+nombre\s+es|soy)"
             r"\s+(.+?)"
             r"(?=\s+(?:y|,)\s+"
-            r"(?:el\s+de\s+mi|mi)\s+"
-            r"(?:hijo|hija|alumno|alumna)\b|$)"
+            r"(?:el\s+de\s+mi|los\s+de\s+mis|mi|mis)\s+"
+            r"(?:hijo|hija|hijos|hijas|alumno|alumna|"
+            r"alumnos|alumnas)\b|$)"
         ),
         (
-            r"(?:nombre\s+del\s+padre|nombre\s+de\s+la\s+madre|"
-            r"nombre\s+del\s+tutor)\s*(?:es|:)\s*(.+?)"
+            r"(?:nombre\s+del\s+padre|"
+            r"nombre\s+de\s+la\s+madre|"
+            r"nombre\s+del\s+tutor)"
+            r"\s*(?:es|:)\s*(.+?)"
             r"(?=\s+(?:y|,)\s+|$)"
+        ),
+        (
+            r"(?:el\s+m[ií]o\s+es)\s+(.+?)"
+            r"(?=\s+y\s+el\s+de\s+mi\s+"
+            r"(?:hijo|hija)\b|$)"
         ),
     ]
 
+    for patron in patrones_tutor:
+
+        coincidencia = re.search(
+            patron,
+            texto,
+            flags=re.IGNORECASE,
+        )
+
+        if coincidencia:
+
+            datos["padres"] = (
+                limpiar_nombre_extraido(
+                    coincidencia.group(1)
+                )
+            )
+
+            break
+
+    # ========================================================
+    # 2. EXTRACCIÓN DETERMINISTA DE UN ALUMNO
+    # ========================================================
+    #
+    # Se conserva porque resuelve de forma muy confiable
+    # conversaciones simples sin depender de Gemini.
+    # Para múltiples alumnos, Gemini complementará después.
+    # ========================================================
+
     patrones_alumno = [
         (
-            r"(?:mi\s+)?(?:hijo|hija|alumno|alumna)"
+            r"(?:mi\s+)?"
+            r"(?:hijo|hija|alumno|alumna)"
             r"\s+(?:es|se\s+llama)\s+(.+?)$"
         ),
         (
@@ -18500,22 +18546,8 @@ def extraer_datos_registro_cita(
         ),
     ]
 
-    for patron in patrones_tutor:
-        coincidencia = re.search(
-            patron,
-            texto,
-            flags=re.IGNORECASE,
-        )
-
-        if coincidencia:
-            datos["padres"] = (
-                limpiar_nombre_extraido(
-                    coincidencia.group(1)
-                )
-            )
-            break
-
     for patron in patrones_alumno:
+
         coincidencia = re.search(
             patron,
             texto,
@@ -18523,80 +18555,124 @@ def extraer_datos_registro_cita(
         )
 
         if coincidencia:
-            datos["alumno"] = (
+
+            nombre_alumno = (
                 limpiar_nombre_extraido(
                     coincidencia.group(1)
                 )
             )
+
+            if nombre_alumno:
+
+                datos["alumno"] = nombre_alumno
+
+                datos["alumnos"].append({
+                    "nombre": nombre_alumno,
+                    "nivel": nivel_conocido,
+                    "grado": grado_conocido,
+                })
+
             break
-
-    if (
-        datos["padres"]
-        and datos["alumno"]
-    ):
-        print(
-            "✅ Datos de cita extraídos "
-            "determinísticamente: "
-            f"padres={datos['padres']!r}, "
-            f"alumno={datos['alumno']!r}, "
-            f"grado={datos['grado']!r}"
-        )
-
-        return datos
 
     # ========================================================
-    # 2. GEMINI PARA COMPLETAR DATOS FALTANTES
+    # 3. GEMINI PARA INTERPRETAR UNO O VARIOS ALUMNOS
     # ========================================================
 
     if not GEMINI_API_KEY:
         return datos
 
     prompt = f"""
-Extrae datos de registro de cita escolar desde el siguiente mensaje de WhatsApp.
+Extrae los datos necesarios para registrar una cita escolar
+desde el siguiente mensaje de WhatsApp.
 
 MENSAJE DEL PROSPECTO:
 {texto}
 
 DATOS YA EXTRAÍDOS:
-Padre, madre o tutor: {datos["padres"] or "No identificado"}
-Alumno: {datos["alumno"] or "No identificado"}
 
-NIVEL YA CONOCIDO:
+Tutor:
+{datos["padres"] or "No identificado"}
+
+Alumno detectado inicialmente:
+{datos["alumno"] or "No identificado"}
+
+NIVEL YA CONOCIDO EN EL CONTACTO:
 {nivel_conocido or "No especificado"}
 
-GRADO YA CONOCIDO:
+GRADO YA CONOCIDO EN EL CONTACTO:
 {grado_conocido or "No especificado"}
 
 TAREA:
-Devuelve únicamente un objeto JSON válido con estas claves:
+
+Devuelve únicamente un objeto JSON válido con esta estructura:
 
 {{
   "padres": "",
-  "alumno": "",
-  "nivel": "",
-  "grado": ""
+  "alumnos": [
+    {{
+      "nombre": "",
+      "nivel": "",
+      "grado": ""
+    }}
+  ]
 }}
 
-REGLAS:
-- "padres" debe ser el nombre de la mamá, papá o tutor que agenda.
-- "alumno" debe ser el nombre del niño, niña o alumno.
-- "nivel" debe representar únicamente el nivel educativo:
+REGLAS OBLIGATORIAS:
+
+- "padres" debe contener el nombre completo de la mamá,
+  papá o tutor que agenda.
+
+- "alumnos" debe contener TODOS los niños o jóvenes
+  mencionados en el mensaje.
+
+- Si aparece un solo alumno, devuelve una lista con
+  un solo elemento.
+
+- Si aparecen dos o más hijos, hijas, alumnos o alumnas,
+  crea un elemento independiente para cada uno.
+
+- No combines dos nombres en un solo campo.
+
+- "nombre" debe contener únicamente el nombre del alumno.
+
+- "nivel" debe representar únicamente:
   Kínder, Primaria o Secundaria.
-- "grado" debe representar exclusivamente el grado específico:
-  por ejemplo 1ro, 2do, 3ro, primero, segundo, tercero.
-- Nunca utilices "Primaria", "Secundaria", "Kínder" o "Preescolar"
+
+- "grado" debe representar exclusivamente el grado específico,
+  por ejemplo:
+  1ro, 2do, 3ro, primero, segundo, tercero.
+
+- Nunca utilices Primaria, Secundaria, Kínder o Preescolar
   como valor de "grado".
+
+- Si el mensaje no indica nivel o grado para un alumno,
+  déjalo vacío.
+
+- Si existe un único alumno y el nivel o grado ya conocido
+  claramente corresponde a ese alumno, puedes conservarlo.
+
+- Si existen varios alumnos y no está claro qué nivel o grado
+  corresponde a cada uno, NO repartas ni inventes información.
+
+- No inventes nombres.
+
+- No inventes parentescos.
+
+- No inventes niveles.
+
+- No inventes grados.
+
 - Conserva los datos ya identificados cuando sean correctos.
-- Si el nivel ya está conocido, úsalo.
-- Si el grado ya está conocido, úsalo.
-- Si algún dato no aparece, déjalo como cadena vacía.
-- No inventes nombres, nivel ni grado.
-- Devuelve únicamente JSON válido.
+
+- Devuelve exclusivamente JSON válido.
+
 - No uses Markdown.
+
 - No agregues explicaciones.
 """
 
     try:
+
         response, modelo_usado = (
             generar_con_gemini_con_fallback(
                 prompt,
@@ -18630,6 +18706,10 @@ REGLAS:
 
             return datos
 
+        # ----------------------------------------------------
+        # TUTOR
+        # ----------------------------------------------------
+
         padres_ia = limpiar_nombre_extraido(
             datos_ia.get(
                 "padres",
@@ -18637,71 +18717,128 @@ REGLAS:
             )
         )
 
-        alumno_ia = limpiar_nombre_extraido(
-            datos_ia.get(
-                "alumno",
-                "",
-            )
-        )
-
-        nivel_ia = str(
-            datos_ia.get(
-                "nivel",
-                "",
-            )
-            or ""
-        ).strip()
-
-        grado_ia = str(
-            datos_ia.get(
-                "grado",
-                "",
-            )
-            or ""
-        ).strip()
-
         if (
             not datos["padres"]
             and padres_ia
         ):
             datos["padres"] = padres_ia
 
-        if (
-            not datos["alumno"]
-            and alumno_ia
-        ):
-            datos["alumno"] = alumno_ia
+        # ----------------------------------------------------
+        # ALUMNOS
+        # ----------------------------------------------------
 
-        if (
-            not datos["nivel"]
-            and nivel_ia
-        ):
-            datos["nivel"] = nivel_ia
+        alumnos_ia = datos_ia.get(
+            "alumnos",
+            [],
+        )
 
-        if (
-            not datos["grado"]
-            and grado_ia
+        alumnos_normalizados = []
+
+        if isinstance(
+            alumnos_ia,
+            list,
         ):
-            datos["grado"] = grado_ia
-            
+
+            for alumno_ia in alumnos_ia:
+
+                if not isinstance(
+                    alumno_ia,
+                    dict,
+                ):
+                    continue
+
+                nombre = limpiar_nombre_extraido(
+                    alumno_ia.get(
+                        "nombre",
+                        "",
+                    )
+                )
+
+                if not nombre:
+                    continue
+
+                nivel = str(
+                    alumno_ia.get(
+                        "nivel",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                grado = str(
+                    alumno_ia.get(
+                        "grado",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                alumnos_normalizados.append({
+                    "nombre": nombre,
+                    "nivel": nivel,
+                    "grado": grado,
+                })
+
+        if alumnos_normalizados:
+
+            datos["alumnos"] = (
+                alumnos_normalizados
+            )
+
+            # Compatibilidad temporal con el flujo anterior.
+            datos["alumno"] = (
+                alumnos_normalizados[0][
+                    "nombre"
+                ]
+            )
+
+            # Sólo trasladamos nivel/grado a los campos
+            # singulares cuando existe exactamente un alumno.
+            if len(alumnos_normalizados) == 1:
+
+                alumno_unico = (
+                    alumnos_normalizados[0]
+                )
+
+                nivel_alumno = str(
+                    alumno_unico.get(
+                        "nivel",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                grado_alumno = str(
+                    alumno_unico.get(
+                        "grado",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                if nivel_alumno:
+                    datos["nivel"] = nivel_alumno
+
+                if grado_alumno:
+                    datos["grado"] = grado_alumno
+
         print(
             "✅ Datos de cita extraídos: "
             f"padres={datos['padres']!r}, "
-            f"alumno={datos['alumno']!r}, "
-            f"grado={datos['grado']!r}, "
+            f"alumnos={datos['alumnos']!r}, "
             f"modelo={modelo_usado}"
         )
 
         return datos
 
     except Exception as e:
+
         print(
             "⚠️ Error extrayendo datos de cita: "
             f"{e}"
         )
 
         return datos
-
 def construir_resumen_cita_admin(contact) -> str:
     """
     Construye el resumen final que se envía al WhatsApp maestro.
