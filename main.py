@@ -18155,80 +18155,295 @@ def enviar_resumen_cita_admin_whatsapp(contact):
     return resultado
 
 
-def procesar_datos_registro_cita(db: Session, contact, from_number: str, mensaje_usuario: str):
+def procesar_datos_registro_cita(
+    db: Session,
+    contact,
+    from_number: str,
+    mensaje_usuario: str,
+):
     """
-    Procesa la respuesta del prospecto cuando ya se le pidieron datos para registrar cita.
+    Procesa los datos faltantes para completar una cita ya confirmada.
+
+    Mantiene separados:
+    - NIVEL_INTERES
+    - GRADO_INTERES
+
+    El objetivo pendiente sólo se limpia cuando todos los
+    datos requeridos para la cita están completos.
     """
-    datos = extraer_datos_registro_cita(mensaje_usuario, contact)
+
+    datos = extraer_datos_registro_cita(
+        mensaje_usuario,
+        contact,
+    )
+
+    # --------------------------------------------------------
+    # PERSISTIR DATOS DETECTADOS
+    # --------------------------------------------------------
 
     if datos.get("padres"):
-        set_note_value(contact, "NOMBRE_PADRES", datos["padres"])
+        set_note_value(
+            contact,
+            "NOMBRE_PADRES",
+            datos["padres"],
+        )
+
+        set_note_value(
+            contact,
+            "NOMBRE_TUTOR",
+            datos["padres"],
+        )
 
     if datos.get("alumno"):
-        set_note_value(contact, "NOMBRE_ALUMNO", datos["alumno"])
+        set_note_value(
+            contact,
+            "NOMBRE_ALUMNO",
+            datos["alumno"],
+        )
+
+    if datos.get("nivel"):
+        set_note_value(
+            contact,
+            "NIVEL_INTERES",
+            datos["nivel"],
+        )
 
     if datos.get("grado"):
-        set_note_value(contact, "GRADO_INTERES", datos["grado"])
+        set_note_value(
+            contact,
+            "GRADO_INTERES",
+            datos["grado"],
+        )
 
     db.commit()
 
-    padres = get_note_value(contact, "NOMBRE_PADRES")
-    alumno = get_note_value(contact, "NOMBRE_ALUMNO")
-    grado = get_note_value(contact, "GRADO_INTERES") or get_note_value(contact, "NIVEL_INTERES")
+    # --------------------------------------------------------
+    # RECONSTRUIR DATOS PERSISTIDOS
+    # --------------------------------------------------------
+
+    padres = (
+        get_note_value(
+            contact,
+            "NOMBRE_PADRES",
+        )
+        or get_note_value(
+            contact,
+            "NOMBRE_TUTOR",
+        )
+    ).strip()
+
+    alumno = get_note_value(
+        contact,
+        "NOMBRE_ALUMNO",
+    ).strip()
+
+    nivel = get_note_value(
+        contact,
+        "NIVEL_INTERES",
+    ).strip()
+
+    grado = (
+        get_note_value(
+            contact,
+            "GRADO_INTERES",
+        )
+        or get_note_value(
+            contact,
+            "GRADO_SOLICITADO",
+        )
+    ).strip()
+
+    # --------------------------------------------------------
+    # DETERMINAR ÚNICAMENTE DATOS FALTANTES
+    # --------------------------------------------------------
 
     faltantes = []
 
     if not padres:
-        faltantes.append("su nombre completo")
+        faltantes.append(
+            "su nombre completo"
+        )
 
     if not alumno:
-        faltantes.append("el nombre completo de su hijo(a)")
+        faltantes.append(
+            "el nombre completo de su hijo(a)"
+        )
 
-    if not grado:
-        faltantes.append("el grado o nivel de interés")
+    if not nivel:
+        faltantes.append(
+            "el nivel educativo de interés"
+        )
+
+    if nivel and not grado:
+        faltantes.append(
+            "el grado específico al que ingresaría"
+        )
+
+    # --------------------------------------------------------
+    # TODAVÍA FALTAN DATOS
+    # --------------------------------------------------------
 
     if faltantes:
+        set_note_value(
+            contact,
+            "OBJETIVO_PENDIENTE",
+            "OBTENER_DATOS_CITA",
+        )
+
+        set_flow_state(
+            contact,
+            "ESPERANDO_DATOS_CITA",
+        )
+
+        db.commit()
+
         if len(faltantes) == 1:
             faltantes_texto = faltantes[0]
+
+        elif len(faltantes) == 2:
+            faltantes_texto = (
+                f"{faltantes[0]} y "
+                f"{faltantes[1]}"
+            )
+
         else:
-            faltantes_texto = ", ".join(faltantes[:-1]) + " y " + faltantes[-1]
+            faltantes_texto = (
+                ", ".join(faltantes[:-1])
+                + " y "
+                + faltantes[-1]
+            )
 
-        respuesta = f"""Muchas gracias.
+        respuesta = (
+            "Muchas gracias. "
+            "Para completar el registro de su cita, "
+            "¿me podría apoyar también con "
+            f"{faltantes_texto}?"
+        )
 
-Para completar el registro de su cita, ¿me podría apoyar también con {faltantes_texto}?"""
-
-        resultado = enviar_respuesta_twilio(from_number, respuesta)
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            respuesta,
+        )
 
         twilio_sid = None
+
         if "SID:" in resultado:
-            twilio_sid = resultado.split("SID: ")[1].strip()
+            twilio_sid = (
+                resultado
+                .split("SID: ")[1]
+                .strip()
+            )
 
-        save_message(db, contact.id, "outgoing", respuesta, twilio_sid)
+        save_message(
+            db,
+            contact.id,
+            "outgoing",
+            respuesta,
+            twilio_sid,
+        )
 
-        print(f"📌 Datos de cita incompletos. Faltan: {faltantes}")
-        return {"status": "datos_cita_incompletos"}
+        db.commit()
 
-    respuesta = """Muchas gracias.
+        print(
+            "📌 Datos de cita incompletos. "
+            f"Faltan: {faltantes}"
+        )
 
-Su cita queda registrada. Le esperamos con mucho gusto."""
+        return {
+            "status": "datos_cita_incompletos",
+            "faltantes": faltantes,
+        }
 
-    resultado = enviar_respuesta_twilio(from_number, respuesta)
+    # --------------------------------------------------------
+    # DATOS COMPLETOS
+    # --------------------------------------------------------
+
+    respuesta = (
+        "Perfecto. "
+        "Su cita ha quedado registrada. "
+        "Le esperamos con mucho gusto."
+    )
+
+    resultado = enviar_respuesta_twilio(
+        from_number,
+        respuesta,
+    )
+
+    envio_exitoso = str(
+        resultado or ""
+    ).strip().startswith("✅")
+
+    if not envio_exitoso:
+        db.rollback()
+
+        print(
+            "❌ No se cerrará el registro de cita "
+            "porque falló el envío final al prospecto: "
+            f"{resultado}"
+        )
+
+        return {
+            "status": "datos_cita_final_send_failed",
+            "error": str(resultado),
+        }
 
     twilio_sid = None
+
     if "SID:" in resultado:
-        twilio_sid = resultado.split("SID: ")[1].strip()
+        twilio_sid = (
+            resultado
+            .split("SID: ")[1]
+            .strip()
+        )
 
-    save_message(db, contact.id, "outgoing", respuesta, twilio_sid)
+    save_message(
+        db,
+        contact.id,
+        "outgoing",
+        respuesta,
+        twilio_sid,
+    )
 
-    set_flow_state(contact, "CITA_DATOS_COMPLETOS")
-    contact.status = "VISITA_AGENDADA"
+    # --------------------------------------------------------
+    # CIERRE PERSISTENTE DE LA CITA
+    # --------------------------------------------------------
+
+    set_note_value(
+        contact,
+        "OBJETIVO_PENDIENTE",
+        "",
+    )
+
+    set_note_value(
+        contact,
+        "ETAPA_CONVERSACIONAL",
+        "VISITA_CONFIRMADA",
+    )
+
+    set_flow_state(
+        contact,
+        "CITA_DATOS_COMPLETOS",
+    )
+
+    contact.status = "VISITA_CONFIRMADA"
+
     db.commit()
 
-    enviar_resumen_cita_admin_whatsapp(contact)
+    enviar_resumen_cita_admin_whatsapp(
+        contact
+    )
 
-    print("📌 Datos de cita completos y resumen enviado al admin")
+    print(
+        "📌 Datos de cita completos. "
+        "Objetivo pendiente cerrado y resumen "
+        "enviado al administrador."
+    )
 
-    return {"status": "datos_cita_completos"}
+    return {
+        "status": "datos_cita_completos",
+        "nivel": nivel,
+        "grado": grado,
+    }
     
 
 def redactar_respuesta_admin_para_prospecto(texto_admin: str, tarea: AdminPendingTask) -> str:
