@@ -16137,12 +16137,6 @@ async def whatsapp_webhook(
             mensaje_entrada,
         )
 
-        usar_flujo_estructurado = bool(
-            USE_STRUCTURED_AI_FLOW
-            or es_numero_prueba_flujo_estructurado(
-                From
-            )
-        )
 
         # ====================================================
         # PRIORIDAD ABSOLUTA: COMPLETAR DATOS DE CITA CONFIRMADA
@@ -16176,6 +16170,13 @@ async def whatsapp_webhook(
                 From,
                 mensaje_entrada,
             )
+
+        usar_flujo_estructurado = bool(
+            USE_STRUCTURED_AI_FLOW
+            or es_numero_prueba_flujo_estructurado(
+                From
+            )
+        )
 
         if usar_flujo_estructurado:
             origen_activacion = (
