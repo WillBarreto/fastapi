@@ -7997,6 +7997,66 @@ def generar_respuesta_final_estructurada(
 
         return resultado
 
+    # ========================================================
+    # UBICACIÓN INSTITUCIONAL DETERMINISTA
+    # ========================================================
+
+    if accion == "RESPONDER_UBICACION":
+
+        ubicacion = (
+            obtener_ubicacion_institucional_campus()
+        )
+
+        if not ubicacion.get(
+            "configurada",
+            False,
+        ):
+            resultado["error"] = (
+                "UBICACION_INSTITUCIONAL_NO_CONFIGURADA"
+            )
+
+            print(
+                "❌ No se enviará una ubicación porque "
+                "faltan CAMPUS_MAPS_NAME o "
+                "CAMPUS_MAPS_ADDRESS."
+            )
+
+            return resultado
+
+        url_maps = str(
+            ubicacion.get(
+                "url",
+                "",
+            )
+            or ""
+        ).strip()
+
+        respuesta_ubicacion = (
+            "Con gusto, le comparto nuestra ubicación:"
+            "\n\n"
+            f"{url_maps}"
+        )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_ubicacion,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "UBICACION_INSTITUCIONAL_DETERMINISTA"
+            ),
+            "error": "",
+        })
+
+        print(
+            "📍 Ubicación institucional generada "
+            "sin intervención de Gemini."
+        )
+
+        return resultado
+
     api_key = (
         os.getenv("GOOGLE_AI_API_KEY")
         or os.getenv("GEMINI_API_KEY")
