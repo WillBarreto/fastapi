@@ -16144,6 +16144,39 @@ async def whatsapp_webhook(
             )
         )
 
+        # ====================================================
+        # PRIORIDAD ABSOLUTA: COMPLETAR DATOS DE CITA CONFIRMADA
+        # ====================================================
+        #
+        # Si administración ya confirmó la cita y estamos
+        # esperando datos del tutor/alumno, este mensaje NO debe
+        # regresar al flujo comercial estructurado.
+        #
+        # El único objetivo en este estado es completar el
+        # registro de la cita.
+        # ====================================================
+
+        estado_flujo_actual = get_flow_state(
+            contact
+        )
+
+        if (
+            estado_flujo_actual
+            == "ESPERANDO_DATOS_CITA"
+        ):
+            print(
+                "📌 Cita confirmada: "
+                "procesando únicamente datos faltantes "
+                "del registro."
+            )
+
+            return procesar_datos_registro_cita(
+                db,
+                contact,
+                From,
+                mensaje_entrada,
+            )
+
         if usar_flujo_estructurado:
             origen_activacion = (
                 "FEATURE_FLAG_GENERAL"
@@ -16173,20 +16206,6 @@ async def whatsapp_webhook(
                 "buffer_result": resultado_buffer,
             }
 
-        estado_flujo_actual = get_flow_state(
-            contact
-        )
-        
-        if (
-            estado_flujo_actual
-            == "ESPERANDO_DATOS_CITA"
-        ):
-            return procesar_datos_registro_cita(
-                db,
-                contact,
-                From,
-                mensaje_entrada,
-            )
             
         if es_saludo_repetido_temprano(estado_flujo_actual, mensaje_entrada):
             return responder_saludo_repetido_temprano(db, contact, From, mensaje_entrada)
