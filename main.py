@@ -17529,18 +17529,94 @@ def enriquecer_fecha_cita_en_mensaje(mensaje: str) -> str:
 
 def construir_solicitud_datos_cita(contact) -> str:
     """
-    Construye el mensaje para pedir datos después de confirmar la cita.
+    Construye una sola solicitud con únicamente los datos
+    faltantes después de que administración confirma la cita.
+
+    NIVEL_INTERES y GRADO_INTERES son conceptos distintos:
+    - NIVEL_INTERES: Kínder, Primaria, Secundaria.
+    - GRADO_INTERES: 1.º, 2.º, 3.º, etc.
     """
-    nivel_interes = get_note_value(contact, "NIVEL_INTERES")
 
-    if nivel_interes:
-        complemento_grado = ""
+    nombre_tutor = (
+        get_note_value(
+            contact,
+            "NOMBRE_PADRES",
+        )
+        or get_note_value(
+            contact,
+            "NOMBRE_TUTOR",
+        )
+    ).strip()
+
+    nombre_alumno = get_note_value(
+        contact,
+        "NOMBRE_ALUMNO",
+    ).strip()
+
+    nivel_interes = get_note_value(
+        contact,
+        "NIVEL_INTERES",
+    ).strip()
+
+    grado_interes = (
+        get_note_value(
+            contact,
+            "GRADO_INTERES",
+        )
+        or get_note_value(
+            contact,
+            "GRADO_SOLICITADO",
+        )
+    ).strip()
+
+    faltantes = []
+
+    if not nombre_tutor:
+        faltantes.append(
+            "su nombre completo"
+        )
+
+    if not nombre_alumno:
+        faltantes.append(
+            "el nombre completo de su hijo(a)"
+        )
+
+    if not nivel_interes:
+        faltantes.append(
+            "el nivel educativo de interés"
+        )
+
+    if (
+        nivel_interes
+        and not grado_interes
+    ):
+        faltantes.append(
+            "el grado específico al que ingresaría"
+        )
+
+    if not faltantes:
+        return ""
+
+    if len(faltantes) == 1:
+        faltantes_texto = faltantes[0]
+
+    elif len(faltantes) == 2:
+        faltantes_texto = (
+            f"{faltantes[0]} y {faltantes[1]}"
+        )
+
     else:
-        complemento_grado = "\n\nTambién, ¿me podría confirmar para qué grado o nivel educativo está interesado?"
+        faltantes_texto = (
+            ", ".join(faltantes[:-1])
+            + " y "
+            + faltantes[-1]
+        )
 
-    return f"""Para registrar su cita, ¿me podría ayudar por favor con su nombre completo y el nombre completo de su hijo(a)?
-
-De esta manera podremos tenerlos registrados y dedicarles el tiempo que requieren.{complemento_grado}"""
+    return (
+        "Para completar el registro de su cita, "
+        "¿me podría apoyar por favor con "
+        f"{faltantes_texto}?"
+    )
 
 
 def extraer_hora_cita_confirmada(
@@ -17765,10 +17841,23 @@ def extraer_datos_registro_cita(
         or ""
     ).strip()
 
+    grado_conocido = str(
+        get_note_value(
+            contact,
+            "GRADO_INTERES",
+        )
+        or get_note_value(
+            contact,
+            "GRADO_SOLICITADO",
+        )
+        or ""
+    ).strip()
+
     datos = {
         "padres": "",
         "alumno": "",
-        "grado": nivel_conocido,
+        "nivel": nivel_conocido,
+        "grado": grado_conocido,
     }
 
     if not texto:
@@ -17890,8 +17979,11 @@ DATOS YA EXTRAÍDOS:
 Padre, madre o tutor: {datos["padres"] or "No identificado"}
 Alumno: {datos["alumno"] or "No identificado"}
 
-GRADO O NIVEL YA CONOCIDO:
+NIVEL YA CONOCIDO:
 {nivel_conocido or "No especificado"}
+
+GRADO YA CONOCIDO:
+{grado_conocido or "No especificado"}
 
 TAREA:
 Devuelve únicamente un objeto JSON válido con estas claves:
@@ -17899,21 +17991,27 @@ Devuelve únicamente un objeto JSON válido con estas claves:
 {{
   "padres": "",
   "alumno": "",
+  "nivel": "",
   "grado": ""
 }}
 
 REGLAS:
 - "padres" debe ser el nombre de la mamá, papá o tutor que agenda.
 - "alumno" debe ser el nombre del niño, niña o alumno.
-- "grado" debe ser el grado o nivel de interés.
+- "nivel" debe representar únicamente el nivel educativo:
+  Kínder, Primaria o Secundaria.
+- "grado" debe representar exclusivamente el grado específico:
+  por ejemplo 1ro, 2do, 3ro, primero, segundo, tercero.
+- Nunca utilices "Primaria", "Secundaria", "Kínder" o "Preescolar"
+  como valor de "grado".
 - Conserva los datos ya identificados cuando sean correctos.
+- Si el nivel ya está conocido, úsalo.
 - Si el grado ya está conocido, úsalo.
 - Si algún dato no aparece, déjalo como cadena vacía.
-- No inventes nombres ni apellidos.
+- No inventes nombres, nivel ni grado.
 - Devuelve únicamente JSON válido.
 - No uses Markdown.
 - No agregues explicaciones.
-"""
 
     try:
         response, modelo_usado = (
@@ -17963,6 +18061,14 @@ REGLAS:
             )
         )
 
+        nivel_ia = str(
+            datos_ia.get(
+                "nivel",
+                "",
+            )
+            or ""
+        ).strip()
+
         grado_ia = str(
             datos_ia.get(
                 "grado",
@@ -17971,18 +18077,30 @@ REGLAS:
             or ""
         ).strip()
 
-        if not datos["padres"] and padres_ia:
+        if (
+            not datos["padres"]
+            and padres_ia
+        ):
             datos["padres"] = padres_ia
 
-        if not datos["alumno"] and alumno_ia:
+        if (
+            not datos["alumno"]
+            and alumno_ia
+        ):
             datos["alumno"] = alumno_ia
 
-        datos["grado"] = (
-            grado_ia
-            or nivel_conocido
-            or datos["grado"]
-        )
+        if (
+            not datos["nivel"]
+            and nivel_ia
+        ):
+            datos["nivel"] = nivel_ia
 
+        if (
+            not datos["grado"]
+            and grado_ia
+        ):
+            datos["grado"] = grado_ia
+            
         print(
             "✅ Datos de cita extraídos: "
             f"padres={datos['padres']!r}, "
