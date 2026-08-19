@@ -6364,6 +6364,311 @@ def aplicar_reglas_negocio_estructuradas(
     # ========================================================
     # 8. SECUENCIA COMERCIAL NORMAL
     # ========================================================
+
+    contexto_secuencial = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else {}
+    )
+
+    hitos_comerciales = (
+        contexto_secuencial.get(
+            "hitos_comerciales",
+            [],
+        )
+    )
+
+    if not isinstance(
+        hitos_comerciales,
+        list,
+    ):
+        hitos_comerciales = []
+
+    hitos_comerciales = {
+        str(hito or "").strip().upper()
+        for hito in hitos_comerciales
+        if str(hito or "").strip()
+    }
+
+    referencia_previa = str(
+        contexto_secuencial.get(
+            "referencia_colegio",
+            "",
+        )
+        or ""
+    ).strip()
+
+    areas_interes_previas = (
+        contexto_secuencial.get(
+            "areas_interes",
+            [],
+        )
+    )
+
+    if not isinstance(
+        areas_interes_previas,
+        list,
+    ):
+        areas_interes_previas = []
+
+    intencion_principal = str(
+        analisis_seguro.get(
+            "intencion_principal",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    intenciones_secundarias = (
+        analisis_seguro.get(
+            "intenciones_secundarias",
+            [],
+        )
+    )
+
+    if not isinstance(
+        intenciones_secundarias,
+        list,
+    ):
+        intenciones_secundarias = []
+
+    tiene_proceso_comercial_iniciado = bool(
+        intencion_principal == "PEDIR_INFORMES"
+        or "PEDIR_INFORMES"
+        in intenciones_secundarias
+        or "PIDIO_INFORMES"
+        in hitos_comerciales
+        or intencion_principal
+        in {
+            "RESPONDER_ZONA",
+            "RESPONDER_REFERENCIA",
+        }
+        or zona_para_decision
+        or analisis_seguro.get("nivel")
+    )
+
+    if tiene_proceso_comercial_iniciado:
+
+        # ----------------------------------------------------
+        # PASO 1: VALIDAR ZONA
+        # ----------------------------------------------------
+
+        zona_confirmada = bool(
+            zona_validada
+            or "ZONA_VALIDADA"
+            in hitos_comerciales
+        )
+
+        if not zona_confirmada:
+            decision.update({
+                "accion": "PEDIR_ZONA",
+                "motivo": (
+                    "La familia confirmó que desea recibir "
+                    "información del colegio y corresponde "
+                    "validar primero su localidad."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "VALIDACION_ZONA"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 2: REFERENCIA DEL COLEGIO
+        # ----------------------------------------------------
+
+        datos_detectados_analisis = (
+            analisis_seguro.get(
+                "datos_detectados",
+                [],
+            )
+        )
+
+        if not isinstance(
+            datos_detectados_analisis,
+            list,
+        ):
+            datos_detectados_analisis = []
+
+        respondio_referencia_en_turno = (
+            "referencia_colegio"
+            in datos_detectados_analisis
+        )
+
+        referencia_confirmada = bool(
+            referencia_previa
+            or "RESPONDIO_REFERENCIA"
+            in hitos_comerciales
+            or respondio_referencia_en_turno
+        )
+
+        if not referencia_confirmada:
+            decision.update({
+                "accion": "PEDIR_REFERENCIA",
+                "motivo": (
+                    "La localidad ya fue validada y ahora "
+                    "corresponde conocer cómo supo del colegio "
+                    "o qué referencias tiene."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "REFERENCIA_COLEGIO"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 3: PROPUESTA GENERAL DE VALOR
+        # ----------------------------------------------------
+
+        if (
+            "RECIBIO_PRESENTACION_VALOR"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "PRESENTAR_PROPUESTA_VALOR",
+                "motivo": (
+                    "La zona y la referencia ya fueron "
+                    "confirmadas. Corresponde presentar la "
+                    "propuesta general de valor."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "PRESENTACION_VALOR"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 4: EXPLICAR MÉTODO FILADELFIA
+        # ----------------------------------------------------
+
+        if (
+            "RECIBIO_EXPLICACION_METODO"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "EXPLICAR_METODO_FILADELFIA",
+                "motivo": (
+                    "La familia ya recibió la presentación "
+                    "general. Corresponde explicar el "
+                    "Método Filadelfia."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "EXPLICACION_METODO"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 5: IDENTIFICAR ÁREA DE INTERÉS
+        # ----------------------------------------------------
+
+        area_interes_confirmada = bool(
+            areas_interes_previas
+            or "EXPRESO_AREA_INTERES"
+            in hitos_comerciales
+        )
+
+        if not area_interes_confirmada:
+            decision.update({
+                "accion": "PREGUNTAR_AREA_INTERES",
+                "motivo": (
+                    "La familia ya conoce la propuesta y el "
+                    "Método Filadelfia. Corresponde identificar "
+                    "qué área desea fortalecer."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "IDENTIFICACION_INTERES"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 6: RESPUESTA PERSONALIZADA
+        # ----------------------------------------------------
+
+        if (
+            "RECIBIO_RESPUESTA_PERSONALIZADA"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "PROFUNDIZAR_AREA_INTERES",
+                "motivo": (
+                    "La familia expresó el área que desea "
+                    "fortalecer. Corresponde responder con "
+                    "información institucional relacionada."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "PROFUNDIZACION_INTERES"
+
+            return decision
+
+        # ----------------------------------------------------
+        # PASO 7: INVITACIÓN A VISITA
+        # ----------------------------------------------------
+
+        if (
+            "ACEPTO_VISITA"
+            not in hitos_comerciales
+            and "CITA_SOLICITADA"
+            not in hitos_comerciales
+            and "CITA_CONFIRMADA"
+            not in hitos_comerciales
+        ):
+            decision.update({
+                "accion": "INVITAR_CITA",
+                "motivo": (
+                    "La familia ya recibió la información "
+                    "estratégica y corresponde invitarla "
+                    "a conocer el colegio presencialmente."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"][
+                "etapa_secuencial"
+            ] = "INVITACION_VISITA"
+
+            return decision
+
+    # ========================================================
+    # 9. COSTOS: SIEMPRE PROTEGIDOS POR ZONA
+    # ========================================================
     
     if (
         analisis_seguro.get("pide_costos")
@@ -6402,114 +6707,6 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
 
-    tiene_intencion_cita = (
-        analisis_seguro.get("pide_cita")
-        or analisis_seguro.get("intencion_principal")
-        in intenciones_cita
-        or any(
-            intencion in intenciones_cita
-            for intencion in analisis_seguro.get(
-                "intenciones_secundarias",
-                [],
-            )
-        )
-    )
-
-    if tiene_intencion_cita:
-        fecha_cita = analisis_seguro.get(
-            "fecha_cita_iso",
-            "",
-        )
-
-        hora_cita = analisis_seguro.get(
-            "hora_cita_24h",
-            "",
-        )
-
-        if not fecha_cita:
-            decision.update({
-                "accion": "PEDIR_FECHA_CITA",
-                "motivo": (
-                    "El prospecto quiere una cita, pero no "
-                    "proporcionó una fecha."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": zona_validada,
-            })
-
-            return decision
-
-        if not hora_cita:
-            decision.update({
-                "accion": "PEDIR_HORA_CITA",
-                "motivo": (
-                    "El prospecto proporcionó fecha, pero "
-                    "todavía falta el horario."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": zona_validada,
-            })
-
-            return decision
-
-        clasificacion_horario = (
-            clasificar_horario_cita(
-                hora_cita
-            )
-        )
-
-        if clasificacion_horario == "INVALIDO":
-            decision.update({
-                "accion": "PEDIR_HORA_CITA",
-                "motivo": (
-                    "El horario proporcionado no pudo "
-                    "interpretarse claramente."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": zona_validada,
-            })
-
-            return decision
-
-        if clasificacion_horario == "FUERA":
-            decision.update({
-                "accion": "CITA_FUERA_HORARIO",
-                "motivo": (
-                    "El horario solicitado está fuera del "
-                    "rango disponible para visitas."
-                ),
-                "requiere_admin": False,
-                "puede_compartir_costos": zona_validada,
-            })
-
-            return decision
-
-        if clasificacion_horario == "EVALUAR":
-            decision.update({
-                "accion": "CONSULTAR_ADMIN",
-                "motivo": (
-                    "El horario solicitado es posterior a "
-                    "las 13:00 y debe ser evaluado por "
-                    "administración."
-                ),
-                "requiere_admin": True,
-                "puede_compartir_costos": zona_validada,
-            })
-
-            return decision
-
-        decision.update({
-            "accion": "CONSULTAR_ADMIN",
-            "motivo": (
-                "El prospecto proporcionó una fecha y un "
-                "horario regular; la disponibilidad debe "
-                "confirmarla una persona administradora."
-            ),
-            "requiere_admin": True,
-            "puede_compartir_costos": zona_validada,
-        })
-
-        return decision
 
     # ========================================================
     # 10. DATOS POSTERIORES A LA CONFIRMACIÓN DE CITA
