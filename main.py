@@ -4244,13 +4244,13 @@ del contexto de la conversación.
 
 Cada elemento debe utilizar esta estructura:
 
-{
+{{
   "nombre": "",
   "nivel": "",
   "grado": "",
   "edad": null,
   "fecha_nacimiento": ""
-}
+}}
 
 REGLAS:
 
