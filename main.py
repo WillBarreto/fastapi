@@ -5671,6 +5671,63 @@ def respuesta_afirmativa_confirmacion_cita(
     }
 
     return texto in respuestas_afirmativas
+
+def formatear_fecha_cita_calendario(
+    fecha_cita_iso: str,
+) -> str:
+    """
+    Convierte una fecha YYYY-MM-DD a una representación
+    inequívoca y natural para confirmar una cita.
+
+    Ejemplo:
+    2026-08-28 -> viernes 28 de agosto
+    """
+
+    fecha_texto = str(
+        fecha_cita_iso or ""
+    ).strip()
+
+    if not fecha_texto:
+        return ""
+
+    try:
+        fecha = datetime.strptime(
+            fecha_texto,
+            "%Y-%m-%d",
+        ).date()
+    except ValueError:
+        return ""
+
+    dias = [
+        "lunes",
+        "martes",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sábado",
+        "domingo",
+    ]
+
+    meses = [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ]
+
+    return (
+        f"{dias[fecha.weekday()]} "
+        f"{fecha.day} de "
+        f"{meses[fecha.month - 1]}"
+    )
     
 
 def clasificar_horario_cita(
@@ -7540,6 +7597,8 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     return decision
+
+
 def construir_plan_respuesta_estructurada(
     analisis: Dict[str, Any],
     decision: Dict[str, Any],
@@ -8243,6 +8302,63 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
+    if accion == "CONFIRMAR_FECHA_CITA":
+
+        fecha_iso_confirmar = str(
+            datos_detectados.get(
+                "fecha_cita_iso_confirmar",
+                "",
+            )
+            or ""
+        ).strip()
+
+        hora_confirmar = str(
+            datos_detectados.get(
+                "hora_cita_confirmar",
+                "",
+            )
+            or ""
+        ).strip()
+
+        fecha_mostrable = (
+            formatear_fecha_cita_calendario(
+                fecha_iso_confirmar
+            )
+        )
+
+        plan.update({
+            "objetivo": (
+                "Confirmar con la familia la fecha calendario "
+                "y hora exactas interpretadas antes de consultar "
+                "disponibilidad con administración."
+            ),
+            "debe_incluir": [
+                (
+                    f"La fecha calendario interpretada: "
+                    f"{fecha_mostrable or fecha_iso_confirmar}."
+                ),
+                (
+                    f"El horario interpretado: "
+                    f"{hora_confirmar}."
+                ),
+                (
+                    "Una única pregunta de confirmación equivalente "
+                    "a: ¿correcto?"
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Decir todavía que la cita está confirmada.",
+                    "Decir que administración ya fue consultada.",
+                    "Prometer disponibilidad.",
+                    "Pedir nuevamente día y hora.",
+                ]
+            ),
+        })
+
+        return plan
+
     if accion == "PEDIR_FECHA_NACIMIENTO":
         plan.update({
             "objetivo": (
@@ -8528,6 +8644,86 @@ def generar_respuesta_final_estructurada(
         print(
             "📍 Ubicación institucional generada "
             "sin intervención de Gemini."
+        )
+
+        return resultado
+
+    # ========================================================
+    # CONFIRMACIÓN DETERMINISTA DE FECHA DE CITA
+    # ========================================================
+
+    if accion == "CONFIRMAR_FECHA_CITA":
+
+        datos_detectados = (
+            decision_segura.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_detectados,
+            dict,
+        ):
+            datos_detectados = {}
+
+        fecha_iso_confirmar = str(
+            datos_detectados.get(
+                "fecha_cita_iso_confirmar",
+                "",
+            )
+            or ""
+        ).strip()
+
+        hora_confirmar = str(
+            datos_detectados.get(
+                "hora_cita_confirmar",
+                "",
+            )
+            or ""
+        ).strip()
+
+        fecha_mostrable = (
+            formatear_fecha_cita_calendario(
+                fecha_iso_confirmar
+            )
+        )
+
+        if not fecha_mostrable:
+            resultado["error"] = (
+                "FECHA_CITA_CONFIRMACION_INVALIDA"
+            )
+            return resultado
+
+        if hora_confirmar:
+            respuesta_confirmacion = (
+                "Perfecto. Entonces sería para el "
+                f"{fecha_mostrable} a las "
+                f"{hora_confirmar}, ¿correcto?"
+            )
+        else:
+            respuesta_confirmacion = (
+                "Perfecto. Entonces sería para el "
+                f"{fecha_mostrable}, ¿correcto?"
+            )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_confirmacion,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "CONFIRMACION_FECHA_CITA_DETERMINISTA"
+            ),
+            "error": "",
+        })
+
+        print(
+            "📅 Fecha de cita enviada para confirmación "
+            "calendario sin intervención de Gemini: "
+            f"{respuesta_confirmacion}"
         )
 
         return resultado
