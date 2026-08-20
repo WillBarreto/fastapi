@@ -265,6 +265,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "INVITAR_CITA",
     "PEDIR_FECHA_CITA",
     "PEDIR_HORA_CITA",
+    "CONFIRMAR_FECHA_CITA",
     "CONSULTAR_ADMIN",
     "RECHAZAR_CAMPUS",
     "ORIENTAR_PRE_KINDER",
@@ -562,6 +563,7 @@ OBJETIVOS_PENDIENTES_VALIDOS = {
     "OBTENER_DECISION_VISITA",
     "OBTENER_FECHA_CITA",
     "OBTENER_HORA_CITA",
+    "CONFIRMAR_FECHA_CITA_CALENDARIO",
     "ESPERAR_CONFIRMACION_ADMIN",
     "OBTENER_DATOS_CITA",
     "ESPERAR_REACTIVACION_PROSPECTO",
@@ -4229,8 +4231,14 @@ ESPERANDO_CONFIRMACION_ADMIN:
 
 9. Si menciona una fecha relativa como hoy, mañana o un día de la
 semana:
-- conserva la frase en "hora_cita_texto"
-- conviértela a HH:MM en "hora_cita_24h" cuando sea inequívoca
+- conserva la expresión original en "fecha_cita_texto"
+- conviértela a una fecha calendario YYYY-MM-DD en "fecha_cita_iso"
+  cuando exista una interpretación razonable a partir de la fecha
+  actual proporcionada en el contexto
+- no confundas una expresión de fecha con "hora_cita_texto"
+- "hora_cita_texto" y "hora_cita_24h" se utilizan exclusivamente
+  para información de horario
+  
 
 10. Las visitas sólo se realizan de lunes a viernes.
 Marca "dia_no_laboral": true cuando la fecha propuesta sea sábado
