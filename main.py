@@ -6792,6 +6792,81 @@ def aplicar_reglas_negocio_estructuradas(
 
             return decision
 
+        # ----------------------------------------------------
+        # CONFIRMAR FECHA CALENDARIO SI LA EXPRESIÓN ES RELATIVA
+        # ----------------------------------------------------
+
+        fecha_cita_texto_original = str(
+            analisis_seguro.get(
+                "fecha_cita_texto",
+                "",
+            )
+            or ""
+        ).strip()
+
+        contexto_seguro_cita = (
+            contexto_comercial
+            if isinstance(
+                contexto_comercial,
+                dict,
+            )
+            else {}
+        )
+
+        objetivo_pendiente_actual = str(
+            contexto_seguro_cita.get(
+                "objetivo_pendiente",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        esperando_confirmacion_fecha = (
+            objetivo_pendiente_actual
+            == "CONFIRMAR_FECHA_CITA_CALENDARIO"
+        )
+
+        confirmacion_afirmativa = (
+            esperando_confirmacion_fecha
+            and respuesta_afirmativa_confirmacion_cita(
+                mensaje_usuario
+            )
+        )
+
+        if (
+            fecha_cita_requiere_confirmacion_calendario(
+                fecha_cita_texto_original
+            )
+            and not confirmacion_afirmativa
+        ):
+            decision.update({
+                "accion": "CONFIRMAR_FECHA_CITA",
+                "motivo": (
+                    "El prospecto proporcionó una expresión "
+                    "relativa de fecha. Antes de consultar "
+                    "disponibilidad con administración debe "
+                    "confirmarse la fecha calendario interpretada."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "fecha_cita_texto_original": (
+                    fecha_cita_texto_original
+                ),
+                "fecha_cita_iso_confirmar": (
+                    fecha_cita
+                ),
+                "hora_cita_confirmar": (
+                    hora_cita
+                ),
+            })
+
+            return decision
+            
+
         if clasificacion_horario == "EVALUAR":
             decision.update({
                 "accion": "CONSULTAR_ADMIN",
@@ -11024,6 +11099,7 @@ def calcular_transicion_comercial_post_envio(
     elif accion in {
         "PEDIR_FECHA_CITA",
         "PEDIR_HORA_CITA",
+        "CONFIRMAR_FECHA_CITA",
     }:
         transicion.update({
             "etapa_conversacional": (
@@ -11114,6 +11190,9 @@ def calcular_transicion_comercial_post_envio(
             ),
             "PEDIR_HORA_CITA": (
                 "OBTENER_HORA_CITA"
+            ),
+            "CONFIRMAR_FECHA_CITA": (
+                "CONFIRMAR_FECHA_CITA_CALENDARIO"
             ),
             "CONSULTAR_ADMIN": (
                 "ESPERAR_CONFIRMACION_ADMIN"
