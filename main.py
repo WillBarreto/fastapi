@@ -6247,6 +6247,135 @@ def crear_respuesta_saludo_simple_estructurado(
         f"{saludo_contextual}. "
         "¿En qué podemos ayudarle?"
     )
+
+
+def obtener_niveles_costos_solicitados(
+    analisis: Dict[str, Any],
+    decision: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """
+    Obtiene uno o varios niveles escolares relevantes para
+    una solicitud de costos.
+
+    Prioridad:
+    1. nivel explícito del análisis;
+    2. niveles de los alumnos detectados;
+    3. niveles previamente preservados en la decisión.
+
+    El resultado nunca contiene duplicados ni niveles
+    fuera del catálogo autorizado.
+    """
+
+    analisis_seguro = (
+        analisis
+        if isinstance(analisis, dict)
+        else {}
+    )
+
+    decision_segura = (
+        decision
+        if isinstance(decision, dict)
+        else {}
+    )
+
+    equivalencias = {
+        "kinder": "Kínder",
+        "kínder": "Kínder",
+        "preescolar": "Kínder",
+        "primaria": "Primaria",
+        "secundaria": "Secundaria",
+    }
+
+    niveles_validos = {
+        "Kínder",
+        "Primaria",
+        "Secundaria",
+    }
+
+    niveles = []
+
+    def agregar_nivel(valor):
+        texto = str(
+            valor or ""
+        ).strip()
+
+        if not texto:
+            return
+
+        nivel_normalizado = equivalencias.get(
+            texto.lower(),
+            texto,
+        )
+
+        if (
+            nivel_normalizado in niveles_validos
+            and nivel_normalizado not in niveles
+        ):
+            niveles.append(
+                nivel_normalizado
+            )
+
+    # Nivel principal.
+    agregar_nivel(
+        analisis_seguro.get(
+            "nivel",
+            "",
+        )
+    )
+
+    # Uno o varios alumnos.
+    alumnos = analisis_seguro.get(
+        "alumnos",
+        [],
+    )
+
+    if isinstance(alumnos, list):
+        for alumno in alumnos:
+            if not isinstance(
+                alumno,
+                dict,
+            ):
+                continue
+
+            agregar_nivel(
+                alumno.get(
+                    "nivel",
+                    "",
+                )
+            )
+
+    # Datos conservados por Python.
+    datos_decision = decision_segura.get(
+        "datos_detectados",
+        {},
+    )
+
+    if isinstance(
+        datos_decision,
+        dict,
+    ):
+        niveles_previos = datos_decision.get(
+            "niveles_costos",
+            [],
+        )
+
+        if isinstance(
+            niveles_previos,
+            list,
+        ):
+            for nivel in niveles_previos:
+                agregar_nivel(
+                    nivel
+                )
+
+        agregar_nivel(
+            datos_decision.get(
+                "nivel_costos",
+                "",
+            )
+        )
+
+    return niveles
     
 
 def aplicar_reglas_negocio_estructuradas(
@@ -7626,13 +7755,12 @@ def aplicar_reglas_negocio_estructuradas(
         "OBTENER_NIVEL_PARA_COSTOS",
     }:
 
-        nivel_costos = str(
-            analisis_seguro.get(
-                "nivel",
-                "",
+        niveles_costos = (
+            obtener_niveles_costos_solicitados(
+                analisis_seguro,
+                decision,
             )
-            or ""
-        ).strip()
+        )
 
         # ----------------------------------------------------
         # Si todavía estamos esperando la zona, primero debe
@@ -7668,7 +7796,7 @@ def aplicar_reglas_negocio_estructuradas(
         # Zona validada, pero todavía no sabemos el nivel.
         # ----------------------------------------------------
 
-        if not nivel_costos:
+        if not niveles_costos:
             decision.update({
                 "accion": "PEDIR_NIVEL_COSTOS",
                 "motivo": (
@@ -7708,7 +7836,12 @@ def aplicar_reglas_negocio_estructuradas(
         })
 
         decision["datos_detectados"].update({
-            "nivel_costos": nivel_costos,
+            "niveles_costos": niveles_costos,
+            "nivel_costos": (
+                niveles_costos[0]
+                if len(niveles_costos) == 1
+                else ""
+            ),
             "intencion_costos_pendiente_resuelta": True,
         })
 
@@ -7983,14 +8116,52 @@ def aplicar_reglas_negocio_estructuradas(
 
             return decision
 
+        niveles_costos = (
+            obtener_niveles_costos_solicitados(
+                analisis_seguro,
+                decision,
+            )
+        )
+
+        if not niveles_costos:
+            decision.update({
+                "accion": "PEDIR_NIVEL_COSTOS",
+                "motivo": (
+                    "La zona está validada y el prospecto "
+                    "solicitó colegiaturas, pero todavía "
+                    "no indicó el nivel escolar."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "objetivo_pendiente_sugerido": (
+                    "OBTENER_NIVEL_PARA_COSTOS"
+                ),
+                "intencion_costos_pendiente": True,
+            })
+
+            return decision
+
         decision.update({
             "accion": "RESPONDER_COSTOS",
             "motivo": (
-                "El prospecto pidió costos y la zona ya fue "
-                "validada."
+                "El prospecto pidió costos, la zona ya fue "
+                "validada y se conocen los niveles solicitados."
             ),
             "requiere_admin": False,
             "puede_compartir_costos": True,
+        })
+
+        decision["datos_detectados"].update({
+            "niveles_costos": niveles_costos,
+            "nivel_costos": (
+                niveles_costos[0]
+                if len(niveles_costos) == 1
+                else ""
+            ),
         })
 
         return decision
@@ -9377,6 +9548,357 @@ def generar_respuesta_final_estructurada(
         print(
             "💰 Nivel solicitado para continuar "
             "consulta pendiente de costos."
+        )
+
+        return resultado
+
+    # ========================================================
+    # RESPUESTA DETERMINISTA DE COSTOS
+    # ========================================================
+
+    if accion == "RESPONDER_COSTOS":
+
+        niveles_costos = (
+            obtener_niveles_costos_solicitados(
+                analisis_seguro,
+                decision_segura,
+            )
+        )
+
+        if not niveles_costos:
+            resultado.update({
+                "generada": True,
+                "respuesta": (
+                    "Con gusto le comparto la información. "
+                    "¿Para qué nivel requiere conocer la "
+                    "colegiatura: kínder, primaria o secundaria?"
+                ),
+                "modelo_usado": "",
+                "intentos": 0,
+                "uso_fallback_seguro": True,
+                "errores_validacion": [
+                    "NIVEL_COSTOS_NO_DISPONIBLE"
+                ],
+                "tipo_respuesta": (
+                    "COSTOS_FALLBACK_NIVEL"
+                ),
+                "error": (
+                    "NIVEL_COSTOS_NO_DISPONIBLE"
+                ),
+            })
+
+            return resultado
+
+        precios_autorizados = []
+
+        for nivel in niveles_costos:
+
+            precio = (
+                obtener_colegiatura_autorizada(
+                    nivel
+                )
+            )
+
+            if not precio:
+                resultado.update({
+                    "generada": True,
+                    "respuesta": (
+                        "En este momento no me es posible "
+                        "consultar la colegiatura autorizada "
+                        "para uno de los niveles solicitados. "
+                        "Permítame verificar la información "
+                        "antes de compartirle un monto."
+                    ),
+                    "modelo_usado": "",
+                    "intentos": 0,
+                    "uso_fallback_seguro": True,
+                    "errores_validacion": [
+                        "PRECIO_AUTORIZADO_NO_DISPONIBLE"
+                    ],
+                    "tipo_respuesta": (
+                        "COSTOS_FALLBACK_SEGURO"
+                    ),
+                    "error": (
+                        "PRECIO_AUTORIZADO_NO_DISPONIBLE"
+                    ),
+                })
+
+                print(
+                    "❌ RESPONDER_COSTOS bloqueado: "
+                    "no existe colegiatura autorizada "
+                    f"para nivel='{nivel}'."
+                )
+
+                return resultado
+
+            precios_autorizados.append(
+                precio
+            )
+
+        configuracion = (
+            cargar_configuracion_precios()
+        )
+
+        opciones_comerciales = (
+            configuracion.get(
+                "opciones_comerciales",
+                {},
+            )
+            if isinstance(
+                configuracion,
+                dict,
+            )
+            else {}
+        )
+
+        if not isinstance(
+            opciones_comerciales,
+            dict,
+        ):
+            opciones_comerciales = {}
+
+        # ----------------------------------------------------
+        # INTRODUCCIÓN COMERCIAL
+        # ----------------------------------------------------
+
+        partes_respuesta = [
+            (
+                "Entendemos que al elegir una escuela no "
+                "solamente importa encontrar el mejor programa "
+                "para sus hijos, sino también una opción que "
+                "sea viable para la familia."
+            ),
+            (
+                "Por eso, en Colegio Valle de Filadelfia "
+                "contamos con diferentes alternativas que "
+                "pueden hacer la colegiatura mucho más "
+                "accesible de lo que inicialmente podría imaginar:"
+            ),
+        ]
+
+        # ----------------------------------------------------
+        # OPCIONES COMERCIALES AUTORIZADAS
+        # ----------------------------------------------------
+
+        opciones_texto = []
+
+        if opciones_comerciales.get(
+            "beca_alto_desempeno"
+        ):
+            opciones_texto.append(
+                "- Opciones de beca de acuerdo con el perfil "
+                "y desempeño del alumno."
+            )
+
+        if opciones_comerciales.get(
+            "beca_hermanos"
+        ):
+            opciones_texto.append(
+                "- Beneficios especiales para hermanos."
+            )
+
+        planes_pago = (
+            opciones_comerciales.get(
+                "planes_pago",
+                [],
+            )
+        )
+
+        if isinstance(
+            planes_pago,
+            list,
+        ) and planes_pago:
+
+            planes_limpios = [
+                str(plan).strip()
+                for plan in planes_pago
+                if str(plan).strip()
+            ]
+
+            if planes_limpios:
+                if len(planes_limpios) == 1:
+                    planes_texto = (
+                        planes_limpios[0]
+                    )
+                else:
+                    planes_texto = (
+                        ", ".join(
+                            planes_limpios[:-1]
+                        )
+                        + " o "
+                        + planes_limpios[-1]
+                    )
+
+                opciones_texto.append(
+                    "- Planes de pago flexibles: "
+                    f"{planes_texto}."
+                )
+
+        if opciones_comerciales.get(
+            "descuento_pago_anticipado"
+        ):
+            opciones_texto.append(
+                "- Descuentos por pago anticipado "
+                "de anualidad."
+            )
+
+        medios_pago = (
+            opciones_comerciales.get(
+                "medios_pago",
+                [],
+            )
+        )
+
+        if isinstance(
+            medios_pago,
+            list,
+        ) and medios_pago:
+
+            medios_limpios = [
+                str(medio).strip()
+                for medio in medios_pago
+                if str(medio).strip()
+            ]
+
+            if medios_limpios:
+                if len(medios_limpios) == 1:
+                    medios_texto = (
+                        medios_limpios[0]
+                    )
+                else:
+                    medios_texto = (
+                        ", ".join(
+                            medios_limpios[:-1]
+                        )
+                        + " y "
+                        + medios_limpios[-1]
+                    )
+
+                opciones_texto.append(
+                    "- Diferentes formas de pago: "
+                    f"{medios_texto}."
+                )
+
+        if opciones_texto:
+            partes_respuesta.append(
+                "\n".join(
+                    opciones_texto
+                )
+            )
+
+        # ----------------------------------------------------
+        # PRECIOS: ÚNICAMENTE NIVELES SOLICITADOS
+        # ----------------------------------------------------
+
+        lineas_precios = []
+
+        for precio in precios_autorizados:
+
+            nivel = str(
+                precio.get(
+                    "nivel",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            importe = precio.get(
+                "importe"
+            )
+
+            moneda = str(
+                precio.get(
+                    "moneda",
+                    "MXN",
+                )
+                or "MXN"
+            ).strip()
+
+            importe_formateado = (
+                f"${importe:,.0f}"
+            )
+
+            nombre_mostrable = (
+                "Preescolar"
+                if nivel == "Kínder"
+                else nivel
+            )
+
+            lineas_precios.append(
+                f"{nombre_mostrable}: "
+                f"aproximadamente "
+                f"{importe_formateado} "
+                f"{moneda} mensuales"
+            )
+
+        encabezado_precios = (
+            "La colegiatura actualmente es:"
+            if len(
+                lineas_precios
+            ) == 1
+            else "Las colegiaturas actualmente son:"
+        )
+
+        partes_respuesta.append(
+            encabezado_precios
+            + "\n\n"
+            + "\n".join(
+                lineas_precios
+            )
+        )
+
+        # ----------------------------------------------------
+        # ENCUADRE FINAL
+        # ----------------------------------------------------
+
+        partes_respuesta.append(
+            "Y algo importante: antes de pensar que el "
+            "colegio puede estar fuera de su presupuesto, "
+            "vale la pena conocer qué beneficios podrían "
+            "aplicar en su caso."
+        )
+
+        partes_respuesta.append(
+            "En una visita podemos explicarle personalmente "
+            "nuestro modelo educativo, todo lo que incluye "
+            "la colegiatura y revisar las opciones de beca, "
+            "descuentos y forma de pago disponibles para "
+            "su familia."
+        )
+
+        partes_respuesta.append(
+            "¿Le gustaría agendar una visita y conocer "
+            "más sobre becas y descuentos?"
+        )
+
+        respuesta_costos = "\n\n".join(
+            partes_respuesta
+        )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_costos,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "COSTOS_AUTORIZADOS_DETERMINISTAS"
+            ),
+            "error": "",
+        })
+
+        print(
+            "💰 Costos institucionales generados "
+            "desde precios.json: "
+            + ", ".join(
+                (
+                    f"{precio.get('nivel')}="
+                    f"{precio.get('importe')}"
+                )
+                for precio
+                in precios_autorizados
+            )
         )
 
         return resultado
