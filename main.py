@@ -19786,7 +19786,13 @@ def procesar_datos_registro_cita(
             or ""
         ).strip()
 
-        if not nombre_alumno:
+        if not any(
+            [
+                nombre_alumno,
+                nivel_alumno,
+                grado_alumno,
+            ]
+        ):
             continue
 
         alumnos_normalizados.append({
@@ -19797,25 +19803,177 @@ def procesar_datos_registro_cita(
 
     if alumnos_normalizados:
 
+        # ----------------------------------------------------
+        # FUSIONAR CON ALUMNOS YA ASOCIADOS A LA CITA
+        # ----------------------------------------------------
+
+        alumnos_previos = (
+            obtener_alumnos_cita_persistidos(
+                contact
+            )
+        )
+
+        if not isinstance(
+            alumnos_previos,
+            list,
+        ):
+            alumnos_previos = []
+
+        alumnos_fusionados = []
+
+        # ----------------------------------------------------
+        # CASO PRINCIPAL:
+        # YA EXISTE ESTRUCTURA DE ALUMNOS EN LA CITA
+        # ----------------------------------------------------
+
+        if alumnos_previos:
+
+            for indice, alumno_previo in enumerate(
+                alumnos_previos
+            ):
+
+                if not isinstance(
+                    alumno_previo,
+                    dict,
+                ):
+                    alumno_previo = {}
+
+                nombre_previo = str(
+                    alumno_previo.get(
+                        "nombre",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                nivel_previo = str(
+                    alumno_previo.get(
+                        "nivel",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                grado_previo = str(
+                    alumno_previo.get(
+                        "grado",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                alumno_nuevo = (
+                    alumnos_normalizados[indice]
+                    if indice < len(
+                        alumnos_normalizados
+                    )
+                    else {}
+                )
+
+                nombre_nuevo = str(
+                    alumno_nuevo.get(
+                        "nombre",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                nivel_nuevo = str(
+                    alumno_nuevo.get(
+                        "nivel",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                grado_nuevo = str(
+                    alumno_nuevo.get(
+                        "grado",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                alumnos_fusionados.append({
+                    "nombre": (
+                        nombre_nuevo
+                        or nombre_previo
+                    ),
+                    "nivel": (
+                        nivel_previo
+                        or nivel_nuevo
+                    ),
+                    "grado": (
+                        grado_previo
+                        or grado_nuevo
+                    ),
+                })
+
+            # Si Gemini detectó alumnos adicionales que realmente
+            # no existían en la estructura previa, no los perdemos.
+            if (
+                len(alumnos_normalizados)
+                > len(alumnos_previos)
+            ):
+
+                for alumno_extra in (
+                    alumnos_normalizados[
+                        len(alumnos_previos):
+                    ]
+                ):
+
+                    alumnos_fusionados.append(
+                        alumno_extra
+                    )
+
+        # ----------------------------------------------------
+        # SI NO HABÍA ESTRUCTURA PREVIA, USAMOS LO DETECTADO
+        # ----------------------------------------------------
+
+        else:
+            alumnos_fusionados = (
+                alumnos_normalizados
+            )
+
         set_note_value(
             contact,
             "ALUMNOS_CITA",
             json.dumps(
-                alumnos_normalizados,
+                alumnos_fusionados,
                 ensure_ascii=False,
             ),
         )
 
-        # Compatibilidad con funciones anteriores que todavía
-        # consultan NOMBRE_ALUMNO.
-        set_note_value(
-            contact,
-            "NOMBRE_ALUMNO",
-            alumnos_normalizados[0][
-                "nombre"
-            ],
+        # Compatibilidad con funciones anteriores.
+        primer_alumno_con_nombre = next(
+            (
+                alumno
+                for alumno in alumnos_fusionados
+                if str(
+                    alumno.get(
+                        "nombre",
+                        "",
+                    )
+                    or ""
+                ).strip()
+            ),
+            None,
         )
 
+        if primer_alumno_con_nombre:
+
+            set_note_value(
+                contact,
+                "NOMBRE_ALUMNO",
+                str(
+                    primer_alumno_con_nombre.get(
+                        "nombre",
+                        "",
+                    )
+                    or ""
+                ).strip(),
+            )
+            
     elif datos.get("alumno"):
 
         # Compatibilidad defensiva por si el extractor anterior
