@@ -18867,6 +18867,142 @@ REGLAS OBLIGATORIAS:
         )
 
         return datos
+
+def obtener_alumnos_cita_persistidos(
+    contact,
+) -> List[Dict[str, str]]:
+    """
+    Recupera la lista estructurada de alumnos asociados
+    a una cita.
+
+    Prioridad:
+    1. ALUMNOS_CITA.
+    2. Campos singulares anteriores como compatibilidad.
+    """
+
+    alumnos = []
+
+    alumnos_json = str(
+        get_note_value(
+            contact,
+            "ALUMNOS_CITA",
+        )
+        or ""
+    ).strip()
+
+    if alumnos_json:
+        try:
+            alumnos_crudos = json.loads(
+                alumnos_json
+            )
+
+            if isinstance(
+                alumnos_crudos,
+                list,
+            ):
+                for alumno in alumnos_crudos:
+
+                    if not isinstance(
+                        alumno,
+                        dict,
+                    ):
+                        continue
+
+                    nombre = str(
+                        alumno.get(
+                            "nombre",
+                            "",
+                        )
+                        or ""
+                    ).strip()
+
+                    nivel = str(
+                        alumno.get(
+                            "nivel",
+                            "",
+                        )
+                        or ""
+                    ).strip()
+
+                    grado = str(
+                        alumno.get(
+                            "grado",
+                            "",
+                        )
+                        or ""
+                    ).strip()
+
+                    if not any(
+                        [
+                            nombre,
+                            nivel,
+                            grado,
+                        ]
+                    ):
+                        continue
+
+                    alumnos.append({
+                        "nombre": nombre,
+                        "nivel": nivel,
+                        "grado": grado,
+                    })
+
+        except Exception as e:
+            print(
+                "⚠️ No se pudo leer ALUMNOS_CITA: "
+                f"{e}"
+            )
+
+    if alumnos:
+        return alumnos
+
+    # --------------------------------------------------------
+    # COMPATIBILIDAD CON REGISTROS ANTERIORES
+    # --------------------------------------------------------
+
+    nombre = str(
+        get_note_value(
+            contact,
+            "NOMBRE_ALUMNO",
+        )
+        or ""
+    ).strip()
+
+    nivel = str(
+        get_note_value(
+            contact,
+            "NIVEL_INTERES",
+        )
+        or ""
+    ).strip()
+
+    grado = str(
+        get_note_value(
+            contact,
+            "GRADO_INTERES",
+        )
+        or get_note_value(
+            contact,
+            "GRADO_SOLICITADO",
+        )
+        or ""
+    ).strip()
+
+    if any(
+        [
+            nombre,
+            nivel,
+            grado,
+        ]
+    ):
+        alumnos.append({
+            "nombre": nombre,
+            "nivel": nivel,
+            "grado": grado,
+        })
+
+    return alumnos
+    
 def construir_resumen_cita_admin(contact) -> str:
     """
     Construye el resumen final que se envía al WhatsApp maestro.
@@ -19126,7 +19262,8 @@ def procesar_datos_registro_cita(
                 ),
             )
 
-    if datos.get("nivel"):        set_note_value(
+    if datos.get("nivel"):
+        set_note_value(
             contact,
             "NIVEL_INTERES",
             datos["nivel"],
@@ -19145,37 +19282,25 @@ def procesar_datos_registro_cita(
     # RECONSTRUIR DATOS PERSISTIDOS
     # --------------------------------------------------------
 
-    padres = (
-        get_note_value(
-            contact,
-            "NOMBRE_PADRES",
-        )
-        or get_note_value(
-            contact,
-            "NOMBRE_TUTOR",
+    padres = str(
+        (
+            get_note_value(
+                contact,
+                "NOMBRE_PADRES",
+            )
+            or get_note_value(
+                contact,
+                "NOMBRE_TUTOR",
+            )
+            or ""
         )
     ).strip()
 
-    alumno = get_note_value(
-        contact,
-        "NOMBRE_ALUMNO",
-    ).strip()
-
-    nivel = get_note_value(
-        contact,
-        "NIVEL_INTERES",
-    ).strip()
-
-    grado = (
-        get_note_value(
-            contact,
-            "GRADO_INTERES",
+    alumnos_cita = (
+        obtener_alumnos_cita_persistidos(
+            contact
         )
-        or get_note_value(
-            contact,
-            "GRADO_SOLICITADO",
-        )
-    ).strip()
+    )
 
     # --------------------------------------------------------
     # DETERMINAR ÚNICAMENTE DATOS FALTANTES
@@ -19188,21 +19313,85 @@ def procesar_datos_registro_cita(
             "su nombre completo"
         )
 
-    if not alumno:
+    if not alumnos_cita:
         faltantes.append(
             "el nombre completo de su hijo(a)"
         )
 
-    if not nivel:
-        faltantes.append(
-            "el nivel educativo de interés"
+    else:
+        total_alumnos = len(
+            alumnos_cita
         )
 
-    if nivel and not grado:
-        faltantes.append(
-            "el grado específico al que ingresaría"
-        )
+        for indice, alumno_cita in enumerate(
+            alumnos_cita,
+            start=1,
+        ):
+            nombre = str(
+                alumno_cita.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
 
+            nivel = str(
+                alumno_cita.get(
+                    "nivel",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            grado = str(
+                alumno_cita.get(
+                    "grado",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if total_alumnos == 1:
+
+                if not nombre:
+                    faltantes.append(
+                        "el nombre completo de su hijo(a)"
+                    )
+
+                if not nivel:
+                    faltantes.append(
+                        "el nivel educativo de interés"
+                    )
+
+                if nivel and not grado:
+                    faltantes.append(
+                        "el grado específico al que ingresaría"
+                    )
+
+            else:
+
+                etiqueta = (
+                    f"del alumno {indice}"
+                )
+
+                if not nombre:
+                    faltantes.append(
+                        "el nombre completo "
+                        f"{etiqueta}"
+                    )
+
+                if not nivel:
+                    faltantes.append(
+                        "el nivel educativo "
+                        f"{etiqueta}"
+                    )
+
+                if nivel and not grado:
+                    faltantes.append(
+                        "el grado específico "
+                        f"{etiqueta}"
+                    )
+                    
     # --------------------------------------------------------
     # TODAVÍA FALTAN DATOS
     # --------------------------------------------------------
@@ -19365,8 +19554,7 @@ def procesar_datos_registro_cita(
 
     return {
         "status": "datos_cita_completos",
-        "nivel": nivel,
-        "grado": grado,
+        "alumnos": alumnos_cita,
     }
     
 
