@@ -10056,55 +10056,162 @@ def construir_contexto_comercial_desde_contacto(
     )
 
     # --------------------------------------------------------
-    # DATOS DEL ALUMNO
+    # DATOS DE UNO O VARIOS ALUMNOS
     # --------------------------------------------------------
 
-    nombre_alumno = leer_nota(
-        "NOMBRE_ALUMNO",
+    alumnos_estructurados_json = leer_nota(
+        "ALUMNOS_ESTRUCTURADOS",
     )
 
-    nivel_interes = leer_nota(
-        "NIVEL_INTERES",
-        "NIVEL",
-    )
+    alumnos_contexto = []
 
-    grado_interes = leer_nota(
-        "GRADO_INTERES",
-        "GRADO_SOLICITADO",
-        "ULTIMO_GRADO_CURSADO",
-    )
+    if alumnos_estructurados_json:
 
-    edad_alumno = leer_nota(
-        "EDAD_ALUMNO",
-        "EDAD_AL_CORTE",
-    )
+        try:
+            alumnos_crudos = json.loads(
+                alumnos_estructurados_json
+            )
 
-    fecha_nacimiento = leer_nota(
-        "FECHA_NACIMIENTO_ISO",
-        "FECHA_NACIMIENTO",
-    )
+            if isinstance(
+                alumnos_crudos,
+                list,
+            ):
 
-    if any(
-        [
-            nombre_alumno,
-            nivel_interes,
-            grado_interes,
-            edad_alumno,
-            fecha_nacimiento,
-        ]
-    ):
-        alumno = {
-            "nombre": nombre_alumno,
-            "nivel_interes": nivel_interes,
-            "grado_interes": grado_interes,
-            "edad": edad_alumno,
-            "fecha_nacimiento": fecha_nacimiento,
-        }
+                for alumno_crudo in alumnos_crudos:
 
-        contexto["alumnos"] = [
-            alumno
-        ]
+                    if not isinstance(
+                        alumno_crudo,
+                        dict,
+                    ):
+                        continue
 
+                    nombre = str(
+                        alumno_crudo.get(
+                            "nombre",
+                            "",
+                        )
+                        or ""
+                    ).strip()
+
+                    nivel_interes = str(
+                        alumno_crudo.get(
+                            "nivel_interes",
+                            alumno_crudo.get(
+                                "nivel",
+                                "",
+                            ),
+                        )
+                        or ""
+                    ).strip()
+
+                    grado_interes = str(
+                        alumno_crudo.get(
+                            "grado_interes",
+                            alumno_crudo.get(
+                                "grado",
+                                "",
+                            ),
+                        )
+                        or ""
+                    ).strip()
+
+                    edad = alumno_crudo.get(
+                        "edad"
+                    )
+
+                    fecha_nacimiento = str(
+                        alumno_crudo.get(
+                            "fecha_nacimiento",
+                            "",
+                        )
+                        or ""
+                    ).strip()
+
+                    if not any(
+                        [
+                            nombre,
+                            nivel_interes,
+                            grado_interes,
+                            edad is not None,
+                            fecha_nacimiento,
+                        ]
+                    ):
+                        continue
+
+                    alumnos_contexto.append({
+                        "nombre": nombre,
+                        "nivel_interes": (
+                            nivel_interes
+                        ),
+                        "grado_interes": (
+                            grado_interes
+                        ),
+                        "edad": edad,
+                        "fecha_nacimiento": (
+                            fecha_nacimiento
+                        ),
+                    })
+
+        except Exception as e:
+            print(
+                "⚠️ No se pudo leer "
+                "ALUMNOS_ESTRUCTURADOS: "
+                f"{e}"
+            )
+
+    # --------------------------------------------------------
+    # COMPATIBILIDAD CON DATOS SINGULARES ANTERIORES
+    # --------------------------------------------------------
+
+    if not alumnos_contexto:
+
+        nombre_alumno = leer_nota(
+            "NOMBRE_ALUMNO",
+        )
+
+        nivel_interes = leer_nota(
+            "NIVEL_INTERES",
+            "NIVEL",
+        )
+
+        grado_interes = leer_nota(
+            "GRADO_INTERES",
+            "GRADO_SOLICITADO",
+            "ULTIMO_GRADO_CURSADO",
+        )
+
+        edad_alumno = leer_nota(
+            "EDAD_ALUMNO",
+            "EDAD_AL_CORTE",
+        )
+
+        fecha_nacimiento = leer_nota(
+            "FECHA_NACIMIENTO_ISO",
+            "FECHA_NACIMIENTO",
+        )
+
+        if any(
+            [
+                nombre_alumno,
+                nivel_interes,
+                grado_interes,
+                edad_alumno,
+                fecha_nacimiento,
+            ]
+        ):
+
+            alumnos_contexto.append({
+                "nombre": nombre_alumno,
+                "nivel_interes": nivel_interes,
+                "grado_interes": grado_interes,
+                "edad": edad_alumno,
+                "fecha_nacimiento": (
+                    fecha_nacimiento
+                ),
+            })
+
+    contexto["alumnos"] = alumnos_contexto
+    
     # --------------------------------------------------------
     # MEMORIA COMERCIAL YA DISPONIBLE
     # --------------------------------------------------------
@@ -11477,10 +11584,123 @@ def persistir_resultado_estructurado(
             analisis.get("nombre_tutor"),
         )
 
-        guardar_valor(
-            "NOMBRE_ALUMNO",
-            analisis.get("nombre_alumno"),
+        # ----------------------------------------------------
+        # UNO O VARIOS ALUMNOS DEL CONTEXTO COMERCIAL
+        # ----------------------------------------------------
+
+        alumnos_analisis = analisis.get(
+            "alumnos",
+            [],
         )
+
+        if not isinstance(
+            alumnos_analisis,
+            list,
+        ):
+            alumnos_analisis = []
+
+        alumnos_para_persistir = []
+
+        for alumno_analisis in alumnos_analisis:
+
+            if not isinstance(
+                alumno_analisis,
+                dict,
+            ):
+                continue
+
+            nombre_alumno = str(
+                alumno_analisis.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            nivel_alumno = str(
+                alumno_analisis.get(
+                    "nivel",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            grado_alumno = str(
+                alumno_analisis.get(
+                    "grado",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            edad_alumno = (
+                alumno_analisis.get(
+                    "edad"
+                )
+            )
+
+            fecha_nacimiento_alumno = str(
+                alumno_analisis.get(
+                    "fecha_nacimiento",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not any(
+                [
+                    nombre_alumno,
+                    nivel_alumno,
+                    grado_alumno,
+                    edad_alumno is not None,
+                    fecha_nacimiento_alumno,
+                ]
+            ):
+                continue
+
+            alumnos_para_persistir.append({
+                "nombre": nombre_alumno,
+                "nivel_interes": nivel_alumno,
+                "grado_interes": grado_alumno,
+                "edad": edad_alumno,
+                "fecha_nacimiento": (
+                    fecha_nacimiento_alumno
+                ),
+            })
+
+        if alumnos_para_persistir:
+
+            guardar_valor(
+                "ALUMNOS_ESTRUCTURADOS",
+                json.dumps(
+                    alumnos_para_persistir,
+                    ensure_ascii=False,
+                ),
+            )
+
+            # Compatibilidad con el código anterior.
+            primer_alumno = (
+                alumnos_para_persistir[0]
+            )
+
+            if primer_alumno.get("nombre"):
+                guardar_valor(
+                    "NOMBRE_ALUMNO",
+                    primer_alumno.get(
+                        "nombre"
+                    ),
+                )
+
+        elif analisis.get("nombre_alumno"):
+
+            # Compatibilidad defensiva con resultados
+            # estructurados anteriores.
+            guardar_valor(
+                "NOMBRE_ALUMNO",
+                analisis.get(
+                    "nombre_alumno"
+                ),
+            )
 
         # ----------------------------------------------------
         # DATOS DE CITA
