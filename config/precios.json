@@ -2,9 +2,9 @@
   "version": "2026-2027",
   "moneda": "MXN",
   "colegiaturas_mensuales": {
-    "Kínder": 3800,
-    "Primaria": 5800,
-    "Secundaria": 5800
+    "Kínder": 3200,
+    "Primaria": 4800,
+    "Secundaria": 5000
   },
   "numero_mensualidades": 10,
   "opciones_comerciales": {
