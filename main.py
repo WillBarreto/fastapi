@@ -19307,9 +19307,6 @@ REGLAS OBLIGATORIAS:
                     )
                 )
 
-                if not nombre:
-                    continue
-
                 nivel = str(
                     alumno_ia.get(
                         "nivel",
@@ -19326,12 +19323,21 @@ REGLAS OBLIGATORIAS:
                     or ""
                 ).strip()
 
+                if not any(
+                    [
+                        nombre,
+                        nivel,
+                        grado,
+                    ]
+                ):
+                    continue
+
                 alumnos_normalizados.append({
                     "nombre": nombre,
                     "nivel": nivel,
                     "grado": grado,
                 })
-
+                
         if alumnos_normalizados:
 
             datos["alumnos"] = (
