@@ -261,6 +261,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "CONTINUAR_INFORMES",
     "RESPONDER_TEMA",
     "RESPONDER_COSTOS",
+    "PEDIR_NIVEL_COSTOS",
     "RESPONDER_UBICACION",
     "INVITAR_CITA",
     "PEDIR_FECHA_CITA",
@@ -558,6 +559,8 @@ HITOS_COMERCIALES_VALIDOS = {
 OBJETIVOS_PENDIENTES_VALIDOS = {
     "",
     "OBTENER_ZONA",
+    "OBTENER_ZONA_PARA_COSTOS",
+    "OBTENER_NIVEL_PARA_COSTOS",
     "OBTENER_REFERENCIA_COLEGIO",
     "OBTENER_AREA_INTERES",
     "OBTENER_DECISION_VISITA",
@@ -7396,6 +7399,121 @@ def aplicar_reglas_negocio_estructuradas(
     ):
         intenciones_secundarias = []
 
+    # ========================================================
+    # CONTINUIDAD DE UNA SOLICITUD DE COSTOS
+    # ========================================================
+    #
+    # Si anteriormente se pidió la zona exclusivamente para
+    # poder atender una solicitud de colegiaturas, al recibir
+    # la zona no debemos regresar al embudo genérico.
+    #
+    # La prioridad es:
+    # 1. validar zona;
+    # 2. conocer nivel si todavía falta;
+    # 3. responder costos.
+    # ========================================================
+
+    objetivo_pendiente_actual = str(
+        contexto_secuencial.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if objetivo_pendiente_actual in {
+        "OBTENER_ZONA_PARA_COSTOS",
+        "OBTENER_NIVEL_PARA_COSTOS",
+    }:
+
+        nivel_costos = str(
+            analisis_seguro.get(
+                "nivel",
+                "",
+            )
+            or ""
+        ).strip()
+
+        # ----------------------------------------------------
+        # Si todavía estamos esperando la zona, primero debe
+        # quedar validada.
+        # ----------------------------------------------------
+
+        if (
+            objetivo_pendiente_actual
+            == "OBTENER_ZONA_PARA_COSTOS"
+            and not zona_validada
+        ):
+            decision.update({
+                "accion": "PEDIR_ZONA",
+                "motivo": (
+                    "La solicitud de costos sigue pendiente "
+                    "porque aún no se ha validado la localidad."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "objetivo_pendiente_sugerido": (
+                    "OBTENER_ZONA_PARA_COSTOS"
+                ),
+                "intencion_costos_pendiente": True,
+            })
+
+            return decision
+
+        # ----------------------------------------------------
+        # Zona validada, pero todavía no sabemos el nivel.
+        # ----------------------------------------------------
+
+        if not nivel_costos:
+            decision.update({
+                "accion": "PEDIR_NIVEL_COSTOS",
+                "motivo": (
+                    "La zona ya fue validada y la familia tiene "
+                    "una solicitud de costos pendiente, pero aún "
+                    "falta conocer el nivel escolar."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "objetivo_pendiente_sugerido": (
+                    "OBTENER_NIVEL_PARA_COSTOS"
+                ),
+                "intencion_costos_pendiente": True,
+            })
+
+            return decision
+
+        # ----------------------------------------------------
+        # Ya tenemos zona válida + nivel.
+        # Ahora sí respondemos la solicitud original.
+        # ----------------------------------------------------
+
+        decision.update({
+            "accion": "RESPONDER_COSTOS",
+            "motivo": (
+                "La familia tenía una solicitud de costos "
+                "pendiente y ya se cuenta con zona validada "
+                "y nivel escolar."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": True,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "nivel_costos": nivel_costos,
+            "intencion_costos_pendiente_resuelta": True,
+        })
+
+        return decision
+
     tiene_proceso_comercial_iniciado = bool(
         intencion_principal == "PEDIR_INFORMES"
         or "PEDIR_INFORMES"
@@ -7654,6 +7772,13 @@ def aplicar_reglas_negocio_estructuradas(
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
+            })
+
+            decision["datos_detectados"].update({
+                "objetivo_pendiente_sugerido": (
+                    "OBTENER_ZONA_PARA_COSTOS"
+                ),
+                "intencion_costos_pendiente": True,
             })
 
             return decision
@@ -8376,6 +8501,34 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
+    if accion == "PEDIR_NIVEL_COSTOS":
+        plan.update({
+            "objetivo": (
+                "Solicitar únicamente el nivel escolar necesario "
+                "para responder una solicitud de colegiaturas "
+                "que ya está pendiente."
+            ),
+            "debe_incluir": [
+                (
+                    "Una sola pregunta breve para saber si la "
+                    "información corresponde a Kínder, Primaria "
+                    "o Secundaria."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Volver a pedir la zona.",
+                    "Preguntar cómo conoció el colegio.",
+                    "Presentar todavía la propuesta educativa.",
+                    "Invitar a una visita.",
+                    "Compartir costos antes de conocer el nivel.",
+                    "Hacer más de una pregunta.",
+                ]
+            ),
+        })
+
+        return plan
 
     if accion == "RESPONDER_COSTOS":
         plan.update({
@@ -8993,6 +9146,37 @@ def generar_respuesta_final_estructurada(
         print(
             "📍 Ubicación institucional generada "
             "sin intervención de Gemini."
+        )
+
+        return resultado
+
+    # ========================================================
+    # NIVEL PARA SOLICITUD DE COSTOS
+    # ========================================================
+
+    if accion == "PEDIR_NIVEL_COSTOS":
+
+        respuesta_nivel_costos = (
+            "Claro. ¿Para qué nivel requiere la información "
+            "de colegiaturas: kínder, primaria o secundaria?"
+        )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_nivel_costos,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "SOLICITUD_NIVEL_COSTOS_DETERMINISTA"
+            ),
+            "error": "",
+        })
+
+        print(
+            "💰 Nivel solicitado para continuar "
+            "consulta pendiente de costos."
         )
 
         return resultado
@@ -11539,6 +11723,15 @@ def calcular_transicion_comercial_post_envio(
             ),
         })
 
+    elif accion == "PEDIR_NIVEL_COSTOS":
+        transicion.update({
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se solicitó el nivel escolar para completar "
+                "una consulta pendiente de costos."
+            ),
+        })
+
     elif accion == "PEDIR_REFERENCIA":
         transicion.update({
             "etapa_conversacional": (
@@ -11766,12 +11959,40 @@ def calcular_transicion_comercial_post_envio(
             ),
         }
 
-        transicion[
-            "objetivo_pendiente"
-        ] = objetivos_por_accion.get(
-            accion,
-            "",
+        datos_decision = decision.get(
+            "datos_detectados",
+            {},
         )
+
+        if not isinstance(
+            datos_decision,
+            dict,
+        ):
+            datos_decision = {}
+
+        objetivo_pendiente_sugerido = str(
+            datos_decision.get(
+                "objetivo_pendiente_sugerido",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        if (
+            objetivo_pendiente_sugerido
+            in OBJETIVOS_PENDIENTES_VALIDOS
+        ):
+            transicion[
+                "objetivo_pendiente"
+            ] = objetivo_pendiente_sugerido
+
+        else:
+            transicion[
+                "objetivo_pendiente"
+            ] = objetivos_por_accion.get(
+                accion,
+                "",
+            )
 
     # ========================================================
     # VALIDACIÓN FINAL
