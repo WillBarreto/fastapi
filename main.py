@@ -22821,6 +22821,7 @@ async def test_gemini(message: str = "Hola, ¿cuáles son los horarios?"):
         "api_key_configurada": bool(GEMINI_API_KEY)
     }
 
+
 # ================= INICIALIZACIÓN =================
 if __name__ == "__main__":
     import uvicorn
