@@ -20232,12 +20232,62 @@ def procesar_datos_registro_cita(
     # DATOS COMPLETOS
     # --------------------------------------------------------
 
-    respuesta = (
-        "Perfecto. "
-        "Su cita ha quedado registrada. "
-        "Le esperamos con mucho gusto."
-    )
+    fecha_cita_confirmada = str(
+        (
+            get_note_value(
+                contact,
+                "FECHA_CITA",
+            )
+            or get_note_value(
+                contact,
+                "FECHA_CITA_TEXTO",
+            )
+            or get_note_value(
+                contact,
+                "FECHA_CITA_ISO",
+            )
+            or ""
+        )
+    ).strip()
 
+    hora_cita_confirmada = str(
+        get_note_value(
+            contact,
+            "HORA_CITA",
+        )
+        or ""
+    ).strip()
+
+    if (
+        fecha_cita_confirmada
+        and hora_cita_confirmada
+    ):
+        respuesta = (
+            "Perfecto, su cita ha quedado registrada "
+            f"para el {fecha_cita_confirmada} "
+            f"a las {hora_cita_confirmada}. "
+            "Los esperamos."
+        )
+
+    elif fecha_cita_confirmada:
+        respuesta = (
+            "Perfecto, su cita ha quedado registrada "
+            f"para el {fecha_cita_confirmada}. "
+            "Los esperamos."
+        )
+
+    elif hora_cita_confirmada:
+        respuesta = (
+            "Perfecto, su cita ha quedado registrada "
+            f"a las {hora_cita_confirmada}. "
+            "Los esperamos."
+        )
+
+    else:
+        respuesta = (
+            "Perfecto, su cita ha quedado registrada. "
+            "Los esperamos."
+        )
     resultado = enviar_respuesta_twilio(
         from_number,
         respuesta,
