@@ -19007,77 +19007,149 @@ def construir_resumen_cita_admin(contact) -> str:
     """
     Construye el resumen final que se envía al WhatsApp maestro.
 
-    Mantiene separados:
-    - nivel educativo;
-    - grado específico;
-    - fecha de la cita;
-    - hora de la cita.
+    Soporta uno o varios alumnos asociados a la misma cita.
     """
 
-    padres = (
+    padres = str(
+        (
+            get_note_value(
+                contact,
+                "NOMBRE_PADRES",
+            )
+            or get_note_value(
+                contact,
+                "NOMBRE_TUTOR",
+            )
+            or ""
+        )
+    ).strip()
+
+    fecha_cita = str(
+        (
+            get_note_value(
+                contact,
+                "FECHA_CITA",
+            )
+            or get_note_value(
+                contact,
+                "FECHA_CITA_TEXTO",
+            )
+            or get_note_value(
+                contact,
+                "FECHA_CITA_ISO",
+            )
+            or ""
+        )
+    ).strip()
+
+    hora_cita = str(
         get_note_value(
             contact,
-            "NOMBRE_PADRES",
+            "HORA_CITA",
         )
-        or get_note_value(
-            contact,
-            "NOMBRE_TUTOR",
-        )
+        or ""
     ).strip()
 
-    alumno = get_note_value(
-        contact,
-        "NOMBRE_ALUMNO",
-    ).strip()
-
-    nivel = get_note_value(
-        contact,
-        "NIVEL_INTERES",
-    ).strip()
-
-    grado = (
-        get_note_value(
-            contact,
-            "GRADO_INTERES",
+    alumnos_cita = (
+        obtener_alumnos_cita_persistidos(
+            contact
         )
-        or get_note_value(
-            contact,
-            "GRADO_SOLICITADO",
+    )
+
+    lineas_alumnos = []
+
+    if alumnos_cita:
+
+        total_alumnos = len(
+            alumnos_cita
         )
-    ).strip()
 
-    fecha_cita = (
-        get_note_value(
-            contact,
-            "FECHA_CITA",
-        )
-        or get_note_value(
-            contact,
-            "FECHA_CITA_TEXTO",
-        )
-        or get_note_value(
-            contact,
-            "FECHA_CITA_ISO",
-        )
-    ).strip()
+        for indice, alumno in enumerate(
+            alumnos_cita,
+            start=1,
+        ):
 
-    hora_cita = get_note_value(
-        contact,
-        "HORA_CITA",
-    ).strip()
+            nombre = str(
+                alumno.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
 
-    return f"""📌 Cita registrada
+            nivel = str(
+                alumno.get(
+                    "nivel",
+                    "",
+                )
+                or ""
+            ).strip()
 
-Tutor: {padres or "Pendiente"}
-Cel: {contact.phone_number}
+            grado = str(
+                alumno.get(
+                    "grado",
+                    "",
+                )
+                or ""
+            ).strip()
 
-Alumno: {alumno or "Pendiente"}
-Nivel: {nivel or "Pendiente"}
-Grado: {grado or "Pendiente"}
+            if total_alumnos == 1:
 
-Fecha: {fecha_cita or "Pendiente"}
-Hora: {hora_cita or "Pendiente"}"""
-    
+                lineas_alumnos.extend([
+                    (
+                        "Alumno: "
+                        f"{nombre or 'Pendiente'}"
+                    ),
+                    (
+                        "Nivel: "
+                        f"{nivel or 'Pendiente'}"
+                    ),
+                    (
+                        "Grado: "
+                        f"{grado or 'Pendiente'}"
+                    ),
+                ])
+
+            else:
+
+                lineas_alumnos.extend([
+                    (
+                        f"Alumno {indice}: "
+                        f"{nombre or 'Pendiente'}"
+                    ),
+                    (
+                        "Nivel: "
+                        f"{nivel or 'Pendiente'}"
+                    ),
+                    (
+                        "Grado: "
+                        f"{grado or 'Pendiente'}"
+                    ),
+                ])
+
+                if indice < total_alumnos:
+                    lineas_alumnos.append("")
+
+    else:
+
+        lineas_alumnos.extend([
+            "Alumno: Pendiente",
+            "Nivel: Pendiente",
+            "Grado: Pendiente",
+        ])
+
+    bloque_alumnos = "\n".join(
+        lineas_alumnos
+    )
+
+    return (
+        "📌 Cita registrada\n\n"
+        f"Tutor: {padres or 'Pendiente'}\n"
+        f"Cel: {contact.phone_number}\n\n"
+        f"{bloque_alumnos}\n\n"
+        f"Fecha: {fecha_cita or 'Pendiente'}\n"
+        f"Hora: {hora_cita or 'Pendiente'}"
+    )    
 
 def enviar_resumen_cita_admin_whatsapp(contact):
     """
