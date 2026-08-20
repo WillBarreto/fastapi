@@ -5518,6 +5518,161 @@ def fecha_cita_es_no_laboral(
         6,
     }
 
+def fecha_cita_requiere_confirmacion_calendario(
+    fecha_cita_texto: str,
+) -> bool:
+    """
+    Determina si la fecha propuesta por el prospecto fue expresada
+    de forma relativa o potencialmente ambigua y, por lo tanto,
+    debe confirmarse mediante una fecha calendario explícita antes
+    de consultar disponibilidad con administración.
+
+    Ejemplos que requieren confirmación:
+    - viernes
+    - este viernes
+    - el viernes
+    - próximo viernes
+    - el próximo viernes
+    - mañana
+    - pasado mañana
+
+    Ejemplos que no requieren confirmación:
+    - 28 de agosto
+    - viernes 28 de agosto
+    - 28/08/2026
+    - 2026-08-28
+    """
+
+    texto = normalizar_texto_para_deteccion(
+        fecha_cita_texto
+    )
+
+    if not texto:
+        return False
+
+    # --------------------------------------------------------
+    # FECHAS CALENDARIO EXPLÍCITAS
+    # --------------------------------------------------------
+
+    # YYYY-MM-DD
+    if re.search(
+        r"\b20\d{2}-\d{1,2}-\d{1,2}\b",
+        texto,
+    ):
+        return False
+
+    # DD/MM/YYYY, DD-MM-YYYY o variantes sin año.
+    if re.search(
+        r"\b\d{1,2}[/-]\d{1,2}"
+        r"(?:[/-]\d{2,4})?\b",
+        texto,
+    ):
+        return False
+
+    meses = [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ]
+
+    menciona_mes = any(
+        mes in texto
+        for mes in meses
+    )
+
+    menciona_dia_numerico = bool(
+        re.search(
+            r"\b(?:[1-9]|[12]\d|3[01])\b",
+            texto,
+        )
+    )
+
+    if (
+        menciona_mes
+        and menciona_dia_numerico
+    ):
+        return False
+
+    # --------------------------------------------------------
+    # EXPRESIONES RELATIVAS
+    # --------------------------------------------------------
+
+    if any(
+        expresion in texto
+        for expresion in [
+            "hoy",
+            "manana",
+            "pasado manana",
+        ]
+    ):
+        return True
+
+    dias_semana = [
+        "lunes",
+        "martes",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "domingo",
+    ]
+
+    if any(
+        dia in texto
+        for dia in dias_semana
+    ):
+        return True
+
+    return False
+
+
+def respuesta_afirmativa_confirmacion_cita(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta respuestas afirmativas simples cuando el bot está
+    esperando que el prospecto confirme una fecha calendario.
+
+    Sólo debe utilizarse cuando el objetivo pendiente sea
+    CONFIRMAR_FECHA_CITA_CALENDARIO.
+    """
+
+    texto = normalizar_texto_para_deteccion(
+        mensaje_usuario
+    )
+
+    if not texto:
+        return False
+
+    respuestas_afirmativas = {
+        "si",
+        "si correcto",
+        "si es correcto",
+        "correcto",
+        "correcta",
+        "asi es",
+        "exacto",
+        "exactamente",
+        "de acuerdo",
+        "confirmo",
+        "confirmado",
+        "esta bien",
+        "esta perfecto",
+        "perfecto",
+    }
+
+    return texto in respuestas_afirmativas
+    
+
 def clasificar_horario_cita(
     hora_cita_24h: str,
 ) -> str:
