@@ -21255,6 +21255,10 @@ REGLAS:
 - Si el administrador dice que un día u horario no está disponible, explícalo claramente.
 - Si el administrador propone alternativas, inclúyelas de forma clara.
 - No omitas información importante de la respuesta interna del administrador.
+- Cuando la cita quede confirmada y todavía deban solicitarse datos para completar el registro, no cierres la conversación.
+- No utilices frases de despedida como "Que tenga un excelente día", "Estamos a sus órdenes", "Cualquier duda hágamelo saber", "Si requiere indicaciones para llegar" o expresiones equivalentes.
+- Evita cualquier despedida antes de que se hayan solicitado y recibido los datos faltantes del tutor y del alumno.
+- Si después de esta respuesta se solicitarán datos para completar el registro de la cita, termina la confirmación de forma natural y abierta, sin despedirte del prospecto.
 - No dejes frases incompletas.
 - No termines el mensaje con frases como "se encontrará", "a las", "para", "con", "que", "de" o "en".
 - Antes de responder, verifica que el mensaje final tenga sentido completo.
