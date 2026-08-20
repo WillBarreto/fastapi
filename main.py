@@ -18998,15 +18998,135 @@ def procesar_datos_registro_cita(
             datos["padres"],
         )
 
-    if datos.get("alumno"):
+    # --------------------------------------------------------
+    # PERSISTIR UNO O VARIOS ALUMNOS DE LA CITA
+    # --------------------------------------------------------
+
+    alumnos_detectados = datos.get(
+        "alumnos",
+        [],
+    )
+
+    if not isinstance(
+        alumnos_detectados,
+        list,
+    ):
+        alumnos_detectados = []
+
+    alumnos_normalizados = []
+
+    for alumno_detectado in alumnos_detectados:
+
+        if not isinstance(
+            alumno_detectado,
+            dict,
+        ):
+            continue
+
+        nombre_alumno = str(
+            alumno_detectado.get(
+                "nombre",
+                "",
+            )
+            or ""
+        ).strip()
+
+        nivel_alumno = str(
+            alumno_detectado.get(
+                "nivel",
+                "",
+            )
+            or ""
+        ).strip()
+
+        grado_alumno = str(
+            alumno_detectado.get(
+                "grado",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not nombre_alumno:
+            continue
+
+        alumnos_normalizados.append({
+            "nombre": nombre_alumno,
+            "nivel": nivel_alumno,
+            "grado": grado_alumno,
+        })
+
+    if alumnos_normalizados:
+
+        set_note_value(
+            contact,
+            "ALUMNOS_CITA",
+            json.dumps(
+                alumnos_normalizados,
+                ensure_ascii=False,
+            ),
+        )
+
+        # Compatibilidad con funciones anteriores que todavía
+        # consultan NOMBRE_ALUMNO.
         set_note_value(
             contact,
             "NOMBRE_ALUMNO",
-            datos["alumno"],
+            alumnos_normalizados[0][
+                "nombre"
+            ],
         )
 
-    if datos.get("nivel"):
-        set_note_value(
+    elif datos.get("alumno"):
+
+        # Compatibilidad defensiva por si el extractor anterior
+        # entrega únicamente el campo singular.
+        nombre_alumno_singular = str(
+            datos.get(
+                "alumno",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if nombre_alumno_singular:
+
+            set_note_value(
+                contact,
+                "NOMBRE_ALUMNO",
+                nombre_alumno_singular,
+            )
+
+            set_note_value(
+                contact,
+                "ALUMNOS_CITA",
+                json.dumps(
+                    [
+                        {
+                            "nombre": (
+                                nombre_alumno_singular
+                            ),
+                            "nivel": str(
+                                datos.get(
+                                    "nivel",
+                                    "",
+                                )
+                                or ""
+                            ).strip(),
+                            "grado": str(
+                                datos.get(
+                                    "grado",
+                                    "",
+                                )
+                                or ""
+                            ).strip(),
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+            )
+
+    if datos.get("nivel"):        set_note_value(
             contact,
             "NIVEL_INTERES",
             datos["nivel"],
