@@ -19129,6 +19129,32 @@ NIVEL YA CONOCIDO EN EL CONTACTO:
 GRADO YA CONOCIDO EN EL CONTACTO:
 {grado_conocido or "No especificado"}
 
+ALUMNOS YA ASOCIADOS A ESTA CITA:
+
+{alumnos_cita_previos_json if alumnos_cita_previos else "No hay alumnos estructurados previamente."}
+
+IMPORTANTE:
+
+La lista anterior representa los alumnos que ya fueron identificados
+durante la conversación antes de confirmar la cita.
+
+Cuando exista esa lista:
+
+- Consérvala como estructura base.
+- Conserva el mismo número de alumnos.
+- Conserva el mismo orden.
+- Conserva cualquier nivel o grado que ya exista.
+- Completa únicamente la información nueva que aporte el prospecto.
+- No elimines un alumno porque el mensaje actual no repita su nivel.
+- No cambies de lugar los alumnos.
+- No asignes un nombre a un alumno si la asociación no puede
+  determinarse razonablemente.
+- Si el prospecto identifica claramente a qué alumno corresponde
+  cada nombre, completa el nombre en ese elemento.
+- Si responde los nombres en el mismo orden en que fueron
+  solicitados, conserva ese mismo orden.
+- No mezcles dos alumnos en un mismo elemento.
+
 TAREA:
 
 Devuelve únicamente un objeto JSON válido con esta estructura:
