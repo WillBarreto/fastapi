@@ -18938,6 +18938,33 @@ def extraer_datos_registro_cita(
         or ""
     ).strip()
 
+    # ========================================================
+    # ALUMNOS YA ASOCIADOS A LA CITA
+    # ========================================================
+    #
+    # Si la cita ya contiene uno o varios alumnos, esta
+    # estructura es la referencia principal para asociar los
+    # nuevos nombres sin perder nivel, grado ni orden.
+    # ========================================================
+
+    alumnos_cita_previos = (
+        obtener_alumnos_cita_persistidos(
+            contact
+        )
+    )
+
+    if not isinstance(
+        alumnos_cita_previos,
+        list,
+    ):
+        alumnos_cita_previos = []
+
+    alumnos_cita_previos_json = json.dumps(
+        alumnos_cita_previos,
+        ensure_ascii=False,
+        indent=2,
+    )
+
     datos = {
         "padres": "",
         "alumno": "",
