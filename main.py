@@ -18135,6 +18135,198 @@ def enriquecer_fecha_cita_en_mensaje(mensaje: str) -> str:
             texto = texto[:fin_dia] + f" {fecha_texto}" + texto[fin_dia:]
 
     return texto
+
+def construir_solicitud_datos_cita(
+    contact,
+) -> str:
+    """
+    Construye una sola solicitud con únicamente los datos
+    faltantes después de que administración confirma la cita.
+
+    Soporta uno o varios alumnos asociados a la misma visita.
+    """
+
+    nombre_tutor = str(
+        (
+            get_note_value(
+                contact,
+                "NOMBRE_PADRES",
+            )
+            or get_note_value(
+                contact,
+                "NOMBRE_TUTOR",
+            )
+            or ""
+        )
+    ).strip()
+
+    alumnos_cita = (
+        obtener_alumnos_cita_persistidos(
+            contact
+        )
+    )
+
+    faltantes = []
+
+    if not nombre_tutor:
+        faltantes.append(
+            "su nombre completo"
+        )
+
+    if not alumnos_cita:
+
+        faltantes.append(
+            "el nombre completo de su hijo(a)"
+        )
+
+        nivel_interes = str(
+            get_note_value(
+                contact,
+                "NIVEL_INTERES",
+            )
+            or ""
+        ).strip()
+
+        grado_interes = str(
+            (
+                get_note_value(
+                    contact,
+                    "GRADO_INTERES",
+                )
+                or get_note_value(
+                    contact,
+                    "GRADO_SOLICITADO",
+                )
+                or ""
+            )
+        ).strip()
+
+        if not nivel_interes:
+            faltantes.append(
+                "el nivel educativo de interés"
+            )
+
+        if (
+            nivel_interes
+            and not grado_interes
+        ):
+            faltantes.append(
+                "el grado específico al que ingresaría"
+            )
+
+    else:
+
+        total_alumnos = len(
+            alumnos_cita
+        )
+
+        for indice, alumno in enumerate(
+            alumnos_cita,
+            start=1,
+        ):
+
+            nombre = str(
+                alumno.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            nivel = str(
+                alumno.get(
+                    "nivel",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            grado = str(
+                alumno.get(
+                    "grado",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if total_alumnos == 1:
+
+                if not nombre:
+                    faltantes.append(
+                        "el nombre completo de su hijo(a)"
+                    )
+
+                if not nivel:
+                    faltantes.append(
+                        "el nivel educativo de interés"
+                    )
+
+                if (
+                    nivel
+                    and not grado
+                ):
+                    faltantes.append(
+                        "el grado específico al que ingresaría"
+                    )
+
+            else:
+
+                referencia_alumno = (
+                    f"del alumno {indice}"
+                )
+
+                if not nombre:
+                    faltantes.append(
+                        "el nombre completo "
+                        f"{referencia_alumno}"
+                    )
+
+                if not nivel:
+                    faltantes.append(
+                        "el nivel educativo "
+                        f"{referencia_alumno}"
+                    )
+
+                if (
+                    nivel
+                    and not grado
+                ):
+                    faltantes.append(
+                        "el grado específico "
+                        f"{referencia_alumno}"
+                    )
+
+    if not faltantes:
+        return ""
+
+    if len(faltantes) == 1:
+
+        faltantes_texto = (
+            faltantes[0]
+        )
+
+    elif len(faltantes) == 2:
+
+        faltantes_texto = (
+            f"{faltantes[0]} y "
+            f"{faltantes[1]}"
+        )
+
+    else:
+
+        faltantes_texto = (
+            ", ".join(
+                faltantes[:-1]
+            )
+            + " y "
+            + faltantes[-1]
+        )
+
+    return (
+        "Para completar el registro de su cita, "
+        "¿me podría apoyar por favor con "
+        f"{faltantes_texto}?"
+    )
     
 
 def extraer_hora_cita_confirmada(
