@@ -7970,11 +7970,23 @@ def construir_plan_respuesta_estructurada(
     if accion == "PEDIR_FECHA_CITA":
         plan.update({
             "objetivo": (
-                "Solicitar el día de lunes a viernes en que "
-                "la familia desea visitar el colegio."
+                "Solicitar en un solo mensaje el día y la hora "
+                "en que la familia desea visitar el colegio."
             ),
             "debe_incluir": [
-                "Una pregunta concreta para conocer la fecha deseada.",
+                (
+                    "Indicar que las visitas se reciben de lunes "
+                    "a viernes de 8:00 a. m. a 1:00 p. m."
+                ),
+                (
+                    "Solicitar en una sola pregunta tanto el día "
+                    "como la hora que le funcionan mejor."
+                ),
+                (
+                    "Si por cuestiones laborales requiere un horario "
+                    "posterior, indicar que puede evaluarse una "
+                    "alternativa hasta máximo las 4:00 p. m."
+                ),
             ],
         })
 
@@ -8370,8 +8382,12 @@ def generar_respuesta_final_estructurada(
 
         if accion == "PEDIR_FECHA_CITA":
             return (
-                "¿Qué día de lunes a viernes le gustaría visitar "
-                "el colegio?"
+                "Con gusto podemos recibirle de lunes a viernes "
+                "en un horario de 8:00 a. m. a 1:00 p. m. "
+                "Si por cuestiones laborales necesita un horario "
+                "posterior, podemos evaluar una alternativa hasta "
+                "máximo las 4:00 p. m.\n\n"
+                "¿Qué día y hora le funcionan mejor para su visita?"
             )
 
         if accion == "PEDIR_HORA_CITA":
@@ -18779,18 +18795,27 @@ def extraer_hora_cita_confirmada(
             if not coincidencia:
                 continue
 
-            frase = coincidencia.group(0).strip()
+            hora = str(
+                coincidencia.group(2)
+                or ""
+            ).strip()
 
-            frase = re.sub(
-                r"\s+",
-                " ",
-                frase,
-            ).strip(" ,.;")
+            periodo = str(
+                coincidencia.group(3)
+                or ""
+            ).strip()
 
-            if frase.endswith(":"):
+            if not hora:
                 continue
 
-            return frase
+            if hora.endswith(":"):
+                continue
+
+            hora_completa = (
+                f"{hora} {periodo}".strip()
+            )
+
+            return hora_completa
 
         return ""
 
