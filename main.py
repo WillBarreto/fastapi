@@ -2021,14 +2021,39 @@ prefiere ALUMNOS_ACTUALES y describe el trámite en
 
 6. PROVEEDORES
 
-Utiliza PROVEEDORES cuando una persona o empresa quiera:
+Utiliza PROVEEDORES cuando una persona, negocio o empresa
+esté ofreciendo al colegio un producto, servicio, cotización,
+venta, suministro, colaboración comercial o reunión de trabajo.
+
+Incluye expresamente casos como:
 
 - ofrecer productos;
-- ofrecer servicios;
+- ofrecer servicios profesionales;
+- ofrecer uniformes escolares;
+- ofrecer mobiliario, tecnología, alimentos, materiales o insumos;
 - presentar una cotización;
+- mejorar precios o costos actuales del colegio;
+- solicitar una cita para presentar un producto o servicio;
 - solicitar contacto para ventas;
 - participar como proveedor;
 - establecer una alianza comercial.
+
+REGLA CRÍTICA:
+
+Si la persona está tratando de vender, ofrecer o presentar algo
+AL COLEGIO, la categoría debe ser PROVEEDORES.
+
+La palabra "cita" no convierte este caso en ADMISIONES.
+
+La palabra "uniformes" no convierte este caso en
+ALUMNOS_ACTUALES.
+
+La palabra "costos", "precios" o "presupuesto" no significa que
+esté solicitando colegiaturas cuando el contexto indica que está
+ofreciendo un producto o servicio.
+
+No utilices AMBIGUO cuando el mensaje deja claro que la persona
+está ofreciendo comercialmente algo al colegio.
 
 7. OTRO_CONFIGURADO
 
@@ -14969,10 +14994,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 "Continuaremos la atención por este medio."
             ),
             "PROVEEDORES": (
-                "Gracias por comunicarse con nosotros. "
-                "Identificamos que desea presentar un producto, "
-                "servicio o propuesta comercial. Su mensaje "
-                "requiere revisión antes de continuar la atención."
+                "Muchas gracias por comunicarse con nosotros "
+                "y por considerar al Colegio Valle de Filadelfia. "
+                "Para propuestas de productos, servicios, "
+                "proveeduría o colaboraciones comerciales, "
+                "le pedimos por favor comunicarse directamente "
+                "por WhatsApp al 55 4812 3885. "
+                "Por ese medio podrán dar seguimiento a su propuesta."
             ),
             "OTRO_CONFIGURADO": (
                 "Gracias por escribirnos. Identificamos el motivo "
