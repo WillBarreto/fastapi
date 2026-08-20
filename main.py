@@ -18138,8 +18138,6 @@ def enriquecer_fecha_cita_en_mensaje(mensaje: str) -> str:
     
 
 def extraer_hora_cita_confirmada(
-
-def extraer_hora_cita_confirmada(
     mensaje_confirmacion: str,
     respaldo: str = "",
 ) -> str:
