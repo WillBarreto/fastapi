@@ -8612,14 +8612,44 @@ def construir_plan_respuesta_estructurada(
         plan.update({
             "objetivo": (
                 "Solicitar el horario en que la familia desea "
-                "realizar la visita."
+                "realizar la visita, procurando orientar las citas "
+                "preferentemente al horario de 8:00 a. m. a 1:00 p. m."
             ),
             "debe_incluir": [
-                "Una pregunta concreta para conocer el horario deseado.",
+                (
+                    "Indicar de forma natural que preferentemente "
+                    "recibimos las visitas entre 8:00 a. m. y "
+                    "1:00 p. m., ya que es el horario más práctico "
+                    "para brindarles una mejor atención."
+                ),
+                (
+                    "Aclarar brevemente que, si lo requieren, "
+                    "también podemos recibirles posteriormente, "
+                    "hasta máximo las 4:00 p. m."
+                ),
+                (
+                    "Cerrar con una sola pregunta para conocer "
+                    "qué horario les funciona mejor."
+                ),
             ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    (
+                        "Presentar las 4:00 p. m. como si fuera "
+                        "el único horario disponible por la tarde."
+                    ),
+                    (
+                        "Dar a entender que sólo existen dos bloques "
+                        "rígidos: mañana de 8:00 a 1:00 y exactamente "
+                        "4:00 p. m."
+                    ),
+                ]
+            ),
         })
 
         return plan
+        
 
     if accion == "CONFIRMAR_FECHA_CITA":
 
@@ -21214,6 +21244,8 @@ REGLAS:
 - No menciones que eres IA.
 - No uses lenguaje interno.
 - Si el administrador confirma disponibilidad, confirma la cita con día y hora.
+- Cuando el administrador confirme definitivamente una cita, no inicies con saludos como "Hola", "¡Hola!", "Buenos días", "Buenas tardes" o similares.
+- En una confirmación definitiva de cita, inicia directamente con una frase natural como "Le escribo para confirmarle que su visita ha quedado programada".
 - Si el administrador propone otro horario disponible, explica que ese horario está disponible y pide confirmación.
 - Si el administrador propone alternativas sin confirmar disponibilidad definitiva, preséntalas como opciones posibles y pide al prospecto cuál le acomoda mejor.
 - Si el administrador rechaza la disponibilidad, pide una alternativa de día u hora.
