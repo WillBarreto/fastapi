@@ -20502,6 +20502,157 @@ Te muestro nuevamente el menú actualizado:
             )
 
         # ----------------------------------------------------
+        # INICIALIZAR ALUMNOS ASOCIADOS A LA CITA
+        # ----------------------------------------------------
+        #
+        # Al confirmarse definitivamente la visita, convertimos
+        # los alumnos ya identificados durante la conversación
+        # comercial en la estructura específica de la cita.
+        #
+        # No sustituimos ALUMNOS_CITA si ya existe, para evitar
+        # perder nombres o datos completados previamente.
+        # ----------------------------------------------------
+
+        alumnos_cita_existentes_raw = str(
+            get_note_value(
+                contact,
+                "ALUMNOS_CITA",
+            )
+            or ""
+        ).strip()
+
+        if not alumnos_cita_existentes_raw:
+
+            contexto_cita = (
+                construir_contexto_comercial_desde_contacto(
+                    contact
+                )
+            )
+
+            alumnos_comerciales = (
+                contexto_cita.get(
+                    "alumnos",
+                    [],
+                )
+                if isinstance(
+                    contexto_cita,
+                    dict,
+                )
+                else []
+            )
+
+            if not isinstance(
+                alumnos_comerciales,
+                list,
+            ):
+                alumnos_comerciales = []
+
+            alumnos_para_cita = []
+
+            for alumno_comercial in alumnos_comerciales:
+
+                if not isinstance(
+                    alumno_comercial,
+                    dict,
+                ):
+                    continue
+
+                nombre = str(
+                    alumno_comercial.get(
+                        "nombre",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                nivel = str(
+                    alumno_comercial.get(
+                        "nivel_interes",
+                        alumno_comercial.get(
+                            "nivel",
+                            "",
+                        ),
+                    )
+                    or ""
+                ).strip()
+
+                grado = str(
+                    alumno_comercial.get(
+                        "grado_interes",
+                        alumno_comercial.get(
+                            "grado",
+                            "",
+                        ),
+                    )
+                    or ""
+                ).strip()
+
+                if not any(
+                    [
+                        nombre,
+                        nivel,
+                        grado,
+                    ]
+                ):
+                    continue
+
+                alumnos_para_cita.append({
+                    "nombre": nombre,
+                    "nivel": nivel,
+                    "grado": grado,
+                })
+
+            if alumnos_para_cita:
+
+                set_note_value(
+                    contact,
+                    "ALUMNOS_CITA",
+                    json.dumps(
+                        alumnos_para_cita,
+                        ensure_ascii=False,
+                    ),
+                )
+
+                # Compatibilidad con funciones antiguas que
+                # todavía consultan campos singulares.
+                primer_alumno_cita = (
+                    alumnos_para_cita[0]
+                )
+
+                if primer_alumno_cita.get(
+                    "nombre"
+                ):
+                    set_note_value(
+                        contact,
+                        "NOMBRE_ALUMNO",
+                        primer_alumno_cita[
+                            "nombre"
+                        ],
+                    )
+
+                if primer_alumno_cita.get(
+                    "nivel"
+                ):
+                    set_note_value(
+                        contact,
+                        "NIVEL_INTERES",
+                        primer_alumno_cita[
+                            "nivel"
+                        ],
+                    )
+
+                if primer_alumno_cita.get(
+                    "grado"
+                ):
+                    set_note_value(
+                        contact,
+                        "GRADO_INTERES",
+                        primer_alumno_cita[
+                            "grado"
+                        ],
+                    )
+
+        # ----------------------------------------------------
         # SOLICITAR ÚNICAMENTE DATOS FALTANTES
         # ----------------------------------------------------
 
@@ -20510,7 +20661,6 @@ Te muestro nuevamente el menú actualizado:
                 contact
             )
         )
-
         if (
             "nombre completo"
             not in mensaje_para_prospecto.lower()
