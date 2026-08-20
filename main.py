@@ -26,6 +26,206 @@ from prompt_manager import PromptManager
 LOCAL_TZ = ZoneInfo("America/Mexico_City")
 prompt_manager = PromptManager()
 
+
+# ============================================================
+# FUENTE AUTORIZADA DE PRECIOS
+# ============================================================
+
+PRECIOS_CONFIG_PATH = os.path.join(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    ),
+    "config",
+    "precios.json",
+)
+
+
+def cargar_configuracion_precios() -> Dict[str, Any]:
+    """
+    Carga la fuente externa autorizada de precios.
+
+    Principios:
+    - Los importes nunca se inventan.
+    - Si el archivo no existe, está dañado o tiene una
+      estructura inválida, devuelve un diccionario vacío.
+    - No utiliza Gemini.
+    - No modifica ningún dato.
+    """
+
+    try:
+        with open(
+            PRECIOS_CONFIG_PATH,
+            "r",
+            encoding="utf-8",
+        ) as archivo:
+            datos = json.load(archivo)
+
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+    ) as e:
+        print(
+            "❌ No fue posible cargar la configuración "
+            f"autorizada de precios: {e}"
+        )
+        return {}
+
+    if not isinstance(datos, dict):
+        print(
+            "❌ precios.json no contiene "
+            "un objeto JSON válido."
+        )
+        return {}
+
+    colegiaturas = datos.get(
+        "colegiaturas_mensuales",
+        {},
+    )
+
+    if not isinstance(
+        colegiaturas,
+        dict,
+    ):
+        print(
+            "❌ precios.json no contiene "
+            "'colegiaturas_mensuales' válido."
+        )
+        return {}
+
+    precios_validos = {}
+
+    for nivel in [
+        "Kínder",
+        "Primaria",
+        "Secundaria",
+    ]:
+        valor = colegiaturas.get(
+            nivel
+        )
+
+        if (
+            isinstance(valor, (int, float))
+            and not isinstance(valor, bool)
+            and valor > 0
+        ):
+            precios_validos[nivel] = valor
+
+    if not precios_validos:
+        print(
+            "❌ precios.json no contiene "
+            "colegiaturas autorizadas válidas."
+        )
+        return {}
+
+    datos[
+        "colegiaturas_mensuales"
+    ] = precios_validos
+
+    return datos
+
+
+def obtener_colegiatura_autorizada(
+    nivel: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Obtiene la colegiatura autorizada para un nivel.
+
+    Devuelve None si:
+    - el archivo de precios no carga;
+    - el nivel no está autorizado;
+    - el precio es inválido.
+    """
+
+    nivel_texto = str(
+        nivel or ""
+    ).strip()
+
+    equivalencias = {
+        "kinder": "Kínder",
+        "kínder": "Kínder",
+        "preescolar": "Kínder",
+        "primaria": "Primaria",
+        "secundaria": "Secundaria",
+    }
+
+    nivel_normalizado = equivalencias.get(
+        nivel_texto.lower(),
+        nivel_texto,
+    )
+
+    if nivel_normalizado not in {
+        "Kínder",
+        "Primaria",
+        "Secundaria",
+    }:
+        return None
+
+    configuracion = (
+        cargar_configuracion_precios()
+    )
+
+    if not configuracion:
+        return None
+
+    colegiaturas = configuracion.get(
+        "colegiaturas_mensuales",
+        {},
+    )
+
+    importe = colegiaturas.get(
+        nivel_normalizado
+    )
+
+    if (
+        not isinstance(
+            importe,
+            (int, float),
+        )
+        or isinstance(importe, bool)
+        or importe <= 0
+    ):
+        return None
+
+    return {
+        "nivel": nivel_normalizado,
+        "importe": importe,
+        "moneda": str(
+            configuracion.get(
+                "moneda",
+                "MXN",
+            )
+            or "MXN"
+        ).strip(),
+        "version": str(
+            configuracion.get(
+                "version",
+                "",
+            )
+            or ""
+        ).strip(),
+        "numero_mensualidades": (
+            configuracion.get(
+                "numero_mensualidades"
+            )
+        ),
+        "opciones_comerciales": (
+            configuracion.get(
+                "opciones_comerciales",
+                {},
+            )
+            if isinstance(
+                configuracion.get(
+                    "opciones_comerciales",
+                    {},
+                ),
+                dict,
+            )
+            else {}
+        ),
+    }
+
+
 FLOW_STATE_PREFIX = "FLOW_STATE:"
 ADMIN_SELECTED_TASKS = {}
 
