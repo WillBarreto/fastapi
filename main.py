@@ -785,6 +785,10 @@ class AnalisisMensajeProspecto(BaseModel):
     nombre_tutor: str = ""
     nombre_alumno: str = ""
 
+    alumnos: List[Dict[str, Any]] = Field(
+        default_factory=list
+    )
+
     pausa_conversacion: bool = False
 
     datos_detectados: List[str] = Field(default_factory=list)
@@ -1029,6 +1033,112 @@ def normalizar_analisis_mensaje_ia(
                 dato_canonico
             )
 
+    # --------------------------------------------------------
+    # UNO O VARIOS ALUMNOS DETECTADOS EN EL MENSAJE
+    # --------------------------------------------------------
+
+    alumnos_crudos = datos_crudos.get(
+        "alumnos",
+        [],
+    )
+
+    alumnos_normalizados = []
+
+    if isinstance(
+        alumnos_crudos,
+        list,
+    ):
+
+        for alumno_crudo in alumnos_crudos:
+
+            if not isinstance(
+                alumno_crudo,
+                dict,
+            ):
+                continue
+
+            nombre = str(
+                alumno_crudo.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            nivel = str(
+                alumno_crudo.get(
+                    "nivel",
+                    alumno_crudo.get(
+                        "nivel_interes",
+                        "",
+                    ),
+                )
+                or ""
+            ).strip()
+
+            nivel = equivalencias_nivel.get(
+                nivel.lower(),
+                nivel,
+            )
+
+            if (
+                nivel
+                not in NIVELES_OFICIALES_VALIDOS
+            ):
+                nivel = ""
+
+            grado = str(
+                alumno_crudo.get(
+                    "grado",
+                    alumno_crudo.get(
+                        "grado_interes",
+                        "",
+                    ),
+                )
+                or ""
+            ).strip()
+
+            edad = normalizar_entero_opcional(
+                alumno_crudo.get(
+                    "edad",
+                    alumno_crudo.get(
+                        "edad_alumno",
+                    ),
+                )
+            )
+
+            fecha_nacimiento = str(
+                alumno_crudo.get(
+                    "fecha_nacimiento",
+                    alumno_crudo.get(
+                        "fecha_nacimiento_iso",
+                        "",
+                    ),
+                )
+                or ""
+            ).strip()
+
+            if not any(
+                [
+                    nombre,
+                    nivel,
+                    grado,
+                    edad is not None,
+                    fecha_nacimiento,
+                ]
+            ):
+                continue
+
+            alumnos_normalizados.append({
+                "nombre": nombre,
+                "nivel": nivel,
+                "grado": grado,
+                "edad": edad,
+                "fecha_nacimiento": (
+                    fecha_nacimiento
+                ),
+            })
+
     analisis_normalizado = {
         "version": "1.0",
 
@@ -1171,11 +1281,15 @@ def normalizar_analisis_mensaje_ia(
         "nombre_tutor": str(
             datos_crudos.get("nombre_tutor", "") or ""
         ).strip(),
+
         "nombre_alumno": str(
             datos_crudos.get("nombre_alumno", "") or ""
         ).strip(),
 
-        "pausa_conversacion": normalizar_booleano(
+        "alumnos": alumnos_normalizados,
+
+        "pausa_conversacion":
+            normalizar_booleano(
             datos_crudos.get("pausa_conversacion")
         ),
 
@@ -4121,6 +4235,44 @@ semana:
 10. Las visitas sólo se realizan de lunes a viernes.
 Marca "dia_no_laboral": true cuando la fecha propuesta sea sábado
 o domingo.
+
+10-B. IDENTIFICACIÓN DE UNO O VARIOS ALUMNOS
+
+Utiliza el campo "alumnos" para representar de forma independiente
+a cada hijo, hija o futuro alumno mencionado o claramente recuperable
+del contexto de la conversación.
+
+Cada elemento debe utilizar esta estructura:
+
+{
+  "nombre": "",
+  "nivel": "",
+  "grado": "",
+  "edad": null,
+  "fecha_nacimiento": ""
+}
+
+REGLAS:
+
+- Si existe un solo alumno, "alumnos" puede contener un elemento.
+- Si existen dos o más alumnos, crea un elemento independiente
+  para cada uno.
+- No combines dos alumnos en un mismo elemento.
+- Un alumno puede existir aunque todavía no conozcas su nombre.
+- Si la familia dice "tengo uno para primaria y otro para secundaria",
+  deben existir dos elementos, aunque ambos nombres estén vacíos.
+- Si dice "mi hija va a 3.º de primaria y mi hijo a 1.º de secundaria",
+  deben existir dos elementos con sus respectivos niveles y grados.
+- Si posteriormente proporciona el nombre de uno de ellos, utiliza
+  el historial y contexto para asociarlo al alumno correcto cuando
+  sea inequívoco.
+- No inventes nombres, niveles, grados, edades ni relaciones.
+- No elimines alumnos previamente identificados sólo porque el
+  mensaje actual se refiera únicamente a uno de ellos.
+- "nombre_alumno" se conserva únicamente como campo de compatibilidad.
+  Si existe un único alumno identificado, puede contener su nombre.
+  Si existen varios, no combines sus nombres dentro de
+  "nombre_alumno".
 
 11. No inventes nombres, zonas, fechas, niveles, grados o edades.
 Cuando un dato no esté expresado ni pueda recuperarse claramente
