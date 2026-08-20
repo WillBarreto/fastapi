@@ -5672,6 +5672,40 @@ def respuesta_afirmativa_confirmacion_cita(
 
     return texto in respuestas_afirmativas
 
+def respuesta_negativa_confirmacion_cita(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta una negativa simple cuando el bot está esperando
+    confirmación de una fecha calendario interpretada.
+
+    Se usa únicamente dentro del objetivo:
+    CONFIRMAR_FECHA_CITA_CALENDARIO.
+    """
+
+    texto = normalizar_texto_para_deteccion(
+        mensaje_usuario
+    )
+
+    if not texto:
+        return False
+
+    respuestas_negativas = {
+        "no",
+        "no es correcto",
+        "no correcto",
+        "incorrecto",
+        "incorrecta",
+        "no seria",
+        "no sería",
+        "no esa fecha",
+        "esa no",
+        "no es esa",
+    }
+
+    return texto in respuestas_negativas
+    
+
 def formatear_fecha_cita_calendario(
     fecha_cita_iso: str,
 ) -> str:
@@ -6696,6 +6730,290 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
 
     # ========================================================
+    # CONFIRMACIÓN DE FECHA CALENDARIO PENDIENTE
+    # ========================================================
+    #
+    # Si el bot acaba de convertir una expresión relativa
+    # como "el próximo viernes" en una fecha calendario
+    # concreta y está esperando confirmación, una respuesta
+    # afirmativa simple debe continuar directamente hacia
+    # consulta administrativa.
+    #
+    # No dependemos de que Gemini vuelva a extraer fecha/hora
+    # del mensaje "sí".
+    # ========================================================
+
+    contexto_confirmacion_cita = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else {}
+    )
+
+    objetivo_confirmacion_cita = str(
+        contexto_confirmacion_cita.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        objetivo_confirmacion_cita
+        == "CONFIRMAR_FECHA_CITA_CALENDARIO"
+        and respuesta_afirmativa_confirmacion_cita(
+            mensaje_usuario
+        )
+    ):
+        fecha_cita_persistida = ""
+        hora_cita_persistida = ""
+
+        if contact is not None:
+            try:
+                fecha_cita_persistida = str(
+                    get_note_value(
+                        contact,
+                        "FECHA_CITA",
+                    )
+                    or get_note_value(
+                        contact,
+                        "FECHA_CITA_ISO",
+                    )
+                    or get_note_value(
+                        contact,
+                        "FECHA_CITA_TEXTO",
+                    )
+                    or ""
+                ).strip()
+
+                hora_cita_persistida = str(
+                    get_note_value(
+                        contact,
+                        "HORA_CITA",
+                    )
+                    or get_note_value(
+                        contact,
+                        "HORA_CITA_24H",
+                    )
+                    or get_note_value(
+                        contact,
+                        "HORA_CITA_TEXTO",
+                    )
+                    or ""
+                ).strip()
+
+            except Exception as e:
+                print(
+                    "⚠️ No fue posible recuperar fecha/hora "
+                    "para confirmar cita: "
+                    f"{e}"
+                )
+
+        if (
+            fecha_cita_persistida
+            and hora_cita_persistida
+        ):
+            clasificacion_horario_confirmado = (
+                clasificar_horario_cita(
+                    hora_cita_persistida
+                )
+            )
+
+            if (
+                clasificacion_horario_confirmado
+                in {
+                    "REGULAR",
+                    "EVALUAR",
+                }
+            ):
+                decision.update({
+                    "accion": "CONSULTAR_ADMIN",
+                    "motivo": (
+                        "El prospecto confirmó expresamente "
+                        "la fecha calendario y horario que "
+                        "habían sido interpretados previamente."
+                    ),
+                    "requiere_admin": True,
+                    "puede_compartir_costos": (
+                        zona_validada
+                    ),
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision["datos_detectados"].update({
+                    "fecha_cita_confirmada_calendario": (
+                        fecha_cita_persistida
+                    ),
+                    "hora_cita_confirmada_calendario": (
+                        hora_cita_persistida
+                    ),
+                    "confirmacion_calendario_explicita": True,
+                })
+
+                return decision
+
+    if (
+        objetivo_confirmacion_cita
+        == "CONFIRMAR_FECHA_CITA_CALENDARIO"
+        and respuesta_negativa_confirmacion_cita(
+            mensaje_usuario
+        )
+    ):
+        decision.update({
+            "accion": "PEDIR_FECHA_CITA",
+            "motivo": (
+                "El prospecto indicó que la fecha calendario "
+                "interpretada no corresponde a la que desea. "
+                "Debe solicitarse nuevamente el día y horario."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "correccion_fecha_cita": True,
+        })
+
+        return decision
+
+    # ========================================================
+    # CORRECCIÓN COMPUESTA DE FECHA/HORA DE CITA
+    # ========================================================
+    #
+    # Cuando estamos esperando confirmar una fecha calendario,
+    # el prospecto puede responder con una corrección completa:
+    #
+    # "No, me refería al viernes siguiente."
+    # "No, mejor el lunes."
+    # "No, mejor a las 12."
+    #
+    # En esos casos conservamos del intento anterior únicamente
+    # el dato que el prospecto NO está modificando.
+    # ========================================================
+
+    correccion_cita_pendiente = False
+
+    if (
+        objetivo_confirmacion_cita
+        == "CONFIRMAR_FECHA_CITA_CALENDARIO"
+    ):
+        nueva_fecha_texto = str(
+            analisis_seguro.get(
+                "fecha_cita_texto",
+                "",
+            )
+            or ""
+        ).strip()
+
+        nueva_fecha_iso = str(
+            analisis_seguro.get(
+                "fecha_cita_iso",
+                "",
+            )
+            or ""
+        ).strip()
+
+        nueva_hora_texto = str(
+            analisis_seguro.get(
+                "hora_cita_texto",
+                "",
+            )
+            or ""
+        ).strip()
+
+        nueva_hora_24h = str(
+            analisis_seguro.get(
+                "hora_cita_24h",
+                "",
+            )
+            or ""
+        ).strip()
+
+        cambio_fecha_detectado = bool(
+            analisis_seguro.get(
+                "cambio_fecha_cita"
+            )
+            or nueva_fecha_texto
+            or nueva_fecha_iso
+            or nueva_hora_texto
+            or nueva_hora_24h
+        )
+
+        if cambio_fecha_detectado:
+
+            fecha_cita_anterior = ""
+            hora_cita_anterior = ""
+
+            if contact is not None:
+                try:
+                    fecha_cita_anterior = str(
+                        get_note_value(
+                            contact,
+                            "FECHA_CITA",
+                        )
+                        or get_note_value(
+                            contact,
+                            "FECHA_CITA_ISO",
+                        )
+                        or ""
+                    ).strip()
+
+                    hora_cita_anterior = str(
+                        get_note_value(
+                            contact,
+                            "HORA_CITA",
+                        )
+                        or get_note_value(
+                            contact,
+                            "HORA_CITA_24H",
+                        )
+                        or ""
+                    ).strip()
+
+                except Exception as e:
+                    print(
+                        "⚠️ No fue posible recuperar "
+                        "fecha/hora anterior durante "
+                        "la corrección de cita: "
+                        f"{e}"
+                    )
+
+            # Si corrigió solamente la fecha,
+            # conservamos el horario anterior.
+            if (
+                (nueva_fecha_iso or nueva_fecha_texto)
+                and not (
+                    nueva_hora_24h
+                    or nueva_hora_texto
+                )
+                and hora_cita_anterior
+            ):
+                analisis_seguro[
+                    "hora_cita_24h"
+                ] = hora_cita_anterior
+
+            # Si corrigió solamente la hora,
+            # conservamos la fecha anterior.
+            if (
+                (nueva_hora_24h or nueva_hora_texto)
+                and not (
+                    nueva_fecha_iso
+                    or nueva_fecha_texto
+                )
+                and fecha_cita_anterior
+            ):
+                analisis_seguro[
+                    "fecha_cita_iso"
+                ] = fecha_cita_anterior
+
+            correccion_cita_pendiente = True
+            
+    
+
+    # ========================================================
     # 7. PRIORIDAD: SOLICITUD EXPLÍCITA DE CITA
     # ========================================================
     #
@@ -6719,7 +7037,8 @@ def aplicar_reglas_negocio_estructuradas(
     }
 
     tiene_intencion_cita = bool(
-        analisis_seguro.get(
+        correccion_cita_pendiente
+        or analisis_seguro.get(
             "pide_cita"
         )
         or analisis_seguro.get(
@@ -11329,7 +11648,26 @@ def calcular_transicion_comercial_post_envio(
             or analisis.get(
                 "hora_cita_24h"
             )
+            or objetivo_actual
+            == "CONFIRMAR_FECHA_CITA_CALENDARIO"
+            or (
+                isinstance(
+                    decision.get(
+                        "datos_detectados",
+                        {},
+                    ),
+                    dict,
+                )
+                and decision.get(
+                    "datos_detectados",
+                    {},
+                ).get(
+                    "confirmacion_calendario_explicita",
+                    False,
+                )
+            )
         )
+        
 
         if tiene_contexto_cita:
             transicion.update({
