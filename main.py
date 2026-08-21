@@ -9548,6 +9548,55 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
+    if accion == "CITA_FUERA_HORARIO":
+        plan.update({
+            "objetivo": (
+                "Explicar que el horario solicitado supera "
+                "el límite máximo disponible para visitas "
+                "y solicitar otro horario."
+            ),
+            "debe_incluir": [
+                (
+                    "Indicar amablemente que el horario máximo "
+                    "en el que podemos recibir visitas es "
+                    "a las 4:00 p. m."
+                ),
+                (
+                    "Explicar que preferentemente recomendamos "
+                    "un horario entre 8:00 a. m. y 1:00 p. m."
+                ),
+                (
+                    "Aclarar expresamente que también pueden "
+                    "considerarse horarios posteriores a la "
+                    "1:00 p. m. y hasta las 4:00 p. m."
+                ),
+                (
+                    "Cerrar con una sola pregunta para que "
+                    "la familia proponga otro horario."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    (
+                        "Presentar las 4:00 p. m. como si fuera "
+                        "el único horario disponible por la tarde."
+                    ),
+                    (
+                        "Dar a entender que entre la 1:00 p. m. "
+                        "y las 4:00 p. m. no se reciben visitas."
+                    ),
+                    (
+                        "Dar únicamente como alternativas "
+                        "8:00 a. m. a 1:00 p. m. o exactamente "
+                        "las 4:00 p. m."
+                    ),
+                ]
+            ),
+        })
+
+        return plan
+
     if accion == "PEDIR_FECHA_CITA":
         plan.update({
             "objetivo": (
@@ -19073,16 +19122,69 @@ async def whatsapp_webhook(
                         normalizar_numero_whatsapp(From)
                     ] = tarea.id
 
-                    respuesta_admin = (
-                        "🔔 Tienes una solicitud pendiente "
-                        "de atención.\n\n"
-                        f"Prospecto: "
-                        f"{tarea.prospect_phone or 'No disponible'}\n\n"
-                        "Último mensaje:\n"
-                        f"{tarea.trigger_message or 'Sin mensaje'}\n\n"
-                        "¿Qué deseas que le responda?"
+                    contacto_tarea = (
+                        db.query(Contact)
+                        .filter(
+                            Contact.id == tarea.contact_id
+                        )
+                        .first()
                     )
 
+                    fecha_cita_admin = ""
+                    hora_cita_admin = ""
+
+                    if contacto_tarea is not None:
+                        fecha_cita_raw = str(
+                            get_note_value(
+                                contacto_tarea,
+                                "FECHA_CITA",
+                            )
+                            or get_note_value(
+                                contacto_tarea,
+                                "FECHA_CITA_ISO",
+                            )
+                            or ""
+                        ).strip()
+
+                        hora_cita_admin = str(
+                            get_note_value(
+                                contacto_tarea,
+                                "HORA_CITA",
+                            )
+                            or ""
+                        ).strip()
+
+                        fecha_cita_admin = (
+                            formatear_fecha_cita_calendario(
+                                fecha_cita_raw
+                            )
+                            or fecha_cita_raw
+                        )
+
+                    if (
+                        fecha_cita_admin
+                        and hora_cita_admin
+                    ):
+                        detalle_solicitud = (
+                            "Solicitud de visita:\n"
+                            f"{fecha_cita_admin}, "
+                            f"{hora_cita_admin}"
+                        )
+
+                    else:
+                        detalle_solicitud = (
+                            "Solicitud pendiente:\n"
+                            f"{tarea.trigger_message or 'Sin detalle'}"
+                        )
+
+                    respuesta_admin = (
+                        "🔔 Confirmación de cita pendiente\n\n"
+                        f"Prospecto: "
+                        f"{tarea.prospect_phone or 'No disponible'}\n\n"
+                        f"{detalle_solicitud}\n\n"
+                        "¿Qué deseas que le responda?"
+                    )
+                    
                     resultado = enviar_respuesta_twilio(
                         From,
                         respuesta_admin,
@@ -21265,33 +21367,52 @@ def construir_solicitud_datos_cita(
     if not faltantes:
         return ""
 
-    if len(faltantes) == 1:
+    etiquetas = []
 
-        faltantes_texto = (
-            faltantes[0]
-        )
+    for faltante in faltantes:
 
-    elif len(faltantes) == 2:
+        faltante_normalizado = str(
+            faltante or ""
+        ).strip().lower()
 
-        faltantes_texto = (
-            f"{faltantes[0]} y "
-            f"{faltantes[1]}"
-        )
+        if faltante_normalizado == "su nombre completo":
+            etiqueta = "Nombre de usted"
 
-    else:
+        elif (
+            "nombre completo de su hijo"
+            in faltante_normalizado
+        ):
+            etiqueta = "Nombre completo de su hijo(a)"
 
-        faltantes_texto = (
-            ", ".join(
-                faltantes[:-1]
+        elif (
+            "grado específico al que ingresaría"
+            in faltante_normalizado
+        ):
+            etiqueta = "Grado al que ingresaría"
+
+        elif (
+            "nivel educativo de interés"
+            in faltante_normalizado
+        ):
+            etiqueta = "Nivel educativo de interés"
+
+        else:
+            etiqueta = faltante.strip().capitalize()
+
+        if etiqueta not in etiquetas:
+            etiquetas.append(
+                etiqueta
             )
-            + " y "
-            + faltantes[-1]
-        )
+
+    lineas = "\n".join(
+        f"- {etiqueta}"
+        for etiqueta in etiquetas
+    )
 
     return (
-        "Para completar el registro de su cita, "
-        "¿me podría apoyar por favor con "
-        f"{faltantes_texto}?"
+        "Para completar su registro de cita, "
+        "por favor ayúdenos con lo siguiente:\n\n"
+        f"{lineas}"
     )
     
 
@@ -22184,6 +22305,19 @@ def construir_resumen_cita_admin(contact) -> str:
         or ""
     ).strip()
 
+    fecha_cita_mostrable = (
+        formatear_fecha_cita_calendario(
+            fecha_cita
+        )
+        or fecha_cita
+        or "Pendiente"
+    )
+
+    hora_cita_mostrable = (
+        hora_cita
+        or "Pendiente"
+    )
+
     alumnos_cita = (
         obtener_alumnos_cita_persistidos(
             contact
@@ -22281,9 +22415,9 @@ def construir_resumen_cita_admin(contact) -> str:
         f"Tutor: {padres or 'Pendiente'}\n"
         f"Cel: {contact.phone_number}\n\n"
         f"{bloque_alumnos}\n\n"
-        f"Fecha: {fecha_cita or 'Pendiente'}\n"
-        f"Hora: {hora_cita or 'Pendiente'}"
-    )    
+        f"Cita: {fecha_cita_mostrable}, "
+        f"{hora_cita_mostrable}"
+    ) 
 
 def enviar_resumen_cita_admin_whatsapp(contact):
     """
@@ -23017,7 +23151,7 @@ REGLAS:
 - No uses lenguaje interno.
 - Si el administrador confirma disponibilidad, confirma la cita con día y hora.
 - Cuando el administrador confirme definitivamente una cita, no inicies con saludos como "Hola", "¡Hola!", "Buenos días", "Buenas tardes" o similares.
-- En una confirmación definitiva de cita, inicia directamente con una frase natural como "Le escribo para confirmarle que su visita ha quedado programada".
+- En una confirmación definitiva de cita, inicia directamente con: "Le confirmo que su visita ha quedado programada".
 - Si el administrador propone otro horario disponible, explica que ese horario está disponible y pide confirmación.
 - Si el administrador propone alternativas sin confirmar disponibilidad definitiva, preséntalas como opciones posibles y pide al prospecto cuál le acomoda mejor.
 - Si el administrador rechaza la disponibilidad, pide una alternativa de día u hora.
