@@ -5987,6 +5987,56 @@ def construir_datos_detectados_para_decision(
         ]
 
     return datos
+
+def existe_mensaje_entrante_posterior_al_turno(
+    db: Session,
+    contact,
+    max_message_id: Optional[int],
+) -> bool:
+    """
+    Determina si, mientras se procesaba el turno actual,
+    llegó un mensaje entrante más reciente del mismo contacto.
+
+    Se utiliza para impedir que una respuesta ya obsoleta
+    sea enviada al prospecto.
+    """
+
+    if (
+        db is None
+        or contact is None
+        or not isinstance(max_message_id, int)
+        or max_message_id <= 0
+    ):
+        return False
+
+    try:
+        mensaje_mas_reciente = (
+            db.query(Message.id)
+            .filter(
+                Message.contact_id == contact.id,
+                Message.direction == "incoming",
+                Message.id > max_message_id,
+            )
+            .order_by(
+                Message.id.asc()
+            )
+            .first()
+        )
+
+        return (
+            mensaje_mas_reciente
+            is not None
+        )
+
+    except Exception as e:
+        print(
+            "⚠️ No fue posible comprobar "
+            "si el turno seguía vigente: "
+            f"{e}"
+        )
+
+        return False
+        
         
 def detectar_pausa_conversacion_simple(
     mensaje: str,
@@ -17389,6 +17439,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
             "a un alumno o se comunica por otro motivo?"
         )
 
+        if existe_mensaje_entrante_posterior_al_turno(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+        ):
+            print(
+                "🛑 RESPUESTA OBSOLETA SUPRIMIDA: "
+                "llegó un mensaje entrante posterior "
+                f"al corte {max_message_id}."
+            )
+
+            resultado_final[
+                "procesado"
+            ] = True
+
+            resultado_final[
+                "mensaje_enviado"
+            ] = False
+
+            resultado_final[
+                "respuesta_suprimida_por_turno_nuevo"
+            ] = True
+
+            resultado_final[
+                "error"
+            ] = ""
+
+            return resultado_final
+
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
@@ -17508,6 +17587,37 @@ def procesar_mensaje_whatsapp_estructurado_real(
                         f"{saludo_base}, {primer_nombre}. "
                         "¿En qué podemos ayudarle?"
                     )
+
+        if existe_mensaje_entrante_posterior_al_turno(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+        ):
+            print(
+                "🛑 RESPUESTA OBSOLETA SUPRIMIDA: "
+                "llegó un mensaje entrante posterior "
+                f"al corte {max_message_id}."
+            )
+
+            resultado_final[
+                "procesado"
+            ] = True
+
+            resultado_final[
+                "mensaje_enviado"
+            ] = False
+
+            resultado_final[
+                "respuesta_suprimida_por_turno_nuevo"
+            ] = True
+
+            resultado_final[
+                "error"
+            ] = ""
+
+            return resultado_final
+
+
 
             resultado_twilio = (
                 enviar_respuesta_twilio(
@@ -17680,6 +17790,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
             )
         )
 
+        if existe_mensaje_entrante_posterior_al_turno(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+        ):
+            print(
+                "🛑 RESPUESTA OBSOLETA SUPRIMIDA: "
+                "llegó un mensaje entrante posterior "
+                f"al corte {max_message_id}."
+            )
+
+            resultado_final[
+                "procesado"
+            ] = True
+
+            resultado_final[
+                "mensaje_enviado"
+            ] = False
+
+            resultado_final[
+                "respuesta_suprimida_por_turno_nuevo"
+            ] = True
+
+            resultado_final[
+                "error"
+            ] = ""
+
+            return resultado_final
+
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
@@ -17844,6 +17983,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
             "👋 Primera cortesía de cierre detectada. "
             "Se omite Gemini."
         )
+
+        if existe_mensaje_entrante_posterior_al_turno(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+        ):
+            print(
+                "🛑 RESPUESTA OBSOLETA SUPRIMIDA: "
+                "llegó un mensaje entrante posterior "
+                f"al corte {max_message_id}."
+            )
+
+            resultado_final[
+                "procesado"
+            ] = True
+
+            resultado_final[
+                "mensaje_enviado"
+            ] = False
+
+            resultado_final[
+                "respuesta_suprimida_por_turno_nuevo"
+            ] = True
+
+            resultado_final[
+                "error"
+            ] = ""
+
+            return resultado_final
 
         resultado_twilio = (
             enviar_respuesta_twilio(
@@ -18181,6 +18349,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # 5. ENVÍO REAL AL PROSPECTO
         # ----------------------------------------------------
 
+        if existe_mensaje_entrante_posterior_al_turno(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+        ):
+            print(
+                "🛑 RESPUESTA OBSOLETA SUPRIMIDA: "
+                "llegó un mensaje entrante posterior "
+                f"al corte {max_message_id}."
+            )
+
+            resultado_final[
+                "procesado"
+            ] = True
+
+            resultado_final[
+                "mensaje_enviado"
+            ] = False
+
+            resultado_final[
+                "respuesta_suprimida_por_turno_nuevo"
+            ] = True
+
+            resultado_final[
+                "error"
+            ] = ""
+
+            return resultado_final
+        
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
