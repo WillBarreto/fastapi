@@ -2246,6 +2246,20 @@ def detectar_admisiones_evidentes_para_alcance(
         "me interesa primaria",
         "me interesa secundaria",
         "me interesa kinder",
+        "agendar una cita",
+        "agendar cita",
+        "agendar una visita",
+        "agendar visita",
+        "programar una cita",
+        "programar cita",
+        "programar una visita",
+        "programar visita",
+        "quiero una cita",
+        "quisiera una cita",
+        "quiero agendar",
+        "quisiera agendar",
+        "quiero visitar el colegio",
+        "quisiera visitar el colegio",
     ]
 
     if any(
@@ -20794,6 +20808,109 @@ def enviar_alerta_admin_whatsapp(
     respuesta_bot: str,
     tarea_id: int = None,
 ) -> str:
+    """
+    Envía al administrador únicamente la información
+    operativa necesaria para atender una solicitud.
+    """
+
+    admin_number = os.getenv(
+        "ADMIN_WHATSAPP_NUMBER"
+    )
+
+    if not admin_number:
+        print(
+            "⚠️ ADMIN_WHATSAPP_NUMBER no configurado; "
+            "no se envió alerta interna"
+        )
+        return (
+            "ADMIN_WHATSAPP_NUMBER no configurado"
+        )
+
+    phone = (
+        contact.phone_number
+        if contact
+        else "Teléfono no disponible"
+    )
+
+    fecha_cita = ""
+    hora_cita = ""
+
+    if contact is not None:
+        try:
+            fecha_cita_raw = str(
+                get_note_value(
+                    contact,
+                    "FECHA_CITA",
+                )
+                or get_note_value(
+                    contact,
+                    "FECHA_CITA_ISO",
+                )
+                or ""
+            ).strip()
+
+            hora_cita = str(
+                get_note_value(
+                    contact,
+                    "HORA_CITA",
+                )
+                or get_note_value(
+                    contact,
+                    "HORA_CITA_24H",
+                )
+                or ""
+            ).strip()
+
+            fecha_cita = (
+                formatear_fecha_cita_calendario(
+                    fecha_cita_raw
+                )
+                or fecha_cita_raw
+            )
+
+        except Exception as e:
+            print(
+                "⚠️ No fue posible construir "
+                "el resumen de cita para admin: "
+                f"{e}"
+            )
+
+    if fecha_cita and hora_cita:
+        mensaje_alerta = (
+            "🔔 Confirmación de cita pendiente\n\n"
+            f"Prospecto: {phone}\n\n"
+            "Desea visitar el colegio:\n"
+            f"{fecha_cita}, {hora_cita}\n\n"
+            "¿Confirmamos esta cita?"
+        )
+
+    else:
+        mensaje_alerta = (
+            "🔔 Atención requerida\n\n"
+            f"Prospecto: {phone}\n\n"
+            "Solicitud:\n"
+            f"{mensaje_usuario}\n\n"
+            "¿Qué deseas que le responda?"
+        )
+
+    resultado = (
+        enviar_notificacion_admin_whatsapp(
+            db,
+            admin_number,
+            mensaje_alerta,
+        )
+    )
+
+    print(
+        f"📣 Alerta interna enviada a: "
+        f"{admin_number}"
+    )
+    print(
+        f"📣 Resultado alerta interna: "
+        f"{resultado}"
+    )
+
+    return resultado
     
     """
     Envía una alerta interna al administrador cuando una conversación
@@ -21611,7 +21728,7 @@ REGLAS:
             f"o inválida: {respuesta_ia!r}"
         )
 
-        return respaldo_limpio or texto[:120]
+        return ""
 
     except Exception as e:
         print(
@@ -21619,7 +21736,7 @@ REGLAS:
             f"{e}"
         )
 
-        return respaldo_limpio or texto[:120]
+        return ""
 
 def extraer_datos_registro_cita(
     mensaje_usuario: str,
@@ -23494,22 +23611,38 @@ Te muestro nuevamente el menú actualizado:
             )
         )
 
-        hora_cita = (
-            extraer_hora_cita_confirmada(
-                mensaje_para_prospecto,
-                respaldo=(
-                    tarea.trigger_message
-                    or ""
-                ),
-            )
-        )
-
-        if hora_cita:
-            set_note_value(
+        hora_cita = str(
+            get_note_value(
                 contact,
                 "HORA_CITA",
-                hora_cita,
             )
+            or get_note_value(
+                contact,
+                "HORA_CITA_24H",
+            )
+            or ""
+        ).strip()
+
+        # La hora ya confirmada durante el flujo comercial
+        # es la fuente prioritaria. Sólo intentamos extraerla
+        # nuevamente si realmente no existe.
+        if not hora_cita:
+            hora_cita = (
+                extraer_hora_cita_confirmada(
+                    mensaje_para_prospecto,
+                    respaldo=(
+                        tarea.trigger_message
+                        or ""
+                    ),
+                )
+            )
+
+            if hora_cita:
+                set_note_value(
+                    contact,
+                    "HORA_CITA",
+                    hora_cita,
+                )
 
         # ----------------------------------------------------
         # INICIALIZAR ALUMNOS ASOCIADOS A LA CITA
