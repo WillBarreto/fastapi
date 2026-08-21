@@ -736,6 +736,7 @@ HITOS_COMERCIALES_VALIDOS = {
     "RECIBIO_EXPLICACION_METODO",
     "EXPRESO_AREA_INTERES",
     "RECIBIO_RESPUESTA_PERSONALIZADA",
+    "SOLICITO_COSTOS_INICIAL",
     "INSISTIO_COSTOS",
     "ACEPTO_VISITA",
     "PROPUSO_FECHA_CITA",
@@ -7728,18 +7729,8 @@ def aplicar_reglas_negocio_estructuradas(
     ):
         intenciones_secundarias = []
 
-    # ========================================================
-    # CONTINUIDAD DE UNA SOLICITUD DE COSTOS
-    # ========================================================
-    #
-    # Si anteriormente se pidió la zona exclusivamente para
-    # poder atender una solicitud de colegiaturas, al recibir
-    # la zona no debemos regresar al embudo genérico.
-    #
-    # La prioridad es:
-    # 1. validar zona;
-    # 2. conocer nivel si todavía falta;
-    # 3. responder costos.
+        # ========================================================
+    # ESTRATEGIA DE SOLICITUD DE COSTOS
     # ========================================================
 
     objetivo_pendiente_actual = str(
@@ -7750,10 +7741,88 @@ def aplicar_reglas_negocio_estructuradas(
         or ""
     ).strip().upper()
 
-    if objetivo_pendiente_actual in {
-        "OBTENER_ZONA_PARA_COSTOS",
-        "OBTENER_NIVEL_PARA_COSTOS",
-    }:
+    solicitud_costos_explicita = bool(
+        analisis_seguro.get("pide_costos")
+        or intencion_principal == "PEDIR_COSTOS"
+        or "PEDIR_COSTOS"
+        in intenciones_secundarias
+    )
+
+    continuacion_solicitud_costos = (
+        objetivo_pendiente_actual
+        in {
+            "OBTENER_ZONA_PARA_COSTOS",
+            "OBTENER_NIVEL_PARA_COSTOS",
+        }
+    )
+
+    solicito_costos_previamente = (
+        "SOLICITO_COSTOS_INICIAL"
+        in hitos_comerciales
+    )
+
+    if (
+        solicitud_costos_explicita
+        or continuacion_solicitud_costos
+    ):
+
+        # ----------------------------------------------------
+        # PRIMERA SOLICITUD:
+        # validar zona y después presentar valor.
+        # ----------------------------------------------------
+
+        if (
+            not solicito_costos_previamente
+            or (
+                continuacion_solicitud_costos
+                and not solicitud_costos_explicita
+            )
+        ):
+
+            if not zona_validada:
+                decision.update({
+                    "accion": "PEDIR_ZONA",
+                    "motivo": (
+                        "Primera solicitud de costos. "
+                        "Primero corresponde validar la zona."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": False,
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision["datos_detectados"].update({
+                    "objetivo_pendiente_sugerido": (
+                        "OBTENER_ZONA_PARA_COSTOS"
+                    ),
+                    "registrar_solicitud_costos_inicial": True,
+                })
+
+                return decision
+
+            decision.update({
+                "accion": "PRESENTAR_PROPUESTA_VALOR",
+                "motivo": (
+                    "Es la primera solicitud de costos. "
+                    "Antes de compartirlos corresponde presentar "
+                    "el valor general del colegio."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": False,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "registrar_solicitud_costos_inicial": True,
+                "etapa_secuencial": "PRESENTACION_VALOR",
+            })
+
+            return decision
+
+        # ----------------------------------------------------
+        # SEGUNDA SOLICITUD EXPLÍCITA:
+        # ahora sí responder costos.
+        # ----------------------------------------------------
 
         niveles_costos = (
             obtener_niveles_costos_solicitados(
@@ -7762,21 +7831,12 @@ def aplicar_reglas_negocio_estructuradas(
             )
         )
 
-        # ----------------------------------------------------
-        # Si todavía estamos esperando la zona, primero debe
-        # quedar validada.
-        # ----------------------------------------------------
-
-        if (
-            objetivo_pendiente_actual
-            == "OBTENER_ZONA_PARA_COSTOS"
-            and not zona_validada
-        ):
+        if not zona_validada:
             decision.update({
                 "accion": "PEDIR_ZONA",
                 "motivo": (
-                    "La solicitud de costos sigue pendiente "
-                    "porque aún no se ha validado la localidad."
+                    "El prospecto insistió en costos, pero "
+                    "todavía falta validar la zona."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -7787,22 +7847,16 @@ def aplicar_reglas_negocio_estructuradas(
                 "objetivo_pendiente_sugerido": (
                     "OBTENER_ZONA_PARA_COSTOS"
                 ),
-                "intencion_costos_pendiente": True,
             })
 
             return decision
-
-        # ----------------------------------------------------
-        # Zona validada, pero todavía no sabemos el nivel.
-        # ----------------------------------------------------
 
         if not niveles_costos:
             decision.update({
                 "accion": "PEDIR_NIVEL_COSTOS",
                 "motivo": (
-                    "La zona ya fue validada y la familia tiene "
-                    "una solicitud de costos pendiente, pero aún "
-                    "falta conocer el nivel escolar."
+                    "El prospecto insistió en costos y la zona "
+                    "ya está validada, pero falta conocer el nivel."
                 ),
                 "requiere_admin": False,
                 "puede_compartir_costos": False,
@@ -7813,22 +7867,15 @@ def aplicar_reglas_negocio_estructuradas(
                 "objetivo_pendiente_sugerido": (
                     "OBTENER_NIVEL_PARA_COSTOS"
                 ),
-                "intencion_costos_pendiente": True,
             })
 
             return decision
 
-        # ----------------------------------------------------
-        # Ya tenemos zona válida + nivel.
-        # Ahora sí respondemos la solicitud original.
-        # ----------------------------------------------------
-
         decision.update({
             "accion": "RESPONDER_COSTOS",
             "motivo": (
-                "La familia tenía una solicitud de costos "
-                "pendiente y ya se cuenta con zona validada "
-                "y nivel escolar."
+                "El prospecto volvió a solicitar costos. "
+                "Corresponde atender la insistencia."
             ),
             "requiere_admin": False,
             "puede_compartir_costos": True,
@@ -7842,11 +7889,10 @@ def aplicar_reglas_negocio_estructuradas(
                 if len(niveles_costos) == 1
                 else ""
             ),
-            "intencion_costos_pendiente_resuelta": True,
         })
 
         return decision
-
+        
     tiene_proceso_comercial_iniciado = bool(
         intencion_principal == "PEDIR_INFORMES"
         or "PEDIR_INFORMES"
@@ -7925,7 +7971,11 @@ def aplicar_reglas_negocio_estructuradas(
             or respondio_referencia_en_turno
         )
 
-        if not referencia_confirmada:
+        if (
+            not referencia_confirmada
+            and "SOLICITO_COSTOS_INICIAL"
+            not in hitos_comerciales
+        ):
             decision.update({
                 "accion": "PEDIR_REFERENCIA",
                 "motivo": (
@@ -12445,6 +12495,24 @@ def calcular_transicion_comercial_post_envio(
             ),
         })
 
+        datos_decision_costos = decision.get(
+            "datos_detectados",
+            {},
+        )
+
+        if (
+            isinstance(
+                datos_decision_costos,
+                dict,
+            )
+            and datos_decision_costos.get(
+                "registrar_solicitud_costos_inicial"
+            )
+        ):
+            agregar_hito(
+                "SOLICITO_COSTOS_INICIAL"
+            )
+
     elif accion == "PEDIR_NIVEL_COSTOS":
         transicion.update({
             "transicion_aplicable": True,
@@ -12481,6 +12549,24 @@ def calcular_transicion_comercial_post_envio(
                 "La propuesta general de valor fue enviada."
             ),
         })
+
+        datos_decision_costos = decision.get(
+            "datos_detectados",
+            {},
+        )
+
+        if (
+            isinstance(
+                datos_decision_costos,
+                dict,
+            )
+            and datos_decision_costos.get(
+                "registrar_solicitud_costos_inicial"
+            )
+        ):
+            agregar_hito(
+                "SOLICITO_COSTOS_INICIAL"
+            )
 
         agregar_hito(
             "RECIBIO_PRESENTACION_VALOR"
@@ -12539,6 +12625,30 @@ def calcular_transicion_comercial_post_envio(
 
         agregar_hito(
             "RECIBIO_RESPUESTA_PERSONALIZADA"
+        )
+
+    elif accion == "RESPONDER_COSTOS":
+        transicion.update({
+            "estado_comercial": (
+                "COSTOS_PRESENTADOS"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se compartieron los costos solicitados "
+                "después de una segunda solicitud explícita."
+            ),
+        })
+
+        agregar_hito(
+            "INSISTIO_COSTOS"
+        )
+
+        agregar_hito(
+            "RECIBIO_COSTOS"
+        )
+
+        agregar_hito(
+            "RECIBIO_OPCIONES_PAGO"
         )
 
     elif accion == "INVITAR_CITA":
@@ -12702,6 +12812,7 @@ def calcular_transicion_comercial_post_envio(
 
         if (
             objetivo_pendiente_sugerido
+            and objetivo_pendiente_sugerido
             in OBJETIVOS_PENDIENTES_VALIDOS
         ):
             transicion[
