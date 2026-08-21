@@ -804,6 +804,7 @@ OBJETIVOS_PENDIENTES_VALIDOS = {
     "",
     "OBTENER_ZONA",
     "OBTENER_ZONA_PARA_COSTOS",
+    "OBTENER_ZONA_PARA_CITA",
     "OBTENER_NIVEL_PARA_COSTOS",
     "OBTENER_REFERENCIA_COLEGIO",
     "OBTENER_AREA_INTERES",
@@ -6367,7 +6368,47 @@ def formatear_fecha_cita_calendario(
         f"{fecha.day} de "
         f"{meses[fecha.month - 1]}"
     )
-    
+
+def formatear_hora_cita_12h(
+    hora_cita_24h: str,
+) -> str:
+    """
+    Convierte HH:MM de 24 horas a formato compacto:
+    11:00 -> 11:00am
+    14:00 -> 2:00pm
+    """
+
+    hora_texto = str(
+        hora_cita_24h or ""
+    ).strip()
+
+    if not hora_texto:
+        return ""
+
+    try:
+        hora = datetime.strptime(
+            hora_texto,
+            "%H:%M",
+        )
+    except ValueError:
+        return hora_texto
+
+    periodo = (
+        "am"
+        if hora.hour < 12
+        else "pm"
+    )
+
+    hora_12 = hora.hour % 12
+
+    if hora_12 == 0:
+        hora_12 = 12
+
+    return (
+        f"{hora_12}:"
+        f"{hora.minute:02d}"
+        f"{periodo}"
+    )
 
 def clasificar_horario_cita(
     hora_cita_24h: str,
@@ -7772,6 +7813,8 @@ def aplicar_reglas_negocio_estructuradas(
 
     tiene_intencion_cita = bool(
         correccion_cita_pendiente
+        or objetivo_confirmacion_cita
+        == "OBTENER_ZONA_PARA_CITA"
         or analisis_seguro.get(
             "pide_cita"
         )
@@ -7786,6 +7829,7 @@ def aplicar_reglas_negocio_estructuradas(
             )
         )
     )
+
 
     if tiene_intencion_cita:
 
@@ -7806,6 +7850,10 @@ def aplicar_reglas_negocio_estructuradas(
                 "puede_compartir_costos": False,
                 "debe_finalizar_conversacion": False,
             })
+
+            decision["datos_detectados"][
+                "objetivo_pendiente_sugerido"
+            ] = "OBTENER_ZONA_PARA_CITA"
 
             return decision
 
@@ -9697,6 +9745,12 @@ def construir_plan_respuesta_estructurada(
             or ""
         ).strip()
 
+        hora_mostrable = (
+            formatear_hora_cita_12h(
+                hora_confirmar
+            )
+        )
+
         fecha_mostrable = (
             formatear_fecha_cita_calendario(
                 fecha_iso_confirmar
@@ -10442,6 +10496,12 @@ def generar_respuesta_final_estructurada(
             or ""
         ).strip()
 
+        hora_mostrable = (
+            formatear_hora_cita_12h(
+                hora_confirmar
+            )
+        )
+
         fecha_mostrable = (
             formatear_fecha_cita_calendario(
                 fecha_iso_confirmar
@@ -10458,7 +10518,7 @@ def generar_respuesta_final_estructurada(
             respuesta_confirmacion = (
                 "Perfecto. Entonces sería para el "
                 f"{fecha_mostrable} a las "
-                f"{hora_confirmar}, ¿correcto?"
+                f"{hora_mostrable}, ¿correcto?"
             )
         else:
             respuesta_confirmacion = (
@@ -10486,6 +10546,74 @@ def generar_respuesta_final_estructurada(
         )
 
         return resultado
+
+    # ========================================================
+    # RESPUESTA DETERMINISTA AL CONSULTAR DISPONIBILIDAD
+    # DE UNA CITA
+    # ========================================================
+
+    if accion == "CONSULTAR_ADMIN":
+
+        datos_detectados = (
+            decision_segura.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_detectados,
+            dict,
+        ):
+            datos_detectados = {}
+
+        fecha_cita_admin = str(
+            datos_detectados.get(
+                "fecha_cita_confirmada_calendario",
+                "",
+            )
+            or datos_detectados.get(
+                "fecha_cita_iso",
+                "",
+            )
+            or ""
+        ).strip()
+
+        hora_cita_admin = str(
+            datos_detectados.get(
+                "hora_cita_confirmada_calendario",
+                "",
+            )
+            or datos_detectados.get(
+                "hora_cita_24h",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if (
+            fecha_cita_admin
+            and hora_cita_admin
+        ):
+            respuesta_consulta = (
+                "Permítame por favor, en lo que validamos "
+                "la disponibilidad del día y hora que propone."
+            )
+
+            resultado.update({
+                "generada": True,
+                "respuesta": respuesta_consulta,
+                "modelo_usado": "",
+                "intentos": 0,
+                "uso_fallback_seguro": False,
+                "errores_validacion": [],
+                "tipo_respuesta": (
+                    "CONSULTA_CITA_ADMIN_DETERMINISTA"
+                ),
+                "error": "",
+            })
+
+            return resultado
 
     api_key = (
         os.getenv("GOOGLE_AI_API_KEY")
@@ -18327,6 +18455,101 @@ def procesar_mensaje_whatsapp_estructurado_real(
         resultado_final[
             "contexto_comercial_enriquecido"
         ] = contexto_comercial_enriquecido
+
+        # ----------------------------------------------------
+        # GUARD: CORTESÍA MIENTRAS LA CITA ESPERA ADMIN
+        # ----------------------------------------------------
+        #
+        # Cuando una visita ya quedó pendiente de confirmación
+        # administrativa, una respuesta breve de cortesía no debe
+        # reactivar el embudo comercial ni generar otra respuesta.
+        # ----------------------------------------------------
+
+        objetivo_pendiente_actual = str(
+            contexto_comercial_enriquecido.get(
+                "objetivo_pendiente",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        etapa_actual = str(
+            contexto_comercial_enriquecido.get(
+                "etapa_conversacional",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        estado_actual = str(
+            contexto_comercial_enriquecido.get(
+                "estado_comercial",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        mensaje_normalizado_espera = (
+            normalizar_texto_para_deteccion(
+                mensaje
+            )
+        )
+
+        mensajes_cortesia_espera_admin = {
+            "si",
+            "ok",
+            "okay",
+            "gracias",
+            "muchas gracias",
+            "de acuerdo",
+            "esta bien",
+            "perfecto",
+            "vale",
+            "entendido",
+            "muy bien",
+            "sale",
+        }
+
+        cita_esperando_admin = (
+            objetivo_pendiente_actual
+            == "ESPERAR_CONFIRMACION_ADMIN"
+            or etapa_actual
+            == "ESPERANDO_CONFIRMACION_ADMIN"
+            or estado_actual
+            == "CITA_PENDIENTE_CONFIRMACION"
+        )
+
+        if (
+            cita_esperando_admin
+            and mensaje_normalizado_espera
+            in mensajes_cortesia_espera_admin
+        ):
+            print(
+                "⏳ CORTESÍA SUPRIMIDA DURANTE ESPERA ADMIN: "
+                f"{mensaje!r}"
+            )
+
+            resultado_final[
+                "procesado"
+            ] = True
+
+            resultado_final[
+                "mensaje_enviado"
+            ] = False
+
+            resultado_final[
+                "respuesta"
+            ] = ""
+
+            resultado_final[
+                "cortesia_suprimida_espera_admin"
+            ] = True
+
+            resultado_final[
+                "error"
+            ] = ""
+
+            return resultado_final
 
         # ----------------------------------------------------
         # 4. ORQUESTADOR ESTRUCTURADO
