@@ -5909,6 +5909,84 @@ def zona_previamente_validada_en_flujo(
         )
 
         return False
+
+def construir_datos_detectados_para_decision(
+    analisis: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Reúne solamente datos útiles que posteriormente podrían guardarse.
+
+    Esta función no escribe todavía en contact.notes.
+    """
+
+    datos = {}
+
+    if analisis.get("zona_mencionada"):
+        datos["zona_mencionada"] = analisis[
+            "zona_mencionada"
+        ]
+
+    if analisis.get("nivel"):
+        datos["nivel"] = analisis[
+            "nivel"
+        ]
+
+    if analisis.get("grado"):
+        datos["grado"] = analisis[
+            "grado"
+        ]
+
+    if analisis.get("edad_alumno") is not None:
+        datos["edad_alumno"] = analisis[
+            "edad_alumno"
+        ]
+
+    if analisis.get("fecha_nacimiento_texto"):
+        datos["fecha_nacimiento_texto"] = analisis[
+            "fecha_nacimiento_texto"
+        ]
+
+    if analisis.get("fecha_nacimiento_iso"):
+        datos["fecha_nacimiento_iso"] = analisis[
+            "fecha_nacimiento_iso"
+        ]
+
+    if analisis.get("nivel_actual"):
+        datos["nivel_actual"] = analisis[
+            "nivel_actual"
+        ]
+
+    if analisis.get("ultimo_grado_cursado"):
+        datos["ultimo_grado_cursado"] = analisis[
+            "ultimo_grado_cursado"
+        ]
+
+    if analisis.get("grado_solicitado"):
+        datos["grado_solicitado"] = analisis[
+            "grado_solicitado"
+        ]
+
+    if analisis.get("nombre_tutor"):
+        datos["nombre_tutor"] = analisis[
+            "nombre_tutor"
+        ]
+
+    if analisis.get("nombre_alumno"):
+        datos["nombre_alumno"] = analisis[
+            "nombre_alumno"
+        ]
+
+    if analisis.get("fecha_cita_iso"):
+        datos["fecha_cita_iso"] = analisis[
+            "fecha_cita_iso"
+        ]
+
+    if analisis.get("hora_cita_24h"):
+        datos["hora_cita_24h"] = analisis[
+            "hora_cita_24h"
+        ]
+
+    return datos
         
 def detectar_pausa_conversacion_simple(
     mensaje: str,
