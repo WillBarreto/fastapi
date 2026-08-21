@@ -6,7 +6,7 @@ import google.generativeai as genai
 from twilio.rest import Client
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, ForeignKey, text, or_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
@@ -246,6 +246,49 @@ MESSAGE_BUFFERS: Dict[
 ] = {}
 
 MESSAGE_BUFFER_LOCK = threading.Lock()
+
+# ============================================================
+# BLOQUEO DE PROCESAMIENTO POR CONTACTO
+# ============================================================
+
+STRUCTURED_PROCESS_LOCKS: Dict[
+    str,
+    threading.Lock,
+] = {}
+
+STRUCTURED_PROCESS_LOCKS_GUARD = threading.Lock()
+
+
+def obtener_lock_procesamiento_estructurado(
+    clave_contacto: str,
+) -> threading.Lock:
+    """
+    Garantiza que un mismo contacto no tenga dos ejecuciones
+    del flujo estructurado procesándose al mismo tiempo.
+    """
+
+    clave = str(
+        clave_contacto or ""
+    ).strip()
+
+    with STRUCTURED_PROCESS_LOCKS_GUARD:
+
+        lock_contacto = (
+            STRUCTURED_PROCESS_LOCKS.get(
+                clave
+            )
+        )
+
+        if lock_contacto is None:
+            lock_contacto = (
+                threading.Lock()
+            )
+
+            STRUCTURED_PROCESS_LOCKS[
+                clave
+            ] = lock_contacto
+
+        return lock_contacto
 
 
 USE_STRUCTURED_AI_FLOW = (
@@ -4807,15 +4850,17 @@ def buscar_localidad_google_places(
     localidad: str,
 ) -> Dict[str, Any]:
     """
-    Busca una localidad general mediante Google Places API (New).
+    Busca una localidad mediante Google Places API (New).
 
-    Esta función:
-    - No solicita ni utiliza la ubicación exacta del prospecto.
-    - No calcula todavía la distancia al colegio.
-    - No modifica la base de datos.
-    - No altera el flujo conversacional.
-    - Devuelve una estructura segura incluso cuando la API falla.
+    Reglas de seguridad geográfica:
+    - La búsqueda se orienta hacia el entorno del colegio.
+    - Se solicitan varios candidatos, no solamente el primero.
+    - Se rechazan explícitamente resultados de CDMX.
+    - Solamente se acepta automáticamente un resultado cuya
+      dirección sea compatible con el Estado de México.
+    - Si existe ambigüedad, falla de forma segura.
     """
+
     resultado = {
         "encontrado": False,
         "consulta": "",
@@ -4824,6 +4869,7 @@ def buscar_localidad_google_places(
         "place_id": "",
         "latitud": None,
         "longitud": None,
+        "candidatos_evaluados": 0,
         "error": "",
     }
 
@@ -4839,11 +4885,15 @@ def buscar_localidad_google_places(
         os.getenv(
             "GOOGLE_MAPS_API_KEY",
             "",
-        ) or ""
+        )
+        or ""
     ).strip()
 
     if not api_key:
-        resultado["error"] = "GOOGLE_MAPS_API_KEY_NO_CONFIGURADA"
+        resultado[
+            "error"
+        ] = "GOOGLE_MAPS_API_KEY_NO_CONFIGURADA"
+
         return resultado
 
     consulta = (
@@ -4873,8 +4923,48 @@ def buscar_localidad_google_places(
         "textQuery": consulta,
         "languageCode": "es",
         "regionCode": "MX",
-        "pageSize": 1,
+        "pageSize": 5,
     }
+
+    # --------------------------------------------------------
+    # SESGO GEOGRÁFICO HACIA EL ENTORNO DEL COLEGIO
+    # --------------------------------------------------------
+    #
+    # No sustituye la validación posterior de la dirección.
+    # Únicamente ayuda a Google a priorizar homónimos cercanos.
+    # --------------------------------------------------------
+
+    try:
+        colegio_latitud = float(
+            os.getenv(
+                "COLEGIO_LATITUD",
+                "",
+            )
+        )
+
+        colegio_longitud = float(
+            os.getenv(
+                "COLEGIO_LONGITUD",
+                "",
+            )
+        )
+
+        if (
+            -90 <= colegio_latitud <= 90
+            and -180 <= colegio_longitud <= 180
+        ):
+            payload["locationBias"] = {
+                "circle": {
+                    "center": {
+                        "latitude": colegio_latitud,
+                        "longitude": colegio_longitud,
+                    },
+                    "radius": 50000.0,
+                }
+            }
+
+    except (TypeError, ValueError):
+        pass
 
     try:
         response = requests.post(
@@ -4909,7 +4999,11 @@ def buscar_localidad_google_places(
                 or ""
             ).strip()
 
-        except (ValueError, TypeError, AttributeError):
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+        ):
             detalle_error = str(
                 response.text or ""
             ).strip()
@@ -4941,28 +5035,168 @@ def buscar_localidad_google_places(
         [],
     )
 
-    if not isinstance(lugares, list) or not lugares:
+    if (
+        not isinstance(lugares, list)
+        or not lugares
+    ):
         resultado["error"] = (
             "LOCALIDAD_NO_ENCONTRADA"
         )
 
         return resultado
 
-    lugar = lugares[0]
+    # --------------------------------------------------------
+    # SELECCIÓN SEGURA DE CANDIDATO
+    # --------------------------------------------------------
 
-    if not isinstance(lugar, dict):
+    lugar_seleccionado = None
+
+    for lugar in lugares:
+
+        if not isinstance(
+            lugar,
+            dict,
+        ):
+            continue
+
+        resultado[
+            "candidatos_evaluados"
+        ] += 1
+
+        direccion = str(
+            lugar.get(
+                "formattedAddress",
+                "",
+            )
+            or ""
+        ).strip()
+
+        direccion_normalizada = (
+            normalizar_texto_geografico(
+                direccion
+            )
+        )
+
+        # -----------------------------------------------
+        # CDMX nunca debe aceptarse automáticamente como
+        # si fuera Estado de México.
+        # -----------------------------------------------
+
+        if (
+            "ciudad de mexico"
+            in direccion_normalizada
+            or "cdmx"
+            in direccion_normalizada
+        ):
+            continue
+
+        # -----------------------------------------------
+        # Confirmación explícita de Estado de México.
+        #
+        # Google suele devolver:
+        # "Estado de México"
+        # o la abreviatura postal "Méx."
+        # -----------------------------------------------
+
+        direccion_minusculas = (
+            direccion.lower()
+        )
+
+        pertenece_estado_mexico = bool(
+            "estado de méxico"
+            in direccion_minusculas
+            or "estado de mexico"
+            in direccion_normalizada
+            or re.search(
+                r"(?:^|,\s*)méx\.(?:,|$)",
+                direccion_minusculas,
+            )
+        )
+
+        if not pertenece_estado_mexico:
+            continue
+
+        location = lugar.get(
+            "location",
+            {},
+        )
+
+        if not isinstance(
+            location,
+            dict,
+        ):
+            continue
+
+        latitud = location.get(
+            "latitude"
+        )
+
+        longitud = location.get(
+            "longitude"
+        )
+
+        try:
+            latitud = float(
+                latitud
+            )
+
+            longitud = float(
+                longitud
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        if not (
+            -90 <= latitud <= 90
+            and -180 <= longitud <= 180
+        ):
+            continue
+
+        if not str(
+            lugar.get(
+                "id",
+                "",
+            )
+            or ""
+        ).strip():
+            continue
+
+        lugar_seleccionado = (
+            lugar,
+            latitud,
+            longitud,
+            direccion,
+        )
+
+        break
+
+    if lugar_seleccionado is None:
         resultado["error"] = (
-            "FORMATO_LUGAR_INVALIDO"
+            "SIN_CANDIDATO_CONFIABLE_EN_ESTADO_DE_MEXICO"
         )
 
         return resultado
+
+    (
+        lugar,
+        latitud,
+        longitud,
+        direccion,
+    ) = lugar_seleccionado
 
     display_name = lugar.get(
         "displayName",
         {},
     )
 
-    if isinstance(display_name, dict):
+    if isinstance(
+        display_name,
+        dict,
+    ):
         nombre = str(
             display_name.get(
                 "text",
@@ -4970,56 +5204,14 @@ def buscar_localidad_google_places(
             )
             or ""
         ).strip()
+
     else:
         nombre = ""
 
-    location = lugar.get(
-        "location",
-        {},
-    )
-
-    if not isinstance(location, dict):
-        location = {}
-
-    latitud = location.get(
-        "latitude"
-    )
-
-    longitud = location.get(
-        "longitude"
-    )
-
-    try:
-        latitud = (
-            float(latitud)
-            if latitud is not None
-            else None
-        )
-
-        longitud = (
-            float(longitud)
-            if longitud is not None
-            else None
-        )
-
-    except (TypeError, ValueError):
-        latitud = None
-        longitud = None
-
     resultado.update({
-        "encontrado": bool(
-            lugar.get("id")
-            and latitud is not None
-            and longitud is not None
-        ),
+        "encontrado": True,
         "nombre": nombre,
-        "direccion_formateada": str(
-            lugar.get(
-                "formattedAddress",
-                "",
-            )
-            or ""
-        ).strip(),
+        "direccion_formateada": direccion,
         "place_id": str(
             lugar.get(
                 "id",
@@ -5029,15 +5221,11 @@ def buscar_localidad_google_places(
         ).strip(),
         "latitud": latitud,
         "longitud": longitud,
+        "error": "",
     })
 
-    if not resultado["encontrado"]:
-        resultado["error"] = (
-            "RESULTADO_SIN_COORDENADAS_COMPLETAS"
-        )
-
     return resultado
-
+    
 def calcular_ruta_google_routes(
     latitud_origen: Any,
     longitud_origen: Any,
@@ -5561,96 +5749,73 @@ def clasificar_zona_determinista(
 
     return resultado
         
-def zona_previamente_validada_en_flujo(contact=None) -> bool:
-    """
-    Determina si la conversación ya superó la validación de zona.
 
-    Por ahora se apoya en el estado conversacional existente.
-    No modifica las notas ni la base de datos.
+def zona_previamente_validada_en_flujo(
+    contact=None,
+) -> bool:
     """
+    Determina si la zona del contacto ya fue validada
+    de forma autoritativa.
+
+    La validación NO se infiere a partir de FLOW_STATE,
+    etapa conversacional ni memoria IA.
+
+    Únicamente se considera validada cuando existe
+    el hito persistido ZONA_VALIDADA.
+    """
+
     if contact is None:
         return False
 
     try:
-        estado_actual = get_flow_state(contact)
-    except Exception:
+        hitos_raw = get_note_value(
+            contact,
+            "HITOS_COMERCIALES",
+        )
+
+        if not hitos_raw:
+            return False
+
+        try:
+            hitos = json.loads(
+                hitos_raw
+            )
+
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+        if not isinstance(
+            hitos,
+            list,
+        ):
+            return False
+
+        hitos_normalizados = {
+            str(hito or "")
+            .strip()
+            .upper()
+            for hito in hitos
+            if str(hito or "").strip()
+        }
+
+        return (
+            "ZONA_VALIDADA"
+            in hitos_normalizados
+        )
+
+    except Exception as e:
+        print(
+            "⚠️ No fue posible determinar "
+            "si la zona estaba previamente validada: "
+            f"{e}"
+        )
+
         return False
-
-    estados_antes_de_validar_zona = {
-        "",
-        "SALUDO_INICIAL",
-        "ESPERANDO_INTENCION",
-        "ESPERANDO_REFERENCIA",
-        "VALIDACION_ZONA",
-        "VALIDACION_ZONA_OBLIGATORIA",
-        "ZONA_INVALIDA_POTENCIAL_METEPEC",
-        "CAMPUS_EXTERNO_NO_ATENDIBLE",
-    }
-
-    return estado_actual not in estados_antes_de_validar_zona
-
-
-def construir_datos_detectados_para_decision(
-    analisis: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Reúne solamente datos útiles que posteriormente podrían guardarse.
-
-    Esta función no escribe todavía en contact.notes.
-    """
-    datos = {}
-
-    if analisis.get("zona_mencionada"):
-        datos["zona_mencionada"] = analisis["zona_mencionada"]
-
-    if analisis.get("nivel"):
-        datos["nivel"] = analisis["nivel"]
-
-    if analisis.get("grado"):
-        datos["grado"] = analisis["grado"]
-
-    if analisis.get("edad_alumno") is not None:
-        datos["edad_alumno"] = analisis["edad_alumno"]
-
-    if analisis.get("fecha_nacimiento_texto"):
-        datos["fecha_nacimiento_texto"] = analisis[
-            "fecha_nacimiento_texto"
-        ]
-
-    if analisis.get("fecha_nacimiento_iso"):
-        datos["fecha_nacimiento_iso"] = analisis[
-            "fecha_nacimiento_iso"
-        ]
-
-    if analisis.get("nivel_actual"):
-        datos["nivel_actual"] = analisis[
-            "nivel_actual"
-        ]
-
-    if analisis.get("ultimo_grado_cursado"):
-        datos["ultimo_grado_cursado"] = analisis[
-            "ultimo_grado_cursado"
-        ]
-
-    if analisis.get("grado_solicitado"):
-        datos["grado_solicitado"] = analisis[
-            "grado_solicitado"
-        ]
-
-    if analisis.get("nombre_tutor"):
-        datos["nombre_tutor"] = analisis["nombre_tutor"]
-
-    if analisis.get("nombre_alumno"):
-        datos["nombre_alumno"] = analisis["nombre_alumno"]
-
-    if analisis.get("fecha_cita_iso"):
-        datos["fecha_cita_iso"] = analisis["fecha_cita_iso"]
-
-    if analisis.get("hora_cita_24h"):
-        datos["hora_cita_24h"] = analisis["hora_cita_24h"]
-
-    return datos
-
+        
 def detectar_pausa_conversacion_simple(
     mensaje: str,
 ) -> bool:
@@ -7748,12 +7913,19 @@ def aplicar_reglas_negocio_estructuradas(
         in intenciones_secundarias
     )
 
-    continuacion_solicitud_costos = (
+    continuacion_zona_costos = (
         objetivo_pendiente_actual
-        in {
-            "OBTENER_ZONA_PARA_COSTOS",
-            "OBTENER_NIVEL_PARA_COSTOS",
-        }
+        == "OBTENER_ZONA_PARA_COSTOS"
+    )
+
+    continuacion_nivel_costos = (
+        objetivo_pendiente_actual
+        == "OBTENER_NIVEL_PARA_COSTOS"
+    )
+
+    continuacion_solicitud_costos = bool(
+        continuacion_zona_costos
+        or continuacion_nivel_costos
     )
 
     solicito_costos_previamente = (
@@ -7765,7 +7937,7 @@ def aplicar_reglas_negocio_estructuradas(
         solicitud_costos_explicita
         or continuacion_solicitud_costos
     ):
-
+        
         # ----------------------------------------------------
         # PRIMERA SOLICITUD:
         # validar zona y después presentar valor.
@@ -7773,12 +7945,9 @@ def aplicar_reglas_negocio_estructuradas(
 
         if (
             not solicito_costos_previamente
-            or (
-                continuacion_solicitud_costos
-                and not solicitud_costos_explicita
-            )
+            and not continuacion_nivel_costos
         ):
-
+            
             if not zona_validada:
                 decision.update({
                     "accion": "PEDIR_ZONA",
@@ -12125,8 +12294,13 @@ def enriquecer_contexto_comercial_con_memoria(
     # --------------------------------------------------------
     # ETAPA Y ESTADO COMERCIAL
     # --------------------------------------------------------
+    #
+    # La memoria IA NO tiene autoridad para modificar estos
+    # campos. Son propiedad exclusiva del estado persistido y
+    # de las transiciones deterministas del flujo.
+    # --------------------------------------------------------
 
-    etapa_sugerida = str(
+    etapa_sugerida_memoria = str(
         memoria.get(
             "etapa_conversacional_sugerida",
             "",
@@ -12134,15 +12308,7 @@ def enriquecer_contexto_comercial_con_memoria(
         or ""
     ).strip().upper()
 
-    if (
-        etapa_sugerida
-        in ETAPAS_CONVERSACIONALES_VALIDAS
-    ):
-        contexto_base[
-            "etapa_conversacional"
-        ] = etapa_sugerida
-
-    estado_sugerido = str(
+    estado_sugerido_memoria = str(
         memoria.get(
             "estado_comercial_sugerido",
             "",
@@ -12151,12 +12317,15 @@ def enriquecer_contexto_comercial_con_memoria(
     ).strip().upper()
 
     if (
-        estado_sugerido
-        in ESTADOS_COMERCIALES_VALIDOS
+        etapa_sugerida_memoria
+        or estado_sugerido_memoria
     ):
-        contexto_base[
-            "estado_comercial"
-        ] = estado_sugerido
+        print(
+            "🛡️ Sugerencia de estado de memoria IA "
+            "ignorada por política determinista: "
+            f"etapa={etapa_sugerida_memoria}, "
+            f"estado={estado_sugerido_memoria}"
+        )
 
     # --------------------------------------------------------
     # DATOS DE LA FAMILIA
@@ -12222,9 +12391,6 @@ def enriquecer_contexto_comercial_con_memoria(
     # --------------------------------------------------------
 
     equivalencias_listas = {
-        "hitos_comerciales": (
-            "hitos_comerciales"
-        ),
         "temas_explicados": (
             "temas_explicados"
         ),
@@ -14148,16 +14314,6 @@ def detecta_condicion_consulta_admin(respuesta_bot: str) -> bool:
 
     return any(frase in texto for frase in frases)
 
-def normalizar_numero_whatsapp(numero: str) -> str:
-    """
-    Normaliza números de WhatsApp para comparar.
-    """
-    numero = (numero or "").strip()
-
-    if numero.startswith("whatsapp:"):
-        numero = numero.replace("whatsapp:", "", 1)
-
-    return numero.strip()
 
 
 def es_numero_admin(from_number: str) -> bool:
@@ -14828,6 +14984,7 @@ def get_db():
 def obtener_historial_completo_contacto(
     db: Session,
     contact,
+    max_message_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Recupera la conversación completa de un contacto
@@ -14856,11 +15013,28 @@ def obtener_historial_completo_contacto(
         return resultado
 
     try:
-        mensajes = (
+        query_mensajes = (
             db.query(Message)
             .filter(
                 Message.contact_id == contact.id
             )
+        )
+
+        if (
+            isinstance(max_message_id, int)
+            and max_message_id > 0
+        ):
+            query_mensajes = (
+                query_mensajes.filter(
+                    or_(
+                        Message.direction != "incoming",
+                        Message.id <= max_message_id,
+                    )
+                )
+            )
+
+        mensajes = (
+            query_mensajes
             .order_by(
                 Message.timestamp.asc(),
                 Message.id.asc(),
@@ -16766,7 +16940,9 @@ def procesar_mensaje_whatsapp_estructurado_real(
     contact,
     from_number: str,
     mensaje_usuario: str,
+    max_message_id: Optional[int] = None,
 ) -> Dict[str, Any]:
+    
     """
     Ejecuta el nuevo flujo estructurado con efectos reales.
 
@@ -16820,17 +16996,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
     # PUERTA PREVIA DE CLASIFICACIÓN DEL ALCANCE
     # ========================================================
 
-    history_alcance = (
+    query_history_alcance = (
         db.query(Message)
         .filter(
             Message.contact_id == contact.id
         )
+    )
+
+    if (
+        isinstance(max_message_id, int)
+        and max_message_id > 0
+    ):
+        query_history_alcance = (
+            query_history_alcance.filter(
+                or_(
+                    Message.direction != "incoming",
+                    Message.id <= max_message_id,
+                )
+            )
+        )
+
+    history_alcance = (
+        query_history_alcance
         .order_by(
-            Message.timestamp.asc()
+            Message.timestamp.asc(),
+            Message.id.asc(),
         )
         .all()
     )
-
+    
     historial_alcance = []
 
     for item in history_alcance[-10:]:
@@ -17552,13 +17746,31 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # 1. HISTORIAL COMPLETO PARA EL ORQUESTADOR
         # ----------------------------------------------------
 
-        history = (
+        query_history = (
             db.query(Message)
             .filter(
                 Message.contact_id == contact.id
             )
+        )
+
+        if (
+            isinstance(max_message_id, int)
+            and max_message_id > 0
+        ):
+            query_history = (
+                query_history.filter(
+                    or_(
+                        Message.direction != "incoming",
+                        Message.id <= max_message_id,
+                    )
+                )
+            )
+
+        history = (
+            query_history
             .order_by(
-                Message.timestamp.asc()
+                Message.timestamp.asc(),
+                Message.id.asc(),
             )
             .all()
         )
@@ -17567,6 +17779,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
             obtener_historial_completo_contacto(
                 db=db,
                 contact=contact,
+                max_message_id=max_message_id,
             )
         )
 
@@ -18048,10 +18261,13 @@ def procesar_buffer_whatsapp_estructurado(
     Procesa conjuntamente los mensajes recibidos después de que
     transcurre el periodo de inactividad configurado.
 
-    Cada ejecución utiliza su propia sesión de base de datos.
-    """
+    Un mismo contacto nunca puede tener dos ejecuciones del flujo
+    estructurado procesándose al mismo tiempo.
 
-    mensajes_buffer = []
+    El lock por contacto se adquiere ANTES de retirar el buffer,
+    para evitar que lotes posteriores del mismo contacto sean
+    extraídos mientras todavía se procesa un lote anterior.
+    """
 
     numero_normalizado = (
         normalizar_numero_whatsapp(
@@ -18064,106 +18280,173 @@ def procesar_buffer_whatsapp_estructurado(
         or str(from_number or "").strip()
     )
 
-    with MESSAGE_BUFFER_LOCK:
-        buffer_actual = MESSAGE_BUFFERS.get(
+    lock_contacto = (
+        obtener_lock_procesamiento_estructurado(
             clave_buffer
         )
-        
-        if not buffer_actual:
+    )
+
+    # --------------------------------------------------------
+    # SERIALIZACIÓN COMPLETA POR CONTACTO
+    # --------------------------------------------------------
+
+    with lock_contacto:
+
+        mensajes_buffer = []
+        message_ids_buffer = []
+
+        # ----------------------------------------------------
+        # Sólo ahora retiramos el lote del buffer.
+        #
+        # Si mientras esperábamos el lock llegó otro mensaje,
+        # habrá cambiado el identificador y este timer viejo
+        # simplemente dejará de ser válido.
+        # ----------------------------------------------------
+
+        with MESSAGE_BUFFER_LOCK:
+
+            buffer_actual = MESSAGE_BUFFERS.get(
+                clave_buffer
+            )
+
+            if not buffer_actual:
+                return
+
+            if (
+                buffer_actual.get("identificador")
+                != identificador_buffer
+            ):
+                return
+
+            mensajes_buffer = list(
+                buffer_actual.get(
+                    "mensajes",
+                    [],
+                )
+            )
+
+            message_ids_buffer = list(
+                buffer_actual.get(
+                    "message_ids",
+                    [],
+                )
+            )
+
+            MESSAGE_BUFFERS.pop(
+                clave_buffer,
+                None,
+            )
+
+        mensaje_conjunto = "\n".join(
+            str(mensaje or "").strip()
+            for mensaje in mensajes_buffer
+            if str(mensaje or "").strip()
+        ).strip()
+
+        if not mensaje_conjunto:
             return
 
-        if (
-            buffer_actual.get("identificador")
-            != identificador_buffer
-        ):
-            return
-
-        mensajes_buffer = list(
-            buffer_actual.get(
-                "mensajes",
-                [],
+        message_ids_validos = [
+            message_id
+            for message_id in message_ids_buffer
+            if (
+                isinstance(message_id, int)
+                and message_id > 0
             )
+        ]
+
+        max_message_id_lote = (
+            max(message_ids_validos)
+            if message_ids_validos
+            else None
         )
 
-        MESSAGE_BUFFERS.pop(
-            clave_buffer,
-            None,
-        )
+        db_buffer = SessionLocal()
 
-    mensaje_conjunto = "\n".join(
-        str(mensaje or "").strip()
-        for mensaje in mensajes_buffer
-        if str(mensaje or "").strip()
-    ).strip()
-
-    if not mensaje_conjunto:
-        return
-
-    db_buffer = SessionLocal()
-
-    try:
-        contact = get_or_create_contact(
-            db_buffer,
-            from_number,
-        )
-
-        print(
-            "\n📦 PROCESANDO BUFFER DE WHATSAPP"
-        )
-        print(
-            f"📱 Número: {from_number}"
-        )
-        print(
-            f"📨 Mensajes agrupados: "
-            f"{len(mensajes_buffer)}"
-        )
-        print(
-            f"📝 Mensaje conjunto: "
-            f"{mensaje_conjunto}"
-        )
-
-        resultado_estructurado = (
-            procesar_mensaje_whatsapp_estructurado_real(
-                db=db_buffer,
-                contact=contact,
-                from_number=from_number,
-                mensaje_usuario=mensaje_conjunto,
+        try:
+            contact = get_or_create_contact(
+                db_buffer,
+                from_number,
             )
-        )
 
-        resultado_json = json.dumps(
-            resultado_estructurado,
-            ensure_ascii=False,
-            default=str,
-        )
+            db_buffer.refresh(
+                contact
+            )
 
-        print(
-            "✅ Buffer estructurado procesado: "
-            + resultado_json
-        )
-        
+            print(
+                "\n🔒 PROCESAMIENTO ESTRUCTURADO "
+                "EXCLUSIVO POR CONTACTO"
+            )
 
-    except Exception as e:
-        db_buffer.rollback()
+            print(
+                f"📱 Número: {from_number}"
+            )
 
-        print(
-            "❌ Error procesando buffer "
-            f"de WhatsApp: {e}"
-        )
+            print(
+                "\n📦 PROCESANDO BUFFER DE WHATSAPP"
+            )
 
-    finally:
-        db_buffer.close()
+            print(
+                f"📨 Mensajes agrupados: "
+                f"{len(mensajes_buffer)}"
+            )
 
+            print(
+                f"🆔 Corte de historial: "
+                f"{max_message_id_lote}"
+            )
 
+            print(
+                f"📝 Mensaje conjunto: "
+                f"{mensaje_conjunto}"
+            )
+
+            resultado_estructurado = (
+                procesar_mensaje_whatsapp_estructurado_real(
+                    db=db_buffer,
+                    contact=contact,
+                    from_number=from_number,
+                    mensaje_usuario=mensaje_conjunto,
+                    max_message_id=max_message_id_lote,
+                )
+            )
+
+            resultado_json = json.dumps(
+                resultado_estructurado,
+                ensure_ascii=False,
+                default=str,
+            )
+
+            print(
+                "✅ Buffer estructurado procesado: "
+                + resultado_json
+            )
+
+        except Exception as e:
+            db_buffer.rollback()
+
+            print(
+                "❌ Error procesando buffer "
+                f"de WhatsApp: {e}"
+            )
+
+        finally:
+            db_buffer.close()
+            
 def agregar_mensaje_al_buffer_whatsapp(
     from_number: str,
     mensaje: str,
+    message_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Agrega un mensaje al buffer del contacto.
 
     Cada mensaje nuevo cancela el temporizador anterior y vuelve
     a iniciar el periodo de espera.
+
+    También conserva los IDs de los mensajes persistidos para
+    poder delimitar exactamente el historial correspondiente
+    a cada lote.
     """
 
     numero_normalizado = (
@@ -18183,13 +18466,16 @@ def agregar_mensaje_al_buffer_whatsapp(
     )
 
     with MESSAGE_BUFFER_LOCK:
+
         buffer_anterior = MESSAGE_BUFFERS.get(
             clave_buffer
         )
 
         mensajes_acumulados = []
+        message_ids_acumulados = []
 
         if buffer_anterior:
+
             temporizador_anterior = (
                 buffer_anterior.get(
                     "temporizador"
@@ -18209,6 +18495,13 @@ def agregar_mensaje_al_buffer_whatsapp(
                 )
             )
 
+            message_ids_acumulados = list(
+                buffer_anterior.get(
+                    "message_ids",
+                    [],
+                )
+            )
+
         mensaje_limpio = str(
             mensaje or ""
         ).strip()
@@ -18216,6 +18509,14 @@ def agregar_mensaje_al_buffer_whatsapp(
         if mensaje_limpio:
             mensajes_acumulados.append(
                 mensaje_limpio
+            )
+
+        if (
+            isinstance(message_id, int)
+            and message_id > 0
+        ):
+            message_ids_acumulados.append(
+                message_id
             )
 
         temporizador = threading.Timer(
@@ -18232,6 +18533,7 @@ def agregar_mensaje_al_buffer_whatsapp(
         MESSAGE_BUFFERS[clave_buffer] = {
             "identificador": identificador_buffer,
             "mensajes": mensajes_acumulados,
+            "message_ids": message_ids_acumulados,
             "temporizador": temporizador,
             "ultima_actualizacion": (
                 datetime.now(
@@ -18246,6 +18548,7 @@ def agregar_mensaje_al_buffer_whatsapp(
         "📥 Mensaje agregado al buffer: "
         f"numero={from_number}, "
         f"mensajes={len(mensajes_acumulados)}, "
+        f"message_ids={message_ids_acumulados}, "
         f"espera={MESSAGE_BUFFER_SECONDS}s"
     )
 
@@ -18254,12 +18557,14 @@ def agregar_mensaje_al_buffer_whatsapp(
         "mensajes_acumulados": (
             len(mensajes_acumulados)
         ),
+        "message_ids": (
+            message_ids_acumulados
+        ),
         "segundos_espera": (
             MESSAGE_BUFFER_SECONDS
         ),
     }
     
-
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
@@ -18454,7 +18759,7 @@ async def whatsapp_webhook(
 
         # El mensaje entrante se guarda una sola vez antes
         # de decidir cuál flujo debe procesarlo.
-        save_message(
+        mensaje_guardado = save_message(
             db,
             contact.id,
             "incoming",
@@ -18519,6 +18824,11 @@ async def whatsapp_webhook(
                 agregar_mensaje_al_buffer_whatsapp(
                     from_number=From,
                     mensaje=mensaje_entrada,
+                    message_id=(
+                        mensaje_guardado.id
+                        if mensaje_guardado
+                        else None
+                    ),
                 )
             )
 
