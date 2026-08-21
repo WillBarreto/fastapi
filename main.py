@@ -2204,6 +2204,100 @@ def extraer_json_de_texto(texto: str) -> Optional[Dict[str, Any]]:
 # CLASIFICACIÓN IA DEL ALCANCE GENERAL DE LA CONVERSACIÓN
 # ============================================================
 
+def detectar_admisiones_evidentes_para_alcance(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta solicitudes explícitas e inequívocas de admisiones.
+
+    Sólo evita la clasificación IA cuando el mensaje contiene
+    evidencia suficientemente clara de interés escolar/admisiones.
+
+    No modifica estado, CRM ni base de datos.
+    """
+
+    mensaje_normalizado = (
+        normalizar_texto_para_deteccion(
+            mensaje_usuario
+        )
+    )
+
+    if not mensaje_normalizado:
+        return False
+
+    # --------------------------------------------------------
+    # EXPRESIONES INEQUÍVOCAS DE INFORMES ESCOLARES
+    # --------------------------------------------------------
+
+    expresiones_directas = [
+        "quiero informes",
+        "quisiera informes",
+        "solicito informes",
+        "necesito informes",
+        "me puede dar informes",
+        "me pueden dar informes",
+        "me interesa el colegio",
+        "informacion sobre primaria",
+        "informacion sobre secundaria",
+        "informacion sobre kinder",
+        "informacion de primaria",
+        "informacion de secundaria",
+        "informacion de kinder",
+        "me interesa primaria",
+        "me interesa secundaria",
+        "me interesa kinder",
+    ]
+
+    if any(
+        expresion in mensaje_normalizado
+        for expresion in expresiones_directas
+    ):
+        return True
+
+    # --------------------------------------------------------
+    # "INFORMACIÓN" GENÉRICA SÓLO CUANDO EXISTE CONTEXTO
+    # ESCOLAR O DE ADMISIÓN
+    # --------------------------------------------------------
+
+    pide_informacion_generica = any(
+        expresion in mensaje_normalizado
+        for expresion in [
+            "quiero informacion",
+            "quisiera informacion",
+            "necesito informacion",
+            "solicito informacion",
+        ]
+    )
+
+    if not pide_informacion_generica:
+        return False
+
+    indicadores_admisiones = [
+        "inscribir",
+        "inscripcion",
+        "admision",
+        "nuevo ingreso",
+        "alumno",
+        "hijo",
+        "hija",
+        "niño",
+        "niña",
+        "colegio",
+        "escuela",
+        "kinder",
+        "preescolar",
+        "primaria",
+        "secundaria",
+        "colegiatura",
+        "beca",
+        "grado",
+    ]
+
+    return any(
+        indicador in mensaje_normalizado
+        for indicador in indicadores_admisiones
+    )
+    
 def clasificar_alcance_conversacion_con_ia(
     mensaje_usuario: str,
     historial_lista: Optional[List[str]] = None,
@@ -17062,32 +17156,71 @@ def procesar_mensaje_whatsapp_estructurado_real(
             f"{emisor}: {contenido}"
         )
 
-    try:
-        resultado_clasificacion_alcance = (
-            clasificar_alcance_conversacion_con_ia(
-                mensaje_usuario=mensaje,
-                historial_lista=historial_alcance,
-            )
+    admisiones_evidentes = (
+        detectar_admisiones_evidentes_para_alcance(
+            mensaje
         )
+    )
 
-    except Exception as error_alcance:
-        print(
-            "⚠️ Error en puerta previa de alcance: "
-            f"{error_alcance}"
+    if admisiones_evidentes:
+
+        alcance_determinista = (
+            normalizar_alcance_conversacion({
+                "alcance_conversacion": "ADMISIONES",
+                "motivo_principal": (
+                    "Solicitud explícita de información "
+                    "para admisiones."
+                ),
+                "resumen_solicitud": mensaje,
+                "ruta_configurada": True,
+                "requiere_aclaracion": False,
+                "requiere_admin": False,
+                "motivo_escalacion": "",
+                "confianza": 1.0,
+            })
         )
 
         resultado_clasificacion_alcance = {
-            "exitoso": False,
-            "alcance": (
-                crear_alcance_conversacion_vacio()
-            ),
-            "modelo_usado": "",
+            "exitoso": True,
+            "alcance": alcance_determinista,
+            "modelo_usado": "DETERMINISTA",
             "intentos_realizados": 0,
-            "errores": [
-                str(error_alcance)
-            ],
+            "errores": [],
         }
 
+        print(
+            "🎯 ALCANCE DETERMINISTA: "
+            "solicitud explícita de admisiones detectada."
+        )
+
+    else:
+
+        try:
+            resultado_clasificacion_alcance = (
+                clasificar_alcance_conversacion_con_ia(
+                    mensaje_usuario=mensaje,
+                    historial_lista=historial_alcance,
+                )
+            )
+
+        except Exception as error_alcance:
+            print(
+                "⚠️ Error en puerta previa de alcance: "
+                f"{error_alcance}"
+            )
+
+            resultado_clasificacion_alcance = {
+                "exitoso": False,
+                "alcance": (
+                    crear_alcance_conversacion_vacio()
+                ),
+                "modelo_usado": "",
+                "intentos_realizados": 0,
+                "errores": [
+                    str(error_alcance)
+                ],
+            }
+            
     alcance_detectado = (
         resultado_clasificacion_alcance.get(
             "alcance",
