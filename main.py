@@ -20911,54 +20911,6 @@ def enviar_alerta_admin_whatsapp(
     )
 
     return resultado
-    
-    """
-    Envía una alerta interna al administrador cuando una conversación
-    requiere atención humana.
-    """
-    admin_number = os.getenv("ADMIN_WHATSAPP_NUMBER")
-
-    if not admin_number:
-        print("⚠️ ADMIN_WHATSAPP_NUMBER no configurado; no se envió alerta interna")
-        return "ADMIN_WHATSAPP_NUMBER no configurado"
-
-    phone = contact.phone_number if contact else "Teléfono no disponible"
-    tarea_txt = f"\nID pendiente: {tarea_id}\n" if tarea_id else ""
-
-    mensaje_alerta = f"""🔔 Atención requerida
-
-Un prospecto está esperando confirmación de disponibilidad para visita.
-{tarea_txt}
-Teléfono: {phone}
-
-Último mensaje del prospecto:
-{mensaje_usuario}
-
-Respuesta del bot:
-{respuesta_bot}
-
-Si sólo hay una conversación pendiente, puede responder directamente con la indicación que desea enviar al prospecto.
-
-Si hay varias conversaciones pendientes, primero se le pedirá elegir a cuál responder.
-
-Ejemplo:
-Confirmar lunes 11am
-
-La IA adaptará su respuesta antes de enviarla al prospecto.
-
-Revisar conversación:
-https://fastapi-production-efb5.up.railway.app/panel"""
-
-    resultado = enviar_notificacion_admin_whatsapp(
-        db,
-        admin_number,
-        mensaje_alerta,
-    )
-    
-    print(f"📣 Alerta interna enviada a: {admin_number}")
-    print(f"📣 Resultado alerta interna: {resultado}")
-    
-    return resultado
 
 def limpiar_instruccion_admin(texto_admin: str) -> str:
     """
