@@ -7638,9 +7638,10 @@ def aplicar_reglas_negocio_estructuradas(
     # 5. PAUSA O CIERRE TEMPORAL
     # ========================================================
 
- 
+
     if (
-    analisis_seguro.get("pausa_conversacion")
+        analisis_seguro.get("desistimiento_temporal")
+        or analisis_seguro.get("pausa_conversacion")
         or analisis_seguro.get("intencion_principal")
         == "PAUSAR_CONVERSACION"
         or detectar_pausa_conversacion_simple(
@@ -8538,9 +8539,20 @@ def aplicar_reglas_negocio_estructuradas(
         or continuacion_nivel_costos
     )
 
+    continuacion_costos_sin_nueva_solicitud = bool(
+        continuacion_solicitud_costos
+        and not solicitud_costos_explicita
+    )
+
     solicito_costos_previamente = (
         "SOLICITO_COSTOS_INICIAL"
         in hitos_comerciales
+    )
+
+    es_continuacion_primera_solicitud_costos = bool(
+        continuacion_costos_sin_nueva_solicitud
+        and "INSISTIO_COSTOS"
+        not in hitos_comerciales
     )
 
     if (
@@ -8560,7 +8572,7 @@ def aplicar_reglas_negocio_estructuradas(
 
         if (
             not solicito_costos_previamente
-            and not continuacion_nivel_costos
+            or es_continuacion_primera_solicitud_costos
         ):
 
             if not zona_validada:
@@ -8709,6 +8721,11 @@ def aplicar_reglas_negocio_estructuradas(
         # ahora sí responder costos.
         # ----------------------------------------------------
 
+        es_insistencia_costos = bool(
+            solicitud_costos_explicita
+            and solicito_costos_previamente
+        )
+
         niveles_costos = (
             obtener_niveles_costos_solicitados(
                 analisis_seguro,
@@ -8732,6 +8749,9 @@ def aplicar_reglas_negocio_estructuradas(
                 "objetivo_pendiente_sugerido": (
                     "OBTENER_ZONA_PARA_COSTOS"
                 ),
+                "registrar_insistencia_costos": (
+                    es_insistencia_costos
+                ),
             })
 
             return decision
@@ -8751,6 +8771,9 @@ def aplicar_reglas_negocio_estructuradas(
             decision["datos_detectados"].update({
                 "objetivo_pendiente_sugerido": (
                     "OBTENER_NIVEL_PARA_COSTOS"
+                ),
+                "registrar_insistencia_costos": (
+                    es_insistencia_costos
                 ),
             })
 
@@ -8784,6 +8807,9 @@ def aplicar_reglas_negocio_estructuradas(
         in intenciones_secundarias
         or "PIDIO_INFORMES"
         in hitos_comerciales
+        or detectar_admisiones_evidentes_para_alcance(
+            mensaje_usuario
+        )
         or intencion_principal
         in {
             "RESPONDER_ZONA",
@@ -13600,6 +13626,19 @@ def calcular_transicion_comercial_post_envio(
                 "SOLICITO_COSTOS_INICIAL"
             )
 
+        if (
+            isinstance(
+                datos_decision_costos,
+                dict,
+            )
+            and datos_decision_costos.get(
+                "registrar_insistencia_costos"
+            )
+        ):
+            agregar_hito(
+                "INSISTIO_COSTOS"
+            )
+
     elif accion == "PEDIR_NIVEL_COSTOS":
         transicion.update({
             "transicion_aplicable": True,
@@ -13608,6 +13647,29 @@ def calcular_transicion_comercial_post_envio(
                 "una consulta pendiente de costos."
             ),
         })
+
+        datos_decision_costos = decision.get(
+            "datos_detectados",
+            {},
+        )
+
+        if isinstance(
+            datos_decision_costos,
+            dict,
+        ):
+            if datos_decision_costos.get(
+                "registrar_solicitud_costos_inicial"
+            ):
+                agregar_hito(
+                    "SOLICITO_COSTOS_INICIAL"
+                )
+
+            if datos_decision_costos.get(
+                "registrar_insistencia_costos"
+            ):
+                agregar_hito(
+                    "INSISTIO_COSTOS"
+                )
 
     elif accion == "PEDIR_REFERENCIA":
         transicion.update({
@@ -13726,16 +13788,20 @@ def calcular_transicion_comercial_post_envio(
 
     elif accion == "RESPONDER_COSTOS":
         transicion.update({
+            "etapa_conversacional": (
+                "INVITACION_VISITA"
+            ),
             "estado_comercial": (
                 "COSTOS_PRESENTADOS"
             ),
             "transicion_aplicable": True,
             "motivo": (
                 "Se compartieron los costos solicitados "
-                "por la familia."
+                "y quedó pendiente la decisión de visita "
+                "de la familia."
             ),
         })
-
+        
         datos_decision_costos = decision.get(
             "datos_detectados",
             {},
@@ -13889,6 +13955,9 @@ def calcular_transicion_comercial_post_envio(
                 "OBTENER_AREA_INTERES"
             ),
             "INVITAR_CITA": (
+                "OBTENER_DECISION_VISITA"
+            ),
+            "RESPONDER_COSTOS": (
                 "OBTENER_DECISION_VISITA"
             ),
             "PEDIR_FECHA_CITA": (
@@ -19622,6 +19691,44 @@ def procesar_buffer_whatsapp_estructurado(
             ):
                 return
 
+            programado_para_texto = str(
+                buffer_actual.get(
+                    "programado_para",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if programado_para_texto:
+                try:
+                    programado_para = (
+                        datetime.fromisoformat(
+                            programado_para_texto
+                        )
+                    )
+
+                    ahora_real = datetime.now(
+                        timezone.utc
+                    )
+
+                    retraso_timer = (
+                        ahora_real
+                        - programado_para
+                    ).total_seconds()
+
+                    print(
+                        "⏱️ BUFFER TIMER: "
+                        f"programado={programado_para_texto}, "
+                        f"ejecutado={ahora_real.isoformat()}, "
+                        f"retraso={retraso_timer:.2f}s"
+                    )
+
+                except Exception as e:
+                    print(
+                        "⚠️ No fue posible medir retraso "
+                        f"del buffer: {e}"
+                    )
+
             mensajes_buffer = list(
                 buffer_actual.get(
                     "mensajes",
@@ -19834,18 +19941,25 @@ def agregar_mensaje_al_buffer_whatsapp(
 
         temporizador.daemon = True
 
+        ahora_buffer = datetime.now(
+            timezone.utc
+        )
+
         MESSAGE_BUFFERS[clave_buffer] = {
             "identificador": identificador_buffer,
             "mensajes": mensajes_acumulados,
             "message_ids": message_ids_acumulados,
             "temporizador": temporizador,
             "ultima_actualizacion": (
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
+                ahora_buffer.isoformat()
             ),
+            "programado_para": (
+                ahora_buffer
+                + timedelta(
+                    seconds=MESSAGE_BUFFER_SECONDS
+                )
+            ).isoformat(),
         }
-
         temporizador.start()
 
     print(
