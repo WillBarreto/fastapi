@@ -258,6 +258,224 @@ STRUCTURED_PROCESS_LOCKS: Dict[
 
 STRUCTURED_PROCESS_LOCKS_GUARD = threading.Lock()
 
+# ============================================================
+# FUENTE AUTORIZADA DE HORARIOS
+# ============================================================
+
+HORARIOS_CONFIG_PATH = os.path.join(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    ),
+    "config",
+    "horarios.json",
+)
+
+
+def cargar_configuracion_horarios() -> Dict[str, Any]:
+    """
+    Carga la fuente externa autorizada de horarios escolares.
+
+    No utiliza Gemini y falla de forma segura si el archivo
+    no existe o tiene una estructura inválida.
+    """
+
+    try:
+        with open(
+            HORARIOS_CONFIG_PATH,
+            "r",
+            encoding="utf-8",
+        ) as archivo:
+            datos = json.load(archivo)
+
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+    ) as e:
+        print(
+            "❌ No fue posible cargar la configuración "
+            f"autorizada de horarios: {e}"
+        )
+        return {}
+
+    if not isinstance(datos, dict):
+        return {}
+
+    horarios = datos.get(
+        "horarios_regulares",
+        {},
+    )
+
+    if not isinstance(
+        horarios,
+        dict,
+    ):
+        return {}
+
+    return datos
+
+
+def detectar_solicitud_horarios(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta una solicitud explícita sobre horarios escolares.
+    """
+
+    texto = normalizar_texto_para_deteccion(
+        mensaje_usuario
+    )
+
+    expresiones = [
+        "horario",
+        "horarios",
+        "hora de entrada",
+        "hora de salida",
+        "a que hora entran",
+        "a que hora salen",
+        "a qué hora entran",
+        "a qué hora salen",
+        "horario escolar",
+        "horario de clases",
+    ]
+
+    return any(
+        expresion in texto
+        for expresion in expresiones
+    )
+
+
+def construir_respuesta_horarios(
+    niveles: Optional[List[str]] = None,
+) -> str:
+    """
+    Construye una respuesta exclusivamente con horarios
+    autorizados desde config/horarios.json.
+    """
+
+    configuracion = (
+        cargar_configuracion_horarios()
+    )
+
+    horarios = configuracion.get(
+        "horarios_regulares",
+        {},
+    )
+
+    if not horarios:
+        return ""
+
+    niveles_solicitados = (
+        niveles
+        if isinstance(niveles, list)
+        else []
+    )
+
+    niveles_validos = []
+
+    for nivel in niveles_solicitados:
+        nivel_texto = str(
+            nivel or ""
+        ).strip()
+
+        equivalencias = {
+            "kinder": "Kínder",
+            "kínder": "Kínder",
+            "preescolar": "Kínder",
+            "primaria": "Primaria",
+            "secundaria": "Secundaria",
+        }
+
+        nivel_normalizado = (
+            equivalencias.get(
+                nivel_texto.lower(),
+                nivel_texto,
+            )
+        )
+
+        if (
+            nivel_normalizado in horarios
+            and nivel_normalizado
+            not in niveles_validos
+        ):
+            niveles_validos.append(
+                nivel_normalizado
+            )
+
+    if not niveles_validos:
+        niveles_validos = [
+            "Kínder",
+            "Primaria",
+            "Secundaria",
+        ]
+
+    lineas = [
+        "Con gusto. Nuestros horarios regulares son:",
+        "",
+    ]
+
+    for nivel in niveles_validos:
+
+        datos_nivel = horarios.get(
+            nivel,
+            {},
+        )
+
+        ingreso = str(
+            datos_nivel.get(
+                "ingreso",
+                "",
+            )
+            or ""
+        ).strip()
+
+        salida = str(
+            datos_nivel.get(
+                "salida",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if ingreso and salida:
+            lineas.append(
+                f"{nivel}: ingreso {ingreso}, "
+                f"salida {salida}"
+            )
+
+    horario_extendido = configuracion.get(
+        "horario_extendido",
+        {},
+    )
+
+    if (
+        isinstance(
+            horario_extendido,
+            dict,
+        )
+        and horario_extendido.get(
+            "disponible"
+        ) is True
+    ):
+        minutos = horario_extendido.get(
+            "duracion_adicional_minutos",
+            60,
+        )
+
+        if minutos == 60:
+            lineas.extend([
+                "",
+                (
+                    "Adicionalmente contamos con horario "
+                    "extendido de una hora después del horario "
+                    "regular de cada nivel."
+                ),
+            ])
+
+    return "\n".join(
+        lineas
+    ).strip()
+    
 
 def obtener_lock_procesamiento_estructurado(
     clave_contacto: str,
@@ -503,6 +721,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "PEDIR_ZONA",
     "CONTINUAR_INFORMES",
     "RESPONDER_TEMA",
+    "RESPONDER_HORARIOS",
     "RESPONDER_COSTOS",
     "PEDIR_NIVEL_COSTOS",
     "RESPONDER_UBICACION",
@@ -2231,6 +2450,14 @@ def detectar_admisiones_evidentes_para_alcance(
     # --------------------------------------------------------
 
     expresiones_directas = [
+        "mas informacion",
+        "más información",
+        "quiero mas informacion",
+        "quiero más información",
+        "quisiera mas informacion",
+        "quisiera más información",
+        "necesito mas informacion",
+        "necesito más información",
         "quiero informes",
         "quisiera informes",
         "solicito informes",
@@ -8186,7 +8413,98 @@ def aplicar_reglas_negocio_estructuradas(
     ):
         intenciones_secundarias = []
 
-        # ========================================================
+    # ========================================================
+    # PRIORIDAD: PREGUNTA EXPLÍCITA SOBRE HORARIOS
+    # ========================================================
+    #
+    # Las preguntas institucionales concretas deben responderse
+    # antes de continuar con pasos blandos del embudo como
+    # referencia, propuesta de valor o área de interés.
+    # ========================================================
+
+    if detectar_solicitud_horarios(
+        mensaje_usuario
+    ):
+
+        niveles_horarios = []
+
+        alumnos_horarios = (
+            contexto_secuencial.get(
+                "alumnos",
+                [],
+            )
+        )
+
+        if isinstance(
+            alumnos_horarios,
+            list,
+        ):
+            for alumno in alumnos_horarios:
+
+                if not isinstance(
+                    alumno,
+                    dict,
+                ):
+                    continue
+
+                nivel = str(
+                    alumno.get(
+                        "nivel_interes",
+                        "",
+                    )
+                    or alumno.get(
+                        "nivel",
+                        "",
+                    )
+                    or ""
+                ).strip()
+
+                if (
+                    nivel
+                    and nivel
+                    not in niveles_horarios
+                ):
+                    niveles_horarios.append(
+                        nivel
+                    )
+
+        nivel_turno = str(
+            analisis_seguro.get(
+                "nivel",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if (
+            nivel_turno
+            and nivel_turno
+            not in niveles_horarios
+        ):
+            niveles_horarios.append(
+                nivel_turno
+            )
+
+        decision.update({
+            "accion": "RESPONDER_HORARIOS",
+            "motivo": (
+                "La familia realizó una pregunta explícita "
+                "sobre los horarios escolares."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "niveles_horarios": (
+                niveles_horarios
+            ),
+        })
+
+        return decision
+    
+    # ========================================================
     # ESTRATEGIA DE SOLICITUD DE COSTOS
     # ========================================================
 
@@ -8231,15 +8549,20 @@ def aplicar_reglas_negocio_estructuradas(
     ):
         
         # ----------------------------------------------------
-        # PRIMERA SOLICITUD:
-        # validar zona y después presentar valor.
+        # ----------------------------------------------------
+        # PRIMERA SOLICITUD DE COSTOS
+        # ----------------------------------------------------
+        #
+        # Se conserva la estrategia comercial de contextualizar
+        # el precio antes de compartirlo, pero nunca repetimos
+        # información que la familia ya recibió.
         # ----------------------------------------------------
 
         if (
             not solicito_costos_previamente
             and not continuacion_nivel_costos
         ):
-            
+
             if not zona_validada:
                 decision.update({
                     "accion": "PEDIR_ZONA",
@@ -8261,24 +8584,125 @@ def aplicar_reglas_negocio_estructuradas(
 
                 return decision
 
+            ya_recibio_valor = (
+                "RECIBIO_PRESENTACION_VALOR"
+                in hitos_comerciales
+            )
+
+            ya_recibio_metodo = (
+                "RECIBIO_EXPLICACION_METODO"
+                in hitos_comerciales
+            )
+
+            # Si todavía no recibió la propuesta de valor,
+            # se presenta antes del precio.
+            if not ya_recibio_valor:
+
+                decision.update({
+                    "accion": "PRESENTAR_PROPUESTA_VALOR",
+                    "motivo": (
+                        "Es la primera solicitud de costos "
+                        "y la familia todavía no ha recibido "
+                        "la propuesta general de valor."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": False,
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision["datos_detectados"].update({
+                    "registrar_solicitud_costos_inicial": True,
+                    "etapa_secuencial": (
+                        "PRESENTACION_VALOR"
+                    ),
+                })
+
+                return decision
+
+            # Si ya conoce el valor general pero todavía
+            # no recibió la explicación del Método,
+            # se explica una sola vez.
+            if not ya_recibio_metodo:
+
+                decision.update({
+                    "accion": "EXPLICAR_METODO_FILADELFIA",
+                    "motivo": (
+                        "La familia ya recibió la propuesta "
+                        "general de valor, pero todavía no "
+                        "la explicación del Método Filadelfia."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": False,
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision["datos_detectados"].update({
+                    "registrar_solicitud_costos_inicial": True,
+                    "etapa_secuencial": (
+                        "EXPLICACION_METODO"
+                    ),
+                })
+
+                return decision
+
+            # Si la familia ya recibió valor Y Método,
+            # no existe razón comercial para obligarla a
+            # volver a pedir los costos.
+            niveles_costos = (
+                obtener_niveles_costos_solicitados(
+                    analisis_seguro,
+                    decision,
+                )
+            )
+
+            if not niveles_costos:
+                decision.update({
+                    "accion": "PEDIR_NIVEL_COSTOS",
+                    "motivo": (
+                        "La familia ya recibió la información "
+                        "estratégica y solicita costos, pero "
+                        "falta identificar el nivel."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": False,
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision["datos_detectados"].update({
+                    "objetivo_pendiente_sugerido": (
+                        "OBTENER_NIVEL_PARA_COSTOS"
+                    ),
+                    "registrar_solicitud_costos_inicial": True,
+                })
+
+                return decision
+
             decision.update({
-                "accion": "PRESENTAR_PROPUESTA_VALOR",
+                "accion": "RESPONDER_COSTOS",
                 "motivo": (
-                    "Es la primera solicitud de costos. "
-                    "Antes de compartirlos corresponde presentar "
-                    "el valor general del colegio."
+                    "La familia ya recibió la propuesta de "
+                    "valor y el Método Filadelfia. Su solicitud "
+                    "de costos puede atenderse directamente."
                 ),
                 "requiere_admin": False,
-                "puede_compartir_costos": False,
+                "puede_compartir_costos": True,
                 "debe_finalizar_conversacion": False,
             })
 
             decision["datos_detectados"].update({
+                "niveles_costos": niveles_costos,
+                "nivel_costos": (
+                    niveles_costos[0]
+                    if len(niveles_costos) == 1
+                    else ""
+                ),
                 "registrar_solicitud_costos_inicial": True,
-                "etapa_secuencial": "PRESENTACION_VALOR",
             })
 
             return decision
+            
+
+        
 
         # ----------------------------------------------------
         # SEGUNDA SOLICITUD EXPLÍCITA:
@@ -10082,6 +10506,82 @@ def generar_respuesta_final_estructurada(
 
         print(
             "📍 Ubicación institucional generada "
+            "sin intervención de Gemini."
+        )
+
+        return resultado
+
+    # ========================================================
+    # RESPUESTA DETERMINISTA DE HORARIOS
+    # ========================================================
+
+    if accion == "RESPONDER_HORARIOS":
+
+        datos_decision = (
+            decision_segura.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_decision,
+            dict,
+        ):
+            datos_decision = {}
+
+        niveles_horarios = (
+            datos_decision.get(
+                "niveles_horarios",
+                [],
+            )
+        )
+
+        respuesta_horarios = (
+            construir_respuesta_horarios(
+                niveles_horarios
+            )
+        )
+
+        if not respuesta_horarios:
+            resultado.update({
+                "generada": True,
+                "respuesta": (
+                    "Permítame verificar los horarios "
+                    "vigentes antes de proporcionarle "
+                    "información incorrecta."
+                ),
+                "modelo_usado": "",
+                "intentos": 0,
+                "uso_fallback_seguro": True,
+                "errores_validacion": [
+                    "HORARIOS_AUTORIZADOS_NO_DISPONIBLES"
+                ],
+                "tipo_respuesta": (
+                    "HORARIOS_FALLBACK_SEGURO"
+                ),
+                "error": (
+                    "HORARIOS_AUTORIZADOS_NO_DISPONIBLES"
+                ),
+            })
+
+            return resultado
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_horarios,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "HORARIOS_DETERMINISTAS"
+            ),
+            "error": "",
+        })
+
+        print(
+            "🕒 Horarios institucionales respondidos "
             "sin intervención de Gemini."
         )
 
@@ -13192,6 +13692,16 @@ def calcular_transicion_comercial_post_envio(
             ),
         })
 
+    elif accion == "RESPONDER_HORARIOS":
+        transicion.update({
+            "transicion_aplicable": False,
+            "motivo": (
+                "Se respondió una pregunta institucional "
+                "sobre horarios sin alterar la etapa "
+                "comercial pendiente."
+            ),
+        })
+
     elif accion in {
         "PROFUNDIZAR_AREA_INTERES",
         "RESPONDER_TEMA",
@@ -13222,13 +13732,33 @@ def calcular_transicion_comercial_post_envio(
             "transicion_aplicable": True,
             "motivo": (
                 "Se compartieron los costos solicitados "
-                "después de una segunda solicitud explícita."
+                "por la familia."
             ),
         })
 
-        agregar_hito(
-            "INSISTIO_COSTOS"
+        datos_decision_costos = decision.get(
+            "datos_detectados",
+            {},
         )
+
+        solicitud_inicial = bool(
+            isinstance(
+                datos_decision_costos,
+                dict,
+            )
+            and datos_decision_costos.get(
+                "registrar_solicitud_costos_inicial"
+            )
+        )
+
+        if solicitud_inicial:
+            agregar_hito(
+                "SOLICITO_COSTOS_INICIAL"
+            )
+        else:
+            agregar_hito(
+                "INSISTIO_COSTOS"
+            )
 
         agregar_hito(
             "RECIBIO_COSTOS"
@@ -13237,7 +13767,7 @@ def calcular_transicion_comercial_post_envio(
         agregar_hito(
             "RECIBIO_OPCIONES_PAGO"
         )
-
+        
     elif accion == "INVITAR_CITA":
         transicion.update({
             "etapa_conversacional": (
@@ -17570,6 +18100,78 @@ def procesar_mensaje_whatsapp_estructurado_real(
         )
         or "AMBIGUO"
     ).strip().upper()
+
+    # ========================================================
+    # HERENCIA SEGURA DEL ALCANCE DE ADMISIONES
+    # ========================================================
+    #
+    # Si la conversación ya avanzó dentro del flujo comercial
+    # de admisiones, un mensaje breve o incompleto no debe
+    # reiniciar la clasificación general.
+    #
+    # Sólo corregimos AMBIGUO. Si Gemini detecta claramente
+    # EMPLEO, PROVEEDORES, TRÁMITES, etc., se respeta.
+    # ========================================================
+
+    etapa_previa_alcance = str(
+        get_note_value(
+            contact,
+            "ETAPA_CONVERSACIONAL",
+        )
+        or ""
+    ).strip().upper()
+
+    objetivo_previo_alcance = str(
+        get_note_value(
+            contact,
+            "OBJETIVO_PENDIENTE",
+        )
+        or ""
+    ).strip().upper()
+
+    flujo_previo_alcance = str(
+        get_flow_state(
+            contact
+        )
+        or ""
+    ).strip().upper()
+
+    conversacion_admisiones_ya_iniciada = bool(
+        (
+            etapa_previa_alcance
+            and etapa_previa_alcance
+            != "CONTACTO_INICIAL"
+        )
+        or objetivo_previo_alcance
+        or flujo_previo_alcance
+        not in {
+            "",
+            "SALUDO_INICIAL",
+        }
+    )
+
+    if (
+        categoria_alcance == "AMBIGUO"
+        and conversacion_admisiones_ya_iniciada
+    ):
+        categoria_alcance = "ADMISIONES"
+
+        alcance_detectado.update({
+            "alcance_conversacion": "ADMISIONES",
+            "motivo_principal": (
+                "El mensaje actual es ambiguo por sí solo, "
+                "pero continúa una conversación de admisiones "
+                "ya establecida."
+            ),
+            "ruta_configurada": True,
+            "requiere_aclaracion": False,
+            "requiere_admin": False,
+        })
+
+        print(
+            "🧭 ALCANCE HEREDADO: mensaje ambiguo "
+            "con conversación previa de admisiones."
+        )
 
     clasificacion_exitosa = bool(
         resultado_clasificacion_alcance.get(
