@@ -1,0 +1,21 @@
+{
+  "version": "2026-2027",
+  "horarios_regulares": {
+    "Kínder": {
+      "ingreso": "8:25am",
+      "salida": "1:50pm"
+    },
+    "Primaria": {
+      "ingreso": "7:50am",
+      "salida": "2:30pm"
+    },
+    "Secundaria": {
+      "ingreso": "7:20am",
+      "salida": "2:50pm"
+    }
+  },
+  "horario_extendido": {
+    "disponible": true,
+    "duracion_adicional_minutos": 60
+  }
+}
