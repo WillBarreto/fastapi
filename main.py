@@ -6758,6 +6758,118 @@ def formatear_hora_cita_12h(
         f"{periodo}"
     )
 
+def validar_momento_cita(
+    fecha_cita_iso: str,
+    hora_cita_24h: str,
+) -> Dict[str, Any]:
+    """
+    Valida de forma determinista que una cita corresponda
+    a un momento futuro real en la zona horaria local.
+
+    Estados:
+    - INVALIDO
+    - PASADO
+    - HOY_SIN_HORARIO_DISPONIBLE
+    - FUTURO_VALIDO
+
+    Esta función no decide disponibilidad administrativa.
+    Únicamente protege la integridad temporal.
+    """
+
+    resultado = {
+        "estado": "INVALIDO",
+        "valido": False,
+        "fecha": str(fecha_cita_iso or "").strip(),
+        "hora": str(hora_cita_24h or "").strip(),
+        "motivo": "",
+    }
+
+    fecha_texto = resultado["fecha"]
+    hora_texto = resultado["hora"]
+
+    if not fecha_texto or not hora_texto:
+        resultado["motivo"] = (
+            "Falta fecha u hora para validar la cita."
+        )
+        return resultado
+
+    try:
+        fecha = datetime.strptime(
+            fecha_texto,
+            "%Y-%m-%d",
+        ).date()
+
+        hora = datetime.strptime(
+            hora_texto,
+            "%H:%M",
+        ).time()
+
+    except ValueError:
+        resultado["motivo"] = (
+            "La fecha o la hora no tienen un formato válido."
+        )
+        return resultado
+
+    ahora_local = datetime.now(
+        LOCAL_TZ
+    )
+
+    momento_cita = datetime.combine(
+        fecha,
+        hora,
+    ).replace(
+        tzinfo=LOCAL_TZ
+    )
+
+    # --------------------------------------------------------
+    # FECHA/HORA YA PASADA
+    # --------------------------------------------------------
+
+    if momento_cita <= ahora_local:
+
+        resultado.update({
+            "estado": "PASADO",
+            "valido": False,
+            "motivo": (
+                "La fecha y hora propuestas ya ocurrieron."
+            ),
+        })
+
+        return resultado
+
+    # --------------------------------------------------------
+    # HOY, PERO YA TERMINÓ LA VENTANA OPERATIVA
+    # --------------------------------------------------------
+
+    if (
+        fecha == ahora_local.date()
+        and ahora_local.time()
+        > datetime.strptime(
+            "16:00",
+            "%H:%M",
+        ).time()
+    ):
+        resultado.update({
+            "estado": "HOY_SIN_HORARIO_DISPONIBLE",
+            "valido": False,
+            "motivo": (
+                "Ya terminó la ventana máxima de atención "
+                "para visitas del día de hoy."
+            ),
+        })
+
+        return resultado
+
+    resultado.update({
+        "estado": "FUTURO_VALIDO",
+        "valido": True,
+        "motivo": (
+            "La fecha y hora corresponden a un momento futuro."
+        ),
+    })
+
+    return resultado
+
 def clasificar_horario_cita(
     hora_cita_24h: str,
 ) -> str:
@@ -6951,17 +7063,18 @@ def detectar_saludo_simple_estructurado(
     mensaje_usuario: str,
 ) -> str:
     """
-    Detecta determinísticamente cuando el mensaje contiene
-    únicamente un saludo.
+    Detecta determinísticamente cuando TODO el mensaje
+    contiene únicamente saludos.
 
-    Devuelve el saludo contextual que debe utilizarse:
-    - Hola
-    - Buenos días
-    - Buenas tardes
-    - Buenas noches
+    Soporta también varios saludos consecutivos agrupados
+    por el buffer, por ejemplo:
 
-    Devuelve una cadena vacía cuando el mensaje contiene
-    una intención adicional.
+    hola
+    buenas noches
+
+    Si existe cualquier contenido sustantivo adicional,
+    devuelve cadena vacía para que el mensaje continúe
+    al análisis normal de intención.
     """
 
     mensaje_original = str(
@@ -6994,6 +7107,9 @@ def detectar_saludo_simple_estructurado(
         mensaje_normalizado,
     ).strip()
 
+    if not mensaje_normalizado:
+        return ""
+
     equivalencias_saludo = {
         "hola": "Hola",
         "holaa": "Hola",
@@ -7007,18 +7123,99 @@ def detectar_saludo_simple_estructurado(
         "que tal": "Hola",
     }
 
-    return equivalencias_saludo.get(
-        mensaje_normalizado,
-        "",
+    # Coincidencia simple exacta.
+    saludo_directo = equivalencias_saludo.get(
+        mensaje_normalizado
     )
 
+    if saludo_directo:
+        return saludo_directo
+
+    # --------------------------------------------------------
+    # SALUDO COMPUESTO
+    # --------------------------------------------------------
+    #
+    # Eliminamos únicamente expresiones reconocidas como
+    # saludo. Si al terminar queda alguna palabra sustantiva,
+    # ya no se considera saludo simple.
+    # --------------------------------------------------------
+
+    expresiones_ordenadas = sorted(
+        equivalencias_saludo.keys(),
+        key=len,
+        reverse=True,
+    )
+
+    restante = mensaje_normalizado
+    saludos_detectados = []
+
+    hubo_cambio = True
+
+    while restante and hubo_cambio:
+
+        hubo_cambio = False
+
+        for expresion in expresiones_ordenadas:
+
+            patron = (
+                r"(?:^|\s)"
+                + re.escape(expresion)
+                + r"(?:\s|$)"
+            )
+
+            coincidencia = re.search(
+                patron,
+                restante,
+            )
+
+            if not coincidencia:
+                continue
+
+            saludos_detectados.append(
+                equivalencias_saludo[expresion]
+            )
+
+            inicio, fin = coincidencia.span()
+
+            restante = (
+                restante[:inicio]
+                + " "
+                + restante[fin:]
+            )
+
+            restante = re.sub(
+                r"\s+",
+                " ",
+                restante,
+            ).strip()
+
+            hubo_cambio = True
+            break
+
+    if restante:
+        # Existe intención/contenido adicional.
+        return ""
+
+    if not saludos_detectados:
+        return ""
+
+    # Preferimos el saludo contextual más específico y reciente.
+    for saludo in reversed(saludos_detectados):
+        if saludo in {
+            "Buenos días",
+            "Buenas tardes",
+            "Buenas noches",
+        }:
+            return saludo
+
+    return "Hola"
 
 def crear_respuesta_saludo_simple_estructurado(
     mensaje_usuario: str,
 ) -> str:
     """
-    Genera una respuesta institucional breve y abierta
-    para un saludo simple.
+    Genera una respuesta institucional corta y abierta
+    cuando el mensaje contiene únicamente saludo(s).
 
     No presenta el colegio.
     No pide nombre, nivel, zona ni grado.
@@ -7034,11 +7231,17 @@ def crear_respuesta_saludo_simple_estructurado(
     if not saludo_contextual:
         return ""
 
-    return (
-        f"{saludo_contextual}. "
-        "¿En qué podemos ayudarle?"
-    )
+    if saludo_contextual == "Hola":
+        return (
+            "¡Hola! Gracias por contactarnos 😃\n"
+            "¿En qué le podemos ayudar?"
+        )
 
+    return (
+        f"¡Hola, {saludo_contextual.lower()}! "
+        "Gracias por contactarnos 😃\n"
+        "¿En qué le podemos ayudar?"
+    )
 
 def obtener_niveles_costos_solicitados(
     analisis: Dict[str, Any],
@@ -7993,12 +8196,53 @@ def aplicar_reglas_negocio_estructuradas(
             fecha_cita_persistida
             and hora_cita_persistida
         ):
+            validacion_momento_confirmado = (
+                validar_momento_cita(
+                    fecha_cita_persistida,
+                    hora_cita_persistida,
+                )
+            )
+
+            if not validacion_momento_confirmado.get(
+                "valido",
+                False,
+            ):
+                decision.update({
+                    "accion": "PEDIR_FECHA_CITA",
+                    "motivo": (
+                        "La fecha y hora previamente propuestas "
+                        "ya no corresponden a un momento futuro. "
+                        "Debe solicitarse una nueva opción."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": zona_validada,
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision["datos_detectados"].update({
+                    "momento_cita_invalido": True,
+                    "estado_momento_cita": (
+                        validacion_momento_confirmado.get(
+                            "estado",
+                            "INVALIDO",
+                        )
+                    ),
+                    "fecha_cita_rechazada": (
+                        fecha_cita_persistida
+                    ),
+                    "hora_cita_rechazada": (
+                        hora_cita_persistida
+                    ),
+                })
+
+                return decision
+
             clasificacion_horario_confirmado = (
                 clasificar_horario_cita(
                     hora_cita_persistida
                 )
             )
-
+            
             if (
                 clasificacion_horario_confirmado
                 in {
@@ -8297,6 +8541,102 @@ def aplicar_reglas_negocio_estructuradas(
             return decision
 
         # ----------------------------------------------------
+        # VALIDACIÓN DE FECHA AUNQUE TODAVÍA NO EXISTA HORA
+        # ----------------------------------------------------
+        #
+        # Evita preguntar una hora para una fecha que ya pasó
+        # o para "hoy" cuando ya terminó la ventana máxima
+        # de atención.
+        # ----------------------------------------------------
+
+        try:
+            fecha_cita_sola = datetime.strptime(
+                fecha_cita,
+                "%Y-%m-%d",
+            ).date()
+
+        except ValueError:
+            decision.update({
+                "accion": "PEDIR_FECHA_CITA",
+                "motivo": (
+                    "La fecha proporcionada no pudo "
+                    "interpretarse correctamente."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "momento_cita_invalido": True,
+                "estado_momento_cita": "INVALIDO",
+                "fecha_cita_rechazada": fecha_cita,
+            })
+
+            return decision
+
+        ahora_local_cita = datetime.now(
+            LOCAL_TZ
+        )
+
+        fecha_hoy_local = (
+            ahora_local_cita.date()
+        )
+
+        hora_limite_hoy = datetime.strptime(
+            "16:00",
+            "%H:%M",
+        ).time()
+
+        if fecha_cita_sola < fecha_hoy_local:
+            decision.update({
+                "accion": "PEDIR_FECHA_CITA",
+                "motivo": (
+                    "La fecha propuesta ya ocurrió. "
+                    "Debe solicitarse una fecha futura."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "momento_cita_invalido": True,
+                "estado_momento_cita": "PASADO",
+                "fecha_cita_rechazada": fecha_cita,
+            })
+
+            return decision
+
+        if (
+            fecha_cita_sola == fecha_hoy_local
+            and ahora_local_cita.time()
+            > hora_limite_hoy
+        ):
+            decision.update({
+                "accion": "PEDIR_FECHA_CITA",
+                "motivo": (
+                    "La familia propuso una visita para hoy, "
+                    "pero ya terminó la ventana máxima de "
+                    "atención del día. Debe solicitarse una "
+                    "fecha posterior."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "momento_cita_invalido": True,
+                "estado_momento_cita": (
+                    "HOY_SIN_HORARIO_DISPONIBLE"
+                ),
+                "fecha_cita_rechazada": fecha_cita,
+            })
+
+            return decision
+
+        # ----------------------------------------------------
         # FALTA HORA
         # ----------------------------------------------------
 
@@ -8319,6 +8659,56 @@ def aplicar_reglas_negocio_estructuradas(
         # VALIDAR HORARIO
         # ----------------------------------------------------
 
+        # ----------------------------------------------------
+        # AUTORIDAD TEMPORAL DE LA CITA
+        # ----------------------------------------------------
+
+        validacion_momento_cita = (
+            validar_momento_cita(
+                fecha_cita,
+                hora_cita,
+            )
+        )
+
+        if not validacion_momento_cita.get(
+            "valido",
+            False,
+        ):
+            estado_momento = str(
+                validacion_momento_cita.get(
+                    "estado",
+                    "INVALIDO",
+                )
+                or "INVALIDO"
+            ).strip().upper()
+
+            decision.update({
+                "accion": "PEDIR_FECHA_CITA",
+                "motivo": (
+                    "La fecha y hora propuestas no corresponden "
+                    "a un momento futuro disponible. Debe "
+                    "solicitarse una nueva fecha y horario."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": zona_validada,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision["datos_detectados"].update({
+                "momento_cita_invalido": True,
+                "estado_momento_cita": (
+                    estado_momento
+                ),
+                "fecha_cita_rechazada": (
+                    fecha_cita
+                ),
+                "hora_cita_rechazada": (
+                    hora_cita
+                ),
+            })
+
+            return decision
+        
         clasificacion_horario = (
             clasificar_horario_cita(
                 hora_cita
@@ -20963,6 +21353,117 @@ def procesar_mensaje_whatsapp_estructurado_real(
             "respuesta"
         ] = respuesta_bot
 
+        # ====================================================
+        # AUTORIDAD PRE-OUTBOUND PARA ESCALACIÓN ADMINISTRATIVA
+        # ====================================================
+        #
+        # Si Python ya determinó CONSULTAR_ADMIN, esa transición
+        # y su tarea administrativa son hechos operativos.
+        #
+        # No deben depender de que el mensaje al prospecto siga
+        # vigente ni de que Twilio llegue a enviarlo.
+        # ====================================================
+
+        decision_actual = (
+            resultado_orquestador.get(
+                "decision",
+                {},
+            )
+            if isinstance(
+                resultado_orquestador,
+                dict,
+            )
+            else {}
+        )
+
+        if not isinstance(
+            decision_actual,
+            dict,
+        ):
+            decision_actual = {}
+
+        accion_actual = str(
+            decision_actual.get(
+                "accion",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        transicion_critica_pre_outbound = None
+        crm_critico_pre_outbound = None
+        escalacion_critica_pre_outbound = None
+
+        if accion_actual == "CONSULTAR_ADMIN":
+
+            # ------------------------------------------------
+            # 1. PERSISTIR ESTADO AUTORITATIVO
+            # ------------------------------------------------
+
+            transicion_critica_pre_outbound = (
+                persistir_transicion_comercial_post_envio(
+                    db=db,
+                    contact=contact,
+                    resultado=resultado_orquestador,
+                    contexto_actual=(
+                        contexto_comercial_enriquecido
+                    ),
+                )
+            )
+
+            resultado_final[
+                "transicion_comercial_pre_outbound"
+            ] = transicion_critica_pre_outbound
+
+            # ------------------------------------------------
+            # 2. SINCRONIZAR CRM EN MODO OBSERVACIÓN
+            # ------------------------------------------------
+
+            crm_critico_pre_outbound = (
+                sincronizar_crm_desde_transicion(
+                    db=db,
+                    contact=contact,
+                    transicion=(
+                        transicion_critica_pre_outbound
+                    ),
+                )
+            )
+
+            # ------------------------------------------------
+            # 3. CREAR TAREA / AVISAR ADMIN
+            # ------------------------------------------------
+
+            escalacion_critica_pre_outbound = (
+                procesar_escalacion_admin_estructurada(
+                    db=db,
+                    contact=contact,
+                    mensaje_usuario=mensaje,
+                    respuesta_bot=respuesta_bot,
+                    resultado_orquestador=(
+                        resultado_orquestador
+                    ),
+                    memoria_historica=(
+                        resultado_memoria_historica
+                    ),
+                    ejecutar_envio=True,
+                )
+            )
+
+            resultado_final[
+                "escalacion_admin"
+            ] = escalacion_critica_pre_outbound
+
+            resultado_final[
+                "autoridad_admin_pre_outbound"
+            ] = True
+
+            print(
+                "🔐 AUTORIDAD ADMIN PRE-OUTBOUND: "
+                f"contact_id={contact.id}, "
+                "estado persistido y escalación ejecutada."
+            )
+            
+
         # ----------------------------------------------------
         # GUARD FINAL: LA IA NO PUEDE CONFIRMAR DISPONIBILIDAD
         # MIENTRAS ADMINISTRACIÓN SIGUE SIENDO LA AUTORIDAD
@@ -21115,20 +21616,35 @@ def procesar_mensaje_whatsapp_estructurado_real(
         db.commit()
 
         # ----------------------------------------------------
-        # 7. PERSISTENCIA COMERCIAL POST-ENVÍO
+        # 7. PERSISTENCIA COMERCIAL
         # ----------------------------------------------------
 
-        resultado_transicion_post_envio = (
-            persistir_transicion_comercial_post_envio(
-                db=db,
-                contact=contact,
-                resultado=resultado_orquestador,
-                contexto_actual=(
-                    contexto_comercial_enriquecido
-                ),
+        if (
+            accion_actual == "CONSULTAR_ADMIN"
+            and transicion_critica_pre_outbound
+            is not None
+        ):
+            resultado_transicion_post_envio = (
+                transicion_critica_pre_outbound
             )
-        )
 
+            print(
+                "🔐 Transición comercial ya persistida "
+                "pre-outbound; no se duplica."
+            )
+
+        else:
+            resultado_transicion_post_envio = (
+                persistir_transicion_comercial_post_envio(
+                    db=db,
+                    contact=contact,
+                    resultado=resultado_orquestador,
+                    contexto_actual=(
+                        contexto_comercial_enriquecido
+                    ),
+                )
+            )
+            
         resultado_final[
             "transicion_comercial_post_envio"
         ] = resultado_transicion_post_envio
@@ -21157,15 +21673,26 @@ def procesar_mensaje_whatsapp_estructurado_real(
         #   tanto esta llamada no les afecta.
         # ----------------------------------------------------
 
-        estado_crm_followup = (
-            sincronizar_crm_desde_transicion(
-                db=db,
-                contact=contact,
-                transicion=(
-                    resultado_transicion_post_envio
-                ),
+        if (
+            accion_actual == "CONSULTAR_ADMIN"
+            and crm_critico_pre_outbound
+            is not None
+        ):
+            estado_crm_followup = (
+                crm_critico_pre_outbound
             )
-        )
+
+        else:
+            estado_crm_followup = (
+                sincronizar_crm_desde_transicion(
+                    db=db,
+                    contact=contact,
+                    transicion=(
+                        resultado_transicion_post_envio
+                    ),
+                )
+            )
+            
 
         resultado_final[
             "crm_followup_state"
@@ -21216,22 +21743,37 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # 8. ESCALACIÓN ADMINISTRATIVA
         # ----------------------------------------------------
         
-        resultado_escalacion = (
-            procesar_escalacion_admin_estructurada(
-                db=db,
-                contact=contact,
-                mensaje_usuario=mensaje,
-                respuesta_bot=respuesta_bot,
-                resultado_orquestador=(
-                    resultado_orquestador
-                ),
-                memoria_historica=(
-                    resultado_memoria_historica
-                ),
-                ejecutar_envio=True,
+        if (
+            accion_actual == "CONSULTAR_ADMIN"
+            and escalacion_critica_pre_outbound
+            is not None
+        ):
+            resultado_escalacion = (
+                escalacion_critica_pre_outbound
             )
-        )
 
+            print(
+                "🔐 Escalación administrativa ya ejecutada "
+                "pre-outbound; no se duplica."
+            )
+
+        else:
+            resultado_escalacion = (
+                procesar_escalacion_admin_estructurada(
+                    db=db,
+                    contact=contact,
+                    mensaje_usuario=mensaje,
+                    respuesta_bot=respuesta_bot,
+                    resultado_orquestador=(
+                        resultado_orquestador
+                    ),
+                    memoria_historica=(
+                        resultado_memoria_historica
+                    ),
+                    ejecutar_envio=True,
+                )
+            )
+            
         resultado_final[
             "escalacion_admin"
         ] = resultado_escalacion
