@@ -4719,6 +4719,30 @@ HISTORIAL RECIENTE:
 MENSAJE ACTUAL DEL PROSPECTO:
 {mensaje}
 
+IMPORTANTE SOBRE EL MENSAJE ACTUAL:
+
+El bloque anterior puede contener UNO O VARIOS mensajes consecutivos
+del mismo prospecto que todavía forman una sola unidad conversacional
+pendiente de respuesta.
+
+Si contiene varias líneas:
+
+- interprétalas conjuntamente y en orden cronológico;
+- no las trates como conversaciones independientes;
+- identifica todas las intenciones relevantes presentes;
+- un mensaje posterior puede complementar, precisar o corregir uno anterior;
+- si un mensaje posterior modifica claramente un dato anterior sobre el
+  mismo asunto, utiliza la información más reciente;
+- si los mensajes contienen temas paralelos, conserva ambos sin perder
+  el objetivo comercial pendiente;
+- distingue entre una corrección, información adicional, una pregunta
+  paralela y un cambio real de intención;
+- no ignores información útil simplemente porque apareció en una línea
+  anterior del mismo bloque.
+
+Tu resultado debe representar el significado global de toda la unidad
+conversacional, no sólo de la última línea.
+
 REGLAS INSTITUCIONALES PARA INTERPRETACIÓN:
 
 1. Este canal atiende únicamente al Campus Santa Cruz Atizapán.
@@ -6476,7 +6500,392 @@ def existe_mensaje_saliente_posterior_al_turno(
 
         return False
 
-      
+
+def obtener_unidad_semantica_pendiente_desde_bd(
+    db: Session,
+    contact,
+    max_message_id: Optional[int] = None,
+    mensaje_fallback: str = "",
+    max_mensajes: int = 12,
+) -> Dict[str, Any]:
+    """
+    Reconstruye desde PostgreSQL todos los mensajes INCOMING
+    que siguen conversacionalmente pendientes hasta el corte
+    del turno actual.
+
+    Regla:
+    - buscamos el último OUTGOING anterior al corte;
+    - tomamos todos los INCOMING posteriores a ese OUTGOING;
+    - nunca tomamos INCOMING posteriores al corte actual;
+    - preservamos el orden cronológico.
+
+    Esto permite que, si una respuesta anterior fue suprimida
+    porque llegaron nuevos mensajes mientras se procesaba,
+    el siguiente turno vuelva a considerar también esos mensajes
+    que realmente nunca recibieron respuesta.
+    """
+
+    fallback = str(
+        mensaje_fallback or ""
+    ).strip()
+
+    resultado = {
+        "texto": fallback,
+        "message_ids": [],
+        "cantidad": 0,
+        "ultimo_outgoing_id": None,
+        "ultimo_inbound_procesado_id": None,
+        "corte_message_id": None,
+        "uso_fallback": True,
+    }
+
+    if (
+        db is None
+        or contact is None
+    ):
+        return resultado
+
+    try:
+
+        # ----------------------------------------------------
+        # 1. DETERMINAR CORTE AUTORITATIVO DEL TURNO
+        # ----------------------------------------------------
+
+        corte_efectivo = (
+            max_message_id
+            if (
+                isinstance(max_message_id, int)
+                and max_message_id > 0
+            )
+            else None
+        )
+
+        # Algunas rutas internas de prueba pueden llamar al
+        # procesador sin max_message_id.
+        #
+        # En ese caso usamos el último inbound persistido.
+        if corte_efectivo is None:
+
+            ultimo_incoming = (
+                db.query(Message)
+                .filter(
+                    Message.contact_id
+                    == contact.id,
+                    Message.direction
+                    == "incoming",
+                )
+                .order_by(
+                    Message.id.desc()
+                )
+                .first()
+            )
+
+            if ultimo_incoming is not None:
+                corte_efectivo = (
+                    ultimo_incoming.id
+                )
+
+        resultado[
+            "corte_message_id"
+        ] = corte_efectivo
+
+        if (
+            not isinstance(
+                corte_efectivo,
+                int,
+            )
+            or corte_efectivo <= 0
+        ):
+            return resultado
+
+        # ----------------------------------------------------
+        # 2. ÚLTIMO OUTGOING ANTERIOR AL CORTE
+        # ----------------------------------------------------
+        #
+        # Ésta es la frontera conversacional:
+        # todo inbound posterior todavía puede pertenecer
+        # a la misma unidad pendiente.
+        # ----------------------------------------------------
+
+        ultimo_outgoing = (
+            db.query(Message)
+            .filter(
+                Message.contact_id
+                == contact.id,
+                Message.direction
+                == "outgoing",
+                Message.id
+                < corte_efectivo,
+            )
+            .order_by(
+                Message.id.desc()
+            )
+            .first()
+        )
+
+        ultimo_outgoing_id = (
+            ultimo_outgoing.id
+            if ultimo_outgoing is not None
+            else None
+        )
+
+        resultado[
+            "ultimo_outgoing_id"
+        ] = ultimo_outgoing_id
+
+        ultimo_procesado_id = (
+            obtener_ultimo_inbound_procesado_id(
+                contact
+            )
+        )
+
+        resultado[
+            "ultimo_inbound_procesado_id"
+        ] = ultimo_procesado_id
+
+        frontera_inferior = max(
+            [
+                valor
+                for valor in [
+                    ultimo_outgoing_id,
+                    ultimo_procesado_id,
+                ]
+                if isinstance(
+                    valor,
+                    int,
+                )
+            ],
+            default=None,
+        )
+
+        # ----------------------------------------------------
+        # 3. INBOUNDS NO RESPONDIDOS HASTA EL CORTE
+        # ----------------------------------------------------
+
+        query_pendientes = (
+            db.query(Message)
+            .filter(
+                Message.contact_id
+                == contact.id,
+                Message.direction
+                == "incoming",
+                Message.id
+                <= corte_efectivo,
+            )
+        )
+
+        if (
+            isinstance(
+                frontera_inferior,
+                int,
+            )
+            and frontera_inferior > 0
+        ):
+            query_pendientes = (
+                query_pendientes.filter(
+                    Message.id
+                    > frontera_inferior
+                )
+            )
+
+        # Nos quedamos con los últimos N para impedir que una
+        # conversación extremadamente larga genere un bloque
+        # descontrolado.
+        mensajes_pendientes = (
+            query_pendientes
+            .order_by(
+                Message.id.desc()
+            )
+            .limit(
+                max(
+                    1,
+                    int(max_mensajes or 12),
+                )
+            )
+            .all()
+        )
+
+        mensajes_pendientes = list(
+            reversed(
+                mensajes_pendientes
+            )
+        )
+
+        # ----------------------------------------------------
+        # 4. CONSTRUIR UNIDAD SEMÁNTICA
+        # ----------------------------------------------------
+
+        contenidos = []
+        message_ids = []
+
+        for mensaje_db in mensajes_pendientes:
+
+            contenido = str(
+                getattr(
+                    mensaje_db,
+                    "content",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not contenido:
+                continue
+
+            contenidos.append(
+                contenido
+            )
+
+            message_id = getattr(
+                mensaje_db,
+                "id",
+                None,
+            )
+
+            if isinstance(
+                message_id,
+                int,
+            ):
+                message_ids.append(
+                    message_id
+                )
+
+        if not contenidos:
+            return resultado
+
+        texto_unidad = "\n".join(
+            contenidos
+        ).strip()
+
+        resultado.update({
+            "texto": texto_unidad,
+            "message_ids": message_ids,
+            "cantidad": len(contenidos),
+            "uso_fallback": False,
+        })
+
+        return resultado
+
+    except Exception as e:
+
+        print(
+            "⚠️ No fue posible reconstruir "
+            "la unidad semántica pendiente: "
+            f"contact_id="
+            f"{getattr(contact, 'id', None)}, "
+            f"error={e}"
+        )
+
+        return resultado
+
+def obtener_ultimo_inbound_procesado_id(
+    contact,
+) -> Optional[int]:
+
+    if contact is None:
+        return None
+
+    valor = str(
+        get_note_value(
+            contact,
+            "ULTIMO_INBOUND_PROCESADO_ID",
+        )
+        or ""
+    ).strip()
+
+    if not valor:
+        return None
+
+    try:
+        resultado = int(valor)
+
+        return (
+            resultado
+            if resultado > 0
+            else None
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
+def marcar_inbound_procesado_hasta(
+    contact,
+    message_id: Optional[int],
+):
+
+    if (
+        contact is None
+        or not isinstance(message_id, int)
+        or message_id <= 0
+    ):
+        return
+
+    anterior = (
+        obtener_ultimo_inbound_procesado_id(
+            contact
+        )
+    )
+
+    if (
+        isinstance(anterior, int)
+        and anterior >= message_id
+    ):
+        return
+
+    set_note_value(
+        contact,
+        "ULTIMO_INBOUND_PROCESADO_ID",
+        str(message_id),
+    )
+
+def consumir_turno_sin_respuesta(
+    db: Session,
+    contact,
+    max_message_id: Optional[int],
+    motivo: str = "",
+) -> bool:
+    """
+    Marca como consumido semánticamente un turno que Python
+    resolvió deliberadamente sin enviar un mensaje al prospecto.
+
+    NO debe utilizarse para:
+    - turnos obsoletos por inbound posterior;
+    - turnos obsoletos por outbound autoritativo;
+    - errores técnicos;
+    - fallos de Twilio.
+
+    En esos casos el contenido debe seguir disponible para
+    procesamiento posterior.
+    """
+
+    if (
+        db is None
+        or contact is None
+        or not isinstance(max_message_id, int)
+        or max_message_id <= 0
+    ):
+        return False
+
+    marcar_inbound_procesado_hasta(
+        contact,
+        max_message_id,
+    )
+
+    db.commit()
+
+    print(
+        "✅ TURNO CONSUMIDO SIN RESPUESTA: "
+        f"contact_id={contact.id}, "
+        f"hasta={max_message_id}, "
+        f"motivo={str(motivo or '').strip()}"
+    )
+
+    return True
+    
         
 def detectar_pausa_conversacion_simple(
     mensaje: str,
@@ -21779,6 +22188,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
         "twilio_resultado": "",
         "twilio_sid": None,
         "resultado_orquestador": {},
+        "unidad_semantica_pendiente": {},
         "historial_completo": {},
         "memoria_historica": {},
         "contexto_comercial": {},
@@ -21806,6 +22216,88 @@ def procesar_mensaje_whatsapp_estructurado_real(
     if contact is None:
         resultado_final["error"] = "CONTACTO_NO_DISPONIBLE"
         return resultado_final
+
+    # ========================================================
+    # UNIDAD SEMÁNTICA PENDIENTE DESDE POSTGRESQL
+    # ========================================================
+    #
+    # El lote recibido desde RAM nos dice qué mensajes
+    # dispararon este procesamiento.
+    #
+    # PostgreSQL nos dice algo más importante:
+    # cuáles mensajes del prospecto siguen realmente
+    # sin haber recibido un outbound posterior.
+    # ========================================================
+
+    mensaje_original_lote = mensaje
+
+    unidad_semantica = (
+        obtener_unidad_semantica_pendiente_desde_bd(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+            mensaje_fallback=(
+                mensaje_original_lote
+            ),
+        )
+    )
+
+    resultado_final[
+        "unidad_semantica_pendiente"
+    ] = unidad_semantica
+
+    texto_unidad_semantica = str(
+        unidad_semantica.get(
+            "texto",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if texto_unidad_semantica:
+        mensaje = (
+            texto_unidad_semantica
+        )
+
+    corte_semantico = (
+        unidad_semantica.get(
+            "corte_message_id"
+        )
+    )
+
+    if (
+        isinstance(
+            corte_semantico,
+            int,
+        )
+        and corte_semantico > 0
+    ):
+        max_message_id = (
+            corte_semantico
+        )
+
+    print(
+        "🧩 UNIDAD SEMÁNTICA PENDIENTE: "
+        f"contact_id={contact.id}, "
+        f"ids="
+        f"{unidad_semantica.get('message_ids', [])}, "
+        f"cantidad="
+        f"{unidad_semantica.get('cantidad', 0)}, "
+        f"ultimo_outgoing="
+        f"{unidad_semantica.get('ultimo_outgoing_id')}, "
+        f"corte={max_message_id}, "
+        f"fallback="
+        f"{unidad_semantica.get('uso_fallback', True)}"
+    )
+
+    if (
+        mensaje
+        != mensaje_original_lote
+    ):
+        print(
+            "🧠 MENSAJE RECONSTRUIDO DESDE BD: "
+            f"{mensaje}"
+        )
 
     # ========================================================
     # PUERTA PREVIA DE CLASIFICACIÓN DEL ALCANCE
@@ -22609,6 +23101,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
                     "error": "",
                 })
 
+                consumir_turno_sin_respuesta(
+                    db=db,
+                    contact=contact,
+                    max_message_id=max_message_id,
+                    motivo="EMPLEO_CERRADO_CORTESIA",
+                )
+
                 return resultado_final
 
             # ------------------------------------------------
@@ -22865,6 +23364,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
             },
             "error": "",
         })
+
+        consumir_turno_sin_respuesta(
+            db=db,
+            contact=contact,
+            max_message_id=max_message_id,
+            motivo="CIERRE_SOCIAL_SILENCIOSO",
+        )
 
         return resultado_final
 
@@ -23265,6 +23771,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 "error"
             ] = ""
 
+            consumir_turno_sin_respuesta(
+                db=db,
+                contact=contact,
+                max_message_id=max_message_id,
+                motivo="CORTESIA_DURANTE_ESPERA_ADMIN",
+            )
+
             return resultado_final
 
         # ----------------------------------------------------
@@ -23640,6 +24153,18 @@ def procesar_mensaje_whatsapp_estructurado_real(
             respuesta_bot,
             twilio_sid,
         )
+
+        if (
+            isinstance(
+                max_message_id,
+                int,
+            )
+            and max_message_id > 0
+        ):
+            marcar_inbound_procesado_hasta(
+                contact,
+                max_message_id,
+            )
 
         db.commit()
 
