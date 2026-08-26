@@ -17,6 +17,7 @@ import base64
 import re
 import unicodedata
 import threading
+import uuid
 
 from urllib.parse import quote_plus
 from sqlalchemy.dialects.postgresql import ENUM
@@ -1026,7 +1027,18 @@ OBJETIVOS_PENDIENTES_VALIDOS = {
     "OBTENER_ZONA_PARA_CITA",
     "OBTENER_NIVEL_PARA_COSTOS",
     "OBTENER_REFERENCIA_COLEGIO",
+
+    # Después de la presentación general, el bot termina
+    # preguntando si la familia conoce el Método Filadelfia.
+    "OBTENER_RESPUESTA_METODO",
+
     "OBTENER_AREA_INTERES",
+
+    # Después de profundizar en el área de interés, el bot
+    # normalmente pregunta si ese enfoque coincide con lo
+    # que la familia busca.
+    "OBTENER_CONFIRMACION_INTERES",
+
     "OBTENER_DECISION_VISITA",
     "OBTENER_FECHA_CITA",
     "OBTENER_HORA_CITA",
@@ -1034,6 +1046,18 @@ OBJETIVOS_PENDIENTES_VALIDOS = {
     "ESPERAR_CONFIRMACION_ADMIN",
     "OBTENER_DATOS_CITA",
     "ESPERAR_REACTIVACION_PROSPECTO",
+}
+
+# ============================================================
+# RELACIÓN SEMÁNTICA DEL MENSAJE CON EL OBJETIVO PENDIENTE
+# ============================================================
+
+RELACIONES_OBJETIVO_VALIDAS = {
+    "SIN_OBJETIVO",
+    "RESPONDE_OBJETIVO",
+    "NO_AFECTA_OBJETIVO",
+    "MODIFICA_OBJETIVO",
+    "CANCELA_OBJETIVO",
 }
 
 
@@ -1260,12 +1284,15 @@ class AnalisisMensajeProspecto(BaseModel):
 
     pausa_conversacion: bool = False
 
+    # Relación semántica entre el mensaje actual y el objetivo
+    # conversacional que ya estaba pendiente.
+    relacion_con_objetivo_pendiente: str = "SIN_OBJETIVO"
+
     datos_detectados: List[str] = Field(default_factory=list)
     datos_faltantes: List[str] = Field(default_factory=list)
 
     accion_recomendada: str = "CONTINUAR_CONVERSACION"
     confianza: float = 0.0
-
 
 def crear_analisis_mensaje_vacio() -> Dict[str, Any]:
     """
@@ -1448,6 +1475,22 @@ def normalizar_analisis_mensaje_ia(
 
     if accion_recomendada not in ACCIONES_RECOMENDADAS_VALIDAS:
         accion_recomendada = "CONTINUAR_CONVERSACION"
+
+    relacion_con_objetivo_pendiente = str(
+        datos_crudos.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
+
+    if (
+        relacion_con_objetivo_pendiente
+        not in RELACIONES_OBJETIVO_VALIDAS
+    ):
+        relacion_con_objetivo_pendiente = (
+            "SIN_OBJETIVO"
+        )
 
     datos_detectados_crudos = normalizar_lista_textos(
         datos_crudos.get("datos_detectados")
@@ -1760,6 +1803,10 @@ def normalizar_analisis_mensaje_ia(
         "pausa_conversacion":
             normalizar_booleano(
             datos_crudos.get("pausa_conversacion")
+        ),
+
+        "relacion_con_objetivo_pendiente": (
+            relacion_con_objetivo_pendiente
         ),
 
         "datos_detectados": datos_detectados_normalizados,
@@ -4757,6 +4804,55 @@ Los hitos y datos del contexto comercial representan información
 ya recuperada de la conversación. No los ignores ni obligues a la
 familia a responder nuevamente algo que ya quedó confirmado.
 
+RELACIÓN DEL MENSAJE CON EL OBJETIVO PENDIENTE:
+
+El campo "objetivo_pendiente" del CONTEXTO COMERCIAL ENRIQUECIDO
+representa aquello que la conversación estaba intentando obtener,
+confirmar o completar antes del mensaje actual.
+
+Debes interpretar semánticamente qué relación tiene el mensaje
+actual con ese objetivo y completar:
+
+"relacion_con_objetivo_pendiente"
+
+Utiliza exclusivamente uno de estos valores:
+
+"SIN_OBJETIVO"
+cuando no existe un objetivo pendiente real en el contexto.
+
+"RESPONDE_OBJETIVO"
+cuando el mensaje actual responde, aporta, confirma, niega o completa
+lo que se estaba esperando, aunque la respuesta sea breve, indirecta,
+coloquial o contenga además otra información.
+
+"NO_AFECTA_OBJETIVO"
+cuando el prospecto introduce una pregunta, comentario, duda o tema
+paralelo que puede atenderse, pero que no responde, modifica ni
+cancela lo que estaba pendiente.
+
+"MODIFICA_OBJETIVO"
+cuando el mensaje cambia de manera explícita información directamente
+relacionada con el objetivo pendiente o reemplaza una decisión
+anterior relevante para ese objetivo.
+
+"CANCELA_OBJETIVO"
+cuando el prospecto manifiesta claramente que ya no desea continuar
+con aquello que estaba pendiente.
+
+REGLAS IMPORTANTES:
+
+- No clasifiques por palabras exactas.
+- Interpreta intención, contexto e historial.
+- Una pregunta paralela no elimina el objetivo pendiente.
+- Que el mensaje contenga información útil no significa automáticamente
+  que haya respondido el objetivo pendiente.
+- Si el prospecto responde el objetivo pendiente y además hace otra
+  pregunta, utiliza "RESPONDE_OBJETIVO".
+- No obligues al prospecto a repetir información que ya se encuentra
+  confirmada en el contexto.
+- El objetivo pendiente tiene prioridad como referencia conversacional,
+  pero no impide que la familia hable naturalmente de otros temas.
+
 Activa los siguientes campos según el significado integral:
 
 "seguimiento_cita": true
@@ -4783,9 +4879,26 @@ cuando la familia habla como si la visita ya estuviera confirmada,
 aunque el historial indique que todavía estaba pendiente.
 
 "pregunta_paralela": true
-cuando pregunta costos, idiomas, dirección u otro tema mientras
-existe una cita pendiente, pero su mensaje no es un seguimiento de
-la confirmación.
+cuando existe una cita pendiente de confirmación y la familia hace
+una pregunta adicional que no cambia, cancela ni solicita confirmar
+la cita.
+
+Incluye preguntas informativas o logísticas relacionadas o no con
+la visita, por ejemplo:
+- si debe llevar identificación o algún documento;
+- si el alumno debe asistir;
+- si puede ir acompañado;
+- dónde puede estacionarse;
+- cuál es la dirección;
+- cómo llegar;
+- costos;
+- idiomas;
+- horarios;
+- requisitos;
+- cualquier otra duda que pueda responderse sin modificar la cita.
+
+Una pregunta paralela NO significa que la familia haya abandonado
+la cita ni que deba reiniciarse el flujo comercial.
 
 "reclamo_demora": true
 cuando expresa molestia, preocupación o insistencia por el tiempo
@@ -7634,6 +7747,60 @@ def aplicar_reglas_negocio_estructuradas(
         })
 
         return decision
+
+    # ========================================================
+    # 4-B. PREGUNTA PARALELA MIENTRAS LA CITA ESPERA ADMIN
+    # ========================================================
+    #
+    # Una pregunta adicional del prospecto no debe sacar
+    # la conversación del estado de espera administrativa.
+    #
+    # Ejemplos:
+    # - ¿Debo llevar identificación?
+    # - ¿Mi hijo debe acompañarme?
+    # - ¿Dónde me estaciono?
+    # - ¿Cuál es la dirección?
+    # - ¿Puedo ir con mi esposo?
+    #
+    # La pregunta puede ser respondida normalmente, pero
+    # NO debe reabrirse el embudo comercial ni modificarse
+    # el objetivo pendiente de la cita.
+    # ========================================================
+
+    pregunta_paralela_cita = bool(
+        analisis_seguro.get(
+            "pregunta_paralela",
+            False,
+        )
+    )
+
+    if (
+        contexto_cita_pendiente
+        and pregunta_paralela_cita
+    ):
+        decision.update({
+            "accion": "CONTINUAR_CONVERSACION",
+            "motivo": (
+                "La familia realizó una pregunta paralela "
+                "mientras la cita continúa pendiente de "
+                "confirmación administrativa. Debe atenderse "
+                "la pregunta sin alterar el estado de la cita."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "preservar_estado_cita_pendiente": True,
+            "contexto_cita_pendiente_determinista": (
+                contexto_cita_pendiente_determinista
+            ),
+            "pregunta_paralela_cita": True,
+        })
+
+        return decision
+
     # ========================================================
     # 5. PAUSA O CIERRE TEMPORAL
     # ========================================================
@@ -13556,6 +13723,103 @@ def calcular_transicion_comercial_post_envio(
         "transicion_aplicable": False,
         "motivo": "",
     }
+
+    # ========================================================
+    # CANDADO DE INTEGRIDAD: CITA PENDIENTE DE ADMINISTRACIÓN
+    # ========================================================
+    #
+    # Mientras una cita siga esperando confirmación humana,
+    # ninguna respuesta paralela puede hacer retroceder el
+    # embudo comercial.
+    #
+    # Esto es deliberadamente determinista y no depende de que
+    # Gemini haya clasificado correctamente "pregunta_paralela".
+    # ========================================================
+
+    cita_pendiente_admin_actual = bool(
+        objetivo_actual == "ESPERAR_CONFIRMACION_ADMIN"
+        or etapa_actual == "ESPERANDO_CONFIRMACION_ADMIN"
+        or estado_actual == "CITA_PENDIENTE_CONFIRMACION"
+    )
+
+    cambio_cita_explicito = bool(
+        analisis.get(
+            "cambio_fecha_cita",
+            False,
+        )
+        or analisis.get(
+            "cancelacion_cita",
+            False,
+        )
+        or analisis.get(
+            "desistimiento_temporal",
+            False,
+        )
+    )
+
+    if (
+        cita_pendiente_admin_actual
+        and not cambio_cita_explicito
+        and accion != "CONSULTAR_ADMIN"
+    ):
+        transicion.update({
+            "etapa_conversacional": (
+                "ESPERANDO_CONFIRMACION_ADMIN"
+            ),
+            "estado_comercial": (
+                "CITA_PENDIENTE_CONFIRMACION"
+            ),
+            "objetivo_pendiente": (
+                "ESPERAR_CONFIRMACION_ADMIN"
+            ),
+            "transicion_aplicable": False,
+            "motivo": (
+                "Se preserva la cita pendiente de confirmación "
+                "administrativa. El mensaje actual no puede "
+                "reactivar ni hacer retroceder el embudo comercial."
+            ),
+        })
+
+        return transicion
+
+    # ========================================================
+    # CONTINUIDAD GENÉRICA DEL OBJETIVO PENDIENTE
+    # ========================================================
+    #
+    # La IA interpreta la relación semántica del mensaje con
+    # aquello que la conversación estaba esperando.
+    #
+    # Python únicamente protege la invariante:
+    # una conversación incidental no puede destruir ni mover
+    # el objetivo comercial/conversacional pendiente.
+    # ========================================================
+
+    relacion_objetivo = str(
+        analisis.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
+
+    if (
+        objetivo_actual
+        and relacion_objetivo == "NO_AFECTA_OBJETIVO"
+    ):
+        transicion.update({
+            "etapa_conversacional": etapa_actual,
+            "estado_comercial": estado_actual,
+            "objetivo_pendiente": objetivo_actual,
+            "transicion_aplicable": False,
+            "motivo": (
+                "El mensaje actual fue interpretado como "
+                "conversación paralela al objetivo pendiente. "
+                "Se atiende el mensaje sin alterar la posición "
+                "comercial ni el objetivo activo."
+            ),
+        })
+
+        return transicion
     
     def agregar_hito(
         hito: str,
@@ -13947,31 +14211,54 @@ def calcular_transicion_comercial_post_envio(
         False,
     ):
         objetivos_por_accion = {
-            "PEDIR_ZONA": "OBTENER_ZONA",
+            "PEDIR_ZONA": (
+                "OBTENER_ZONA"
+            ),
+        
             "PEDIR_REFERENCIA": (
                 "OBTENER_REFERENCIA_COLEGIO"
             ),
+        
+            "PRESENTAR_PROPUESTA_VALOR": (
+                "OBTENER_RESPUESTA_METODO"
+            ),
+        
+            "EXPLICAR_METODO_FILADELFIA": (
+                "OBTENER_AREA_INTERES"
+            ),
+        
             "PREGUNTAR_AREA_INTERES": (
                 "OBTENER_AREA_INTERES"
             ),
+        
+            "PROFUNDIZAR_AREA_INTERES": (
+                "OBTENER_CONFIRMACION_INTERES"
+            ),
+        
             "INVITAR_CITA": (
                 "OBTENER_DECISION_VISITA"
             ),
+        
             "RESPONDER_COSTOS": (
                 "OBTENER_DECISION_VISITA"
             ),
+        
             "PEDIR_FECHA_CITA": (
                 "OBTENER_FECHA_CITA"
             ),
+        
             "PEDIR_HORA_CITA": (
                 "OBTENER_HORA_CITA"
             ),
+        
             "CONFIRMAR_FECHA_CITA": (
                 "CONFIRMAR_FECHA_CITA_CALENDARIO"
             ),
+        
             "CONSULTAR_ADMIN": (
                 "ESPERAR_CONFIRMACION_ADMIN"
             ),
+        
             "SEGUIMIENTO": (
                 "ESPERAR_REACTIVACION_PROSPECTO"
             ),
@@ -15843,6 +16130,661 @@ class Message(Base):
     # Relación con contacto
     contact = relationship("Contact", back_populates="messages")
 
+# ============================================================
+# CRM PERSISTENTE DE SEGUIMIENTO
+# ============================================================
+
+class ContactFollowUpState(Base):
+    """
+    Estado persistente actual del seguimiento comercial.
+
+    IMPORTANTE:
+    - Sólo se crea para contactos nuevos posteriores al rollout.
+    - Los contactos históricos no reciben esta fila automáticamente.
+    - No envía mensajes.
+    """
+
+    __tablename__ = "contact_followup_state"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    contact_id = Column(
+        Integer,
+        ForeignKey("contacts.id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    prospect_phone = Column(
+        String(50),
+        nullable=False,
+        index=True,
+    )
+
+    # --------------------------------------------------------
+    # CONTROL DE COHORTE / AUTOMATIZACIÓN
+    # --------------------------------------------------------
+
+    automation_enrolled_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    automation_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    # --------------------------------------------------------
+    # ESTADO CRM DE LARGO PLAZO
+    # --------------------------------------------------------
+
+    commercial_goal = Column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+
+    journey_status = Column(
+        String(50),
+        nullable=False,
+        default="NOT_ENROLLED",
+        index=True,
+    )
+
+    # --------------------------------------------------------
+    # CICLO / MINI ESTADO DE CONVERSACIÓN
+    # --------------------------------------------------------
+
+    conversation_cycle_id = Column(
+        String(64),
+        nullable=False,
+        default="",
+        index=True,
+    )
+
+    conversation_mode = Column(
+        String(50),
+        nullable=False,
+        default="",
+    )
+
+    active_goal = Column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+
+    active_goal_status = Column(
+        String(30),
+        nullable=False,
+        default="",
+    )
+
+    # --------------------------------------------------------
+    # POSICIÓN ACTUAL DEL EMBUDO
+    # --------------------------------------------------------
+
+    current_objective = Column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+
+    current_stage = Column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+
+    current_commercial_status = Column(
+        String(100),
+        nullable=False,
+        default="",
+    )
+
+    # --------------------------------------------------------
+    # SEGUIMIENTO
+    # --------------------------------------------------------
+
+    followup_step = Column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    followup_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    last_inbound_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    last_outbound_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    last_followup_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    next_followup_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
+    # --------------------------------------------------------
+    # NURTURING
+    # --------------------------------------------------------
+
+    nurturing_started_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    next_nurturing_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(
+            timezone.utc
+        ),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(
+            timezone.utc
+        ),
+        onupdate=lambda: datetime.now(
+            timezone.utc
+        ),
+    )
+
+
+class FollowUpEvent(Base):
+    """
+    Bitácora histórica de ciclos, seguimientos y nurturing.
+
+    No representa el estado actual.
+    El estado actual vive en ContactFollowUpState.
+    """
+
+    __tablename__ = "followup_events"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    contact_id = Column(
+        Integer,
+        ForeignKey("contacts.id"),
+        nullable=False,
+        index=True,
+    )
+
+    conversation_cycle_id = Column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    event_type = Column(
+        String(80),
+        nullable=False,
+        index=True,
+    )
+
+    step_number = Column(
+        Integer,
+        nullable=True,
+    )
+
+    objective = Column(
+        String(100),
+        nullable=True,
+    )
+
+    journey_status = Column(
+        String(50),
+        nullable=True,
+    )
+
+    scheduled_for = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    occurred_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(
+            timezone.utc
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    message_id = Column(
+        Integer,
+        ForeignKey("messages.id"),
+        nullable=True,
+    )
+
+    twilio_sid = Column(
+        String(100),
+        nullable=True,
+    )
+
+    reason = Column(
+        Text,
+        nullable=True,
+    )
+
+    metadata_json = Column(
+        Text,
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(
+            timezone.utc
+        ),
+    )
+
+# ============================================================
+# MODERACIÓN PERSISTENTE DE CONTACTOS
+# ============================================================
+
+class ContactModerationState(Base):
+    """
+    Estado independiente de moderación de un contacto.
+
+    La ausencia de una fila equivale a CLEAR.
+
+    Esta tabla no modifica Contact ni mezcla moderación
+    con el estado comercial del prospecto.
+    """
+
+    __tablename__ = "contact_moderation_state"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    contact_id = Column(
+        Integer,
+        ForeignKey("contacts.id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    moderation_status = Column(
+        String(30),
+        nullable=False,
+        default="CLEAR",
+        index=True,
+    )
+
+    risk_category = Column(
+        String(50),
+        nullable=True,
+    )
+
+    block_reason = Column(
+        Text,
+        nullable=True,
+    )
+
+    source = Column(
+        String(30),
+        nullable=True,
+    )
+
+    last_flagged_message_id = Column(
+        Integer,
+        ForeignKey("messages.id"),
+        nullable=True,
+    )
+
+    blocked_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    unblocked_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(
+            timezone.utc
+        ),
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(
+            timezone.utc
+        ),
+        onupdate=lambda: datetime.now(
+            timezone.utc
+        ),
+    )
+
+# ============================================================
+# CONTROL CENTRAL DE MODERACIÓN
+# ============================================================
+
+MODERATION_STATUS_CLEAR = "CLEAR"
+MODERATION_STATUS_REVIEW = "REVIEW"
+MODERATION_STATUS_BLOCKED = "BLOCKED"
+
+
+def obtener_estado_moderacion(
+    db: Session,
+    contact_id: int,
+):
+    """
+    Obtiene moderación persistente.
+
+    La ausencia de fila significa CLEAR.
+    No crea estados innecesariamente.
+    """
+
+    return (
+        db.query(ContactModerationState)
+        .filter(
+            ContactModerationState.contact_id
+            == contact_id
+        )
+        .first()
+    )
+
+
+def contacto_esta_bloqueado(
+    db: Session,
+    contact_id: int,
+) -> bool:
+
+    estado = obtener_estado_moderacion(
+        db,
+        contact_id,
+    )
+
+    return bool(
+        estado
+        and estado.moderation_status
+        == MODERATION_STATUS_BLOCKED
+    )
+
+
+def bloquear_contacto(
+    db: Session,
+    contact,
+    reason: str,
+    risk_category: str,
+    source: str,
+    message_id: Optional[int] = None,
+):
+    """
+    Establece BLOCKED como autoridad persistente.
+
+    También invalida cualquier programación comercial futura,
+    pero no destruye el estado/ciclo CRM.
+    """
+
+    if contact is None:
+        return None
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    estado = obtener_estado_moderacion(
+        db,
+        contact.id,
+    )
+
+    if estado is None:
+        estado = ContactModerationState(
+            contact_id=contact.id,
+            created_at=ahora,
+        )
+        db.add(estado)
+
+    estado.moderation_status = (
+        MODERATION_STATUS_BLOCKED
+    )
+
+    estado.risk_category = str(
+        risk_category or "SPAM"
+    ).strip().upper()
+
+    estado.block_reason = str(
+        reason or ""
+    ).strip()
+
+    estado.source = str(
+        source or "AUTO"
+    ).strip().upper()
+
+    estado.last_flagged_message_id = (
+        message_id
+    )
+
+    estado.blocked_at = ahora
+    estado.unblocked_at = None
+    estado.updated_at = ahora
+
+    # --------------------------------------------------------
+    # INVALIDAR PROGRAMACIÓN CRM
+    # --------------------------------------------------------
+    #
+    # No cambiamos el journey comercial.
+    # La moderación es una autoridad independiente.
+    # --------------------------------------------------------
+
+    estado_crm = obtener_estado_followup_crm(
+        db,
+        contact.id,
+    )
+
+    if estado_crm is not None:
+        estado_crm.next_followup_at = None
+        estado_crm.next_nurturing_at = None
+        estado_crm.updated_at = ahora
+
+    # --------------------------------------------------------
+    # CERRAR TAREAS ADMINISTRATIVAS QUE YA NO SON ACCIONABLES
+    # --------------------------------------------------------
+
+    tareas_admin_pendientes = (
+        db.query(AdminPendingTask)
+        .filter(
+            AdminPendingTask.contact_id == contact.id,
+            AdminPendingTask.status == "PENDIENTE",
+        )
+        .all()
+    )
+
+    ids_tareas_cerradas = []
+
+    for tarea_admin in tareas_admin_pendientes:
+        tarea_admin.status = "RESUELTA"
+        tarea_admin.admin_response = (
+            "CERRADA_POR_MODERACION"
+        )
+        tarea_admin.final_response = (
+            "Contacto bloqueado. "
+            "No se envió mensaje al prospecto."
+        )
+        tarea_admin.resolved_at = ahora
+
+        ids_tareas_cerradas.append(
+            tarea_admin.id
+        )
+
+    # También eliminamos cualquier selección temporal
+    # del administrador que apunte a esas tareas.
+    if ids_tareas_cerradas:
+        for admin_key, tarea_id in list(
+            ADMIN_SELECTED_TASKS.items()
+        ):
+            if tarea_id in ids_tareas_cerradas:
+                ADMIN_SELECTED_TASKS.pop(
+                    admin_key,
+                    None,
+                )
+
+    db.commit()
+    db.refresh(estado)
+
+    print(
+        "🚫 CONTACTO BLOQUEADO: "
+        f"contact_id={contact.id}, "
+        f"categoria={estado.risk_category}, "
+        f"source={estado.source}"
+    )
+
+    return estado
+
+
+def desbloquear_contacto(
+    db: Session,
+    contact,
+):
+    """
+    Desbloquea exclusivamente mensajes futuros.
+
+    No reproduce mensajes anteriores ni reactiva por sí misma
+    programaciones canceladas.
+    """
+
+    if contact is None:
+        return None
+
+    estado = obtener_estado_moderacion(
+        db,
+        contact.id,
+    )
+
+    if estado is None:
+        return None
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    estado.moderation_status = (
+        MODERATION_STATUS_CLEAR
+    )
+
+    estado.unblocked_at = ahora
+    estado.updated_at = ahora
+
+    db.commit()
+    db.refresh(estado)
+
+    print(
+        "✅ CONTACTO DESBLOQUEADO: "
+        f"contact_id={contact.id}"
+    )
+
+    return estado
+
+
+def evaluar_riesgo_mensaje_entrante(
+    mensaje: str,
+) -> Dict[str, Any]:
+    """
+    Evaluación determinista deliberadamente conservadora.
+
+    Sólo genera bloqueo automático ante señales de muy alta
+    confianza. No visita enlaces y no intenta determinar malware.
+    """
+
+    texto = str(
+        mensaje or ""
+    ).strip()
+
+    texto_normalizado = (
+        normalizar_texto_para_deteccion(
+            texto
+        )
+    )
+
+    contiene_url = bool(
+        re.search(
+            r"(https?://|www\.)\S+",
+            texto,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    indicadores_adulto_explicito = {
+        "brazzers",
+        "pornhub",
+        "xvideos",
+        "xnxx",
+        "sitio porno",
+        "sitio pornografico",
+        "sitio pornográfico",
+    }
+
+    contenido_adulto_explicito = any(
+        indicador in texto_normalizado
+        for indicador
+        in indicadores_adulto_explicito
+    )
+
+    # Bloqueo automático únicamente si se combinan
+    # contenido explícito identificable + enlace.
+    if (
+        contiene_url
+        and contenido_adulto_explicito
+    ):
+        return {
+            "accion": "BLOCK",
+            "categoria": (
+                "CONTENIDO_INAPROPIADO"
+            ),
+            "motivo": (
+                "Mensaje no solicitado con enlace y "
+                "contenido adulto explícito."
+            ),
+        }
+
+    return {
+        "accion": "ALLOW",
+        "categoria": "",
+        "motivo": "",
+    }
+
 class AdminPendingTask(Base):
     __tablename__ = "admin_pending_tasks"
 
@@ -15996,6 +16938,666 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# ============================================================
+# CRM PERSISTENTE DE SEGUIMIENTO Y NURTURING
+# ============================================================
+
+CRM_COMMERCIAL_GOAL_VISITA = (
+    "LOGRAR_VISITA_PRESENCIAL"
+)
+
+CRM_FOLLOWUP_INITIAL_MINUTES = 15
+CRM_NURTURING_COOLDOWN_DAYS = 3
+
+
+def registrar_evento_followup_crm(
+    db: Session,
+    estado_crm,
+    event_type: str,
+    reason: str = "",
+    step_number: Optional[int] = None,
+    scheduled_for=None,
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """
+    Registra un evento histórico del ciclo CRM.
+
+    No representa el estado actual.
+    No realiza commit por sí sola.
+    """
+
+    if estado_crm is None:
+        return None
+
+    evento = FollowUpEvent(
+        contact_id=estado_crm.contact_id,
+
+        conversation_cycle_id=(
+            estado_crm.conversation_cycle_id
+            or None
+        ),
+
+        event_type=str(
+            event_type or ""
+        ).strip().upper(),
+
+        step_number=step_number,
+
+        objective=(
+            estado_crm.current_objective
+            or None
+        ),
+
+        journey_status=(
+            estado_crm.journey_status
+            or None
+        ),
+
+        scheduled_for=scheduled_for,
+
+        occurred_at=datetime.now(
+            timezone.utc
+        ),
+
+        reason=(
+            str(reason or "").strip()
+            or None
+        ),
+
+        metadata_json=(
+            json.dumps(
+                metadata,
+                ensure_ascii=False,
+                default=str,
+            )
+            if isinstance(metadata, dict)
+            else None
+        ),
+    )
+
+    db.add(evento)
+
+    return evento
+
+
+def crear_estado_crm_contacto_nuevo(
+    db: Session,
+    contact,
+):
+    """
+    Crea la marca persistente de cohorte únicamente para
+    un contacto que acaba de ser creado.
+
+    IMPORTANTE:
+    Esta función NO debe utilizarse para contactos históricos.
+    """
+
+    if contact is None:
+        return None
+
+    existente = (
+        db.query(ContactFollowUpState)
+        .filter(
+            ContactFollowUpState.contact_id
+            == contact.id
+        )
+        .first()
+    )
+
+    if existente:
+        return existente
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    estado = ContactFollowUpState(
+        contact_id=contact.id,
+        prospect_phone=contact.phone_number,
+
+        automation_enabled=False,
+        automation_enrolled_at=None,
+
+        commercial_goal="",
+        journey_status="NOT_ENROLLED",
+
+        conversation_cycle_id="",
+        conversation_mode="",
+
+        active_goal="",
+        active_goal_status="",
+
+        current_objective="",
+        current_stage="",
+        current_commercial_status="",
+
+        followup_step=0,
+        followup_count=0,
+
+        last_inbound_at=None,
+        last_outbound_at=None,
+        last_followup_at=None,
+        next_followup_at=None,
+
+        nurturing_started_at=None,
+        next_nurturing_at=None,
+
+        created_at=ahora,
+        updated_at=ahora,
+    )
+
+    db.add(estado)
+    db.flush()
+
+    registrar_evento_followup_crm(
+        db=db,
+        estado_crm=estado,
+        event_type="CRM_STATE_CREATED",
+        reason=(
+            "Contacto nuevo posterior al rollout. "
+            "Automatización todavía no activada."
+        ),
+    )
+
+    db.commit()
+    db.refresh(estado)
+
+    print(
+        "🆕 CRM FOLLOWUP STATE CREADO: "
+        f"contact_id={contact.id}, "
+        "journey=NOT_ENROLLED, "
+        "automation_enabled=False"
+    )
+
+    return estado
+
+
+def obtener_estado_followup_crm(
+    db: Session,
+    contact_id: int,
+):
+    """
+    Obtiene el estado CRM existente.
+
+    NO crea uno nuevo.
+    Esto protege deliberadamente a contactos históricos.
+    """
+
+    return (
+        db.query(ContactFollowUpState)
+        .filter(
+            ContactFollowUpState.contact_id
+            == contact_id
+        )
+        .first()
+    )
+
+
+def activar_crm_admisiones_si_elegible(
+    db: Session,
+    contact,
+):
+    """
+    Enrola comercialmente únicamente a contactos que YA poseen
+    ContactFollowUpState.
+
+    Los contactos históricos no tienen esa fila y quedan
+    excluidos de automatizaciones hasta una futura activación
+    manual explícita.
+    """
+
+    if contact is None:
+        return None
+
+    estado = obtener_estado_followup_crm(
+        db,
+        contact.id,
+    )
+
+    if estado is None:
+        print(
+            "ℹ️ CRM FOLLOWUP EXCLUIDO: "
+            f"contact_id={contact.id} "
+            "sin estado de cohorte; "
+            "se considera contacto histórico."
+        )
+
+        return None
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    # --------------------------------------------------------
+    # PRIMER INGRESO AL EMBUDO DE ADMISIONES
+    # --------------------------------------------------------
+
+    if estado.journey_status == "NOT_ENROLLED":
+
+        estado.automation_enrolled_at = ahora
+
+        # Sigue apagado hasta activar el motor en otra fase.
+        estado.automation_enabled = False
+
+        estado.commercial_goal = (
+            CRM_COMMERCIAL_GOAL_VISITA
+        )
+
+        estado.journey_status = (
+            "ACTIVE_CONVERSION"
+        )
+
+        estado.conversation_cycle_id = (
+            str(uuid.uuid4())
+        )
+
+        estado.conversation_mode = (
+            "PRIMER_CONTACTO"
+        )
+
+        estado.active_goal = (
+            "CONDUCIR_A_CITA"
+        )
+
+        estado.active_goal_status = "ACTIVE"
+
+        estado.followup_step = 0
+        estado.next_followup_at = None
+        estado.next_nurturing_at = None
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado,
+            event_type="CRM_ENROLLED_ADMISSIONS",
+            reason=(
+                "Contacto nuevo clasificado como admisiones."
+            ),
+        )
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado,
+            event_type="CONVERSATION_CYCLE_STARTED",
+            reason="PRIMER_CONTACTO",
+        )
+
+        db.commit()
+        db.refresh(estado)
+
+        print(
+            "🎯 CRM ENROLADO: "
+            f"contact_id={contact.id}, "
+            f"cycle={estado.conversation_cycle_id}, "
+            "goal=LOGRAR_VISITA_PRESENCIAL"
+        )
+
+        return estado
+
+    # --------------------------------------------------------
+    # REACTIVACIÓN FUTURA DESDE NURTURING
+    # --------------------------------------------------------
+
+    if estado.journey_status == "NURTURING":
+
+        estado.journey_status = (
+            "ACTIVE_CONVERSION"
+        )
+
+        estado.conversation_cycle_id = (
+            str(uuid.uuid4())
+        )
+
+        estado.conversation_mode = (
+            "REACTIVACION"
+        )
+
+        estado.active_goal = (
+            "CONDUCIR_A_CITA"
+        )
+
+        estado.active_goal_status = "ACTIVE"
+
+        estado.followup_step = 0
+        estado.next_followup_at = None
+        estado.next_nurturing_at = None
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado,
+            event_type=(
+                "CONVERSATION_CYCLE_REACTIVATED"
+            ),
+            reason=(
+                "Nueva manifestación del prospecto "
+                "durante nurturing."
+            ),
+        )
+
+        db.commit()
+        db.refresh(estado)
+
+        print(
+            "♻️ CRM REACTIVADO: "
+            f"contact_id={contact.id}, "
+            f"cycle={estado.conversation_cycle_id}"
+        )
+
+    return estado
+
+
+def actualizar_crm_por_mensaje(
+    db: Session,
+    contact_id: int,
+    direction: str,
+    timestamp,
+):
+    """
+    Sincroniza las horas reales de mensajes con el CRM.
+
+    No crea estados para contactos históricos.
+    """
+
+    estado = obtener_estado_followup_crm(
+        db,
+        contact_id,
+    )
+
+    if estado is None:
+        return
+
+    direccion = str(
+        direction or ""
+    ).strip().lower()
+
+    if direccion == "incoming":
+
+        tenia_followup_pendiente = bool(
+            estado.next_followup_at
+        )
+
+        estado.last_inbound_at = timestamp
+
+        # Toda respuesta nueva invalida una ventana anterior.
+        # La nueva transición decidirá posteriormente si debe
+        # abrirse una ventana distinta.
+        estado.next_followup_at = None
+        estado.followup_step = 0
+
+        if tenia_followup_pendiente:
+            registrar_evento_followup_crm(
+                db=db,
+                estado_crm=estado,
+                event_type="PROSPECT_REPLIED",
+                reason=(
+                    "El prospecto respondió antes del "
+                    "siguiente seguimiento."
+                ),
+            )
+
+    elif direccion == "outgoing":
+        estado.last_outbound_at = timestamp
+
+    estado.updated_at = datetime.now(
+        timezone.utc
+    )
+
+
+def sincronizar_crm_desde_transicion(
+    db: Session,
+    contact,
+    transicion: Dict[str, Any],
+):
+    """
+    Replica en el CRM la posición comercial resultante
+    después de una respuesta exitosa.
+
+    En esta fase sólo PERSISTE y PROGRAMA EN BD.
+    NO envía seguimientos.
+    """
+
+    if contact is None:
+        return None
+
+    estado = obtener_estado_followup_crm(
+        db,
+        contact.id,
+    )
+
+    if estado is None:
+        return None
+
+    if not isinstance(
+        transicion,
+        dict,
+    ):
+        return estado
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    objetivo = str(
+        transicion.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    etapa = str(
+        transicion.get(
+            "etapa_conversacional",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    estado_comercial = str(
+        transicion.get(
+            "estado_comercial",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    objetivo_anterior = (
+        estado.current_objective
+    )
+
+    journey_anterior = (
+        estado.journey_status
+    )
+
+    estado.current_objective = objetivo
+    estado.current_stage = etapa
+    estado.current_commercial_status = (
+        estado_comercial
+    )
+
+    # --------------------------------------------------------
+    # CITA YA CONFIRMADA
+    # --------------------------------------------------------
+
+    if (
+        etapa == "VISITA_CONFIRMADA"
+        or estado_comercial
+        in {
+            "VISITA_CONFIRMADA",
+            "VISITA_AGENDADA",
+        }
+    ):
+        estado.journey_status = (
+            "APPOINTMENT_CONFIRMED"
+        )
+
+        estado.active_goal = (
+            "COMPLETAR_CITA"
+        )
+
+        estado.active_goal_status = (
+            "COMPLETED"
+        )
+
+        estado.next_followup_at = None
+        estado.next_nurturing_at = None
+
+    # --------------------------------------------------------
+    # PAUSA / REGRESO A NURTURING
+    # --------------------------------------------------------
+
+    elif (
+        etapa == "SEGUIMIENTO"
+        or objetivo
+        == "ESPERAR_REACTIVACION_PROSPECTO"
+    ):
+        estado.journey_status = "NURTURING"
+        estado.active_goal_status = "PAUSED"
+        estado.next_followup_at = None
+
+        if estado.nurturing_started_at is None:
+            estado.nurturing_started_at = ahora
+
+        estado.next_nurturing_at = (
+            ahora
+            + timedelta(
+                days=CRM_NURTURING_COOLDOWN_DAYS
+            )
+        )
+
+        if journey_anterior != "NURTURING":
+            registrar_evento_followup_crm(
+                db=db,
+                estado_crm=estado,
+                event_type="RETURNED_TO_NURTURING",
+                reason=(
+                    "La conversación quedó sin conversión "
+                    "activa o el prospecto pidió retomarla "
+                    "posteriormente."
+                ),
+                scheduled_for=(
+                    estado.next_nurturing_at
+                ),
+            )
+
+    # --------------------------------------------------------
+    # CONVERSACIÓN ACTIVA
+    # --------------------------------------------------------
+
+    else:
+        estado.journey_status = (
+            "ACTIVE_CONVERSION"
+        )
+
+        estado.active_goal_status = "ACTIVE"
+
+        if objetivo == "OBTENER_DECISION_VISITA":
+            estado.active_goal = (
+                "LOGRAR_DECISION_VISITA"
+            )
+
+        elif objetivo in {
+            "OBTENER_FECHA_CITA",
+            "OBTENER_HORA_CITA",
+            "CONFIRMAR_FECHA_CITA_CALENDARIO",
+            "ESPERAR_CONFIRMACION_ADMIN",
+        }:
+            estado.active_goal = (
+                "CONCRETAR_CITA"
+            )
+
+        elif objetivo == "OBTENER_DATOS_CITA":
+            estado.active_goal = (
+                "COMPLETAR_CITA"
+            )
+
+        else:
+            estado.active_goal = (
+                "CONDUCIR_A_CITA"
+            )
+
+        # ----------------------------------------------------
+        # ¿QUIÉN DEBE RESPONDER AHORA?
+        # ----------------------------------------------------
+        #
+        # No programamos por "etapa", sino por autoridad.
+        #
+        # Si el siguiente movimiento depende de administración
+        # o del sistema, jamás se considera silencio comercial
+        # del prospecto.
+        # ----------------------------------------------------
+
+        objetivos_sin_followup_automatico = {
+            "",
+            "ESPERAR_CONFIRMACION_ADMIN",
+            "CONFIRMAR_FECHA_CITA_CALENDARIO",
+        }
+
+        if (
+            objetivo
+            not in objetivos_sin_followup_automatico
+        ):
+            estado.followup_step = 0
+
+            estado.next_followup_at = (
+                ahora
+                + timedelta(
+                    minutes=(
+                        CRM_FOLLOWUP_INITIAL_MINUTES
+                    )
+                )
+            )
+
+            estado.next_nurturing_at = None
+
+            registrar_evento_followup_crm(
+                db=db,
+                estado_crm=estado,
+                event_type="FOLLOWUP_WINDOW_OPENED",
+                reason=(
+                    "Respuesta enviada y quedó una acción "
+                    "pendiente del prospecto."
+                ),
+                step_number=0,
+                scheduled_for=(
+                    estado.next_followup_at
+                ),
+            )
+
+        else:
+            estado.next_followup_at = None
+
+    if (
+        objetivo
+        and objetivo != objetivo_anterior
+    ):
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado,
+            event_type="ACTIVE_OBJECTIVE_CHANGED",
+            reason=(
+                f"{objetivo_anterior or 'SIN_OBJETIVO'} "
+                f"-> {objetivo}"
+            ),
+        )
+
+    estado.updated_at = ahora
+
+    db.commit()
+    db.refresh(estado)
+
+    print(
+        "🧭 CRM FOLLOWUP SYNC: "
+        f"contact_id={contact.id}, "
+        f"journey={estado.journey_status}, "
+        f"active_goal={estado.active_goal}, "
+        f"objective={estado.current_objective}, "
+        f"step={estado.followup_step}, "
+        f"next_followup={estado.next_followup_at}, "
+        f"automation_enabled={estado.automation_enabled}"
+    )
+
+    return estado
 
 # ============================================================
 # RECUPERACIÓN COMPLETA DEL HISTORIAL CONVERSACIONAL
@@ -18282,6 +19884,53 @@ def procesar_mensaje_whatsapp_estructurado_real(
     )
 
     # --------------------------------------------------------
+    # ACTIVACIÓN CRM EXCLUSIVA PARA ADMISIONES
+    # --------------------------------------------------------
+    #
+    # La fila de cohorte ya existe únicamente si el contacto
+    # nació después del rollout.
+    #
+    # Aquí sólo lo enrolamos comercialmente cuando la IA ya
+    # determinó que la conversación pertenece a ADMISIONES.
+    # --------------------------------------------------------
+
+    estado_crm_admisiones = None
+
+    if categoria_alcance == "ADMISIONES":
+        estado_crm_admisiones = (
+            activar_crm_admisiones_si_elegible(
+                db=db,
+                contact=contact,
+            )
+        )
+
+    resultado_final[
+        "crm_admisiones"
+    ] = (
+        {
+            "enrolado": bool(
+                estado_crm_admisiones
+            ),
+            "journey_status": (
+                estado_crm_admisiones.journey_status
+                if estado_crm_admisiones
+                else ""
+            ),
+            "conversation_cycle_id": (
+                estado_crm_admisiones.conversation_cycle_id
+                if estado_crm_admisiones
+                else ""
+            ),
+            "automation_enabled": (
+                estado_crm_admisiones.automation_enabled
+                if estado_crm_admisiones
+                else False
+            ),
+        }
+    )
+    
+
+    # --------------------------------------------------------
     # RESPUESTA PREVIA PARA ALCANCE AMBIGUO
     # --------------------------------------------------------
 
@@ -19176,19 +20825,23 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
         mensajes_cortesia_espera_admin = {
             "si",
+            "sí",
             "ok",
             "okay",
+            "claro",
+            "claro que si",
+            "claro que sí",
             "gracias",
             "muchas gracias",
             "de acuerdo",
             "esta bien",
+            "está bien",
             "perfecto",
             "vale",
             "entendido",
             "muy bien",
             "sale",
         }
-
         cita_esperando_admin = (
             objetivo_pendiente_actual
             == "ESPERAR_CONFIRMACION_ADMIN"
@@ -19311,6 +20964,65 @@ def procesar_mensaje_whatsapp_estructurado_real(
         ] = respuesta_bot
 
         # ----------------------------------------------------
+        # GUARD FINAL: LA IA NO PUEDE CONFIRMAR DISPONIBILIDAD
+        # MIENTRAS ADMINISTRACIÓN SIGUE SIENDO LA AUTORIDAD
+        # ----------------------------------------------------
+
+        if cita_esperando_admin:
+
+            respuesta_normalizada_admin = (
+                normalizar_texto_para_deteccion(
+                    respuesta_bot
+                )
+            )
+
+            expresiones_confirmacion_no_autorizada = [
+                "le confirmo que tenemos disponible",
+                "le confirmo que hay disponibilidad",
+                "tenemos disponible el espacio",
+                "su visita ha quedado programada",
+                "su cita ha quedado programada",
+                "su visita esta confirmada",
+                "su cita esta confirmada",
+                "podemos recibirle",
+                "podemos recibirlo",
+                "podemos recibirla",
+            ]
+
+            confirma_sin_admin = any(
+                expresion
+                in respuesta_normalizada_admin
+                for expresion
+                in expresiones_confirmacion_no_autorizada
+            )
+
+            if confirma_sin_admin:
+                print(
+                    "🛡️ CONFIRMACIÓN DE CITA BLOQUEADA: "
+                    "la conversación sigue esperando "
+                    "confirmación administrativa."
+                )
+
+                respuesta_bot = (
+                    "Su solicitud de visita sigue pendiente "
+                    "de confirmación.\n\n"
+                    "En cuanto tengamos respuesta se la "
+                    "compartiremos por este medio."
+                )
+
+                resultado_orquestador[
+                    "respuesta_generada"
+                ] = respuesta_bot
+
+                resultado_orquestador[
+                    "guard_confirmacion_admin_aplicado"
+                ] = True
+
+                resultado_final[
+                    "respuesta"
+                ] = respuesta_bot
+
+        # ----------------------------------------------------
         # 5. ENVÍO REAL AL PROSPECTO
         # ----------------------------------------------------
 
@@ -19428,6 +21140,76 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 ensure_ascii=False,
                 default=str,
             )
+        )
+
+        # ----------------------------------------------------
+        # 7-B. SINCRONIZACIÓN CRM EN MODO OBSERVACIÓN
+        # ----------------------------------------------------
+        #
+        # Replica la posición comercial resultante en las
+        # nuevas tablas persistentes.
+        #
+        # IMPORTANTE:
+        # - no envía mensajes;
+        # - automation_enabled continúa False;
+        # - next_followup_at es únicamente una marca observable;
+        # - contactos históricos no poseen estado CRM y por
+        #   tanto esta llamada no les afecta.
+        # ----------------------------------------------------
+
+        estado_crm_followup = (
+            sincronizar_crm_desde_transicion(
+                db=db,
+                contact=contact,
+                transicion=(
+                    resultado_transicion_post_envio
+                ),
+            )
+        )
+
+        resultado_final[
+            "crm_followup_state"
+        ] = (
+            {
+                "journey_status": (
+                    estado_crm_followup.journey_status
+                ),
+                "commercial_goal": (
+                    estado_crm_followup.commercial_goal
+                ),
+                "active_goal": (
+                    estado_crm_followup.active_goal
+                ),
+                "active_goal_status": (
+                    estado_crm_followup.active_goal_status
+                ),
+                "current_objective": (
+                    estado_crm_followup.current_objective
+                ),
+                "current_stage": (
+                    estado_crm_followup.current_stage
+                ),
+                "current_commercial_status": (
+                    estado_crm_followup.current_commercial_status
+                ),
+                "conversation_cycle_id": (
+                    estado_crm_followup.conversation_cycle_id
+                ),
+                "followup_step": (
+                    estado_crm_followup.followup_step
+                ),
+                "next_followup_at": (
+                    estado_crm_followup.next_followup_at
+                ),
+                "next_nurturing_at": (
+                    estado_crm_followup.next_nurturing_at
+                ),
+                "automation_enabled": (
+                    estado_crm_followup.automation_enabled
+                ),
+            }
+            if estado_crm_followup
+            else None
         )
 
         # ----------------------------------------------------
@@ -20200,22 +21982,75 @@ async def whatsapp_webhook(
                 "Recibimos su mensaje de voz, pero en este momento no pudimos procesarlo correctamente.\n\n"
                 "¿Nos lo podría compartir por texto para darle seguimiento adecuado por este medio?"
             )
-        
-            contact = get_or_create_contact(db, From)
-        
-            resultado = enviar_respuesta_twilio(From, respuesta)
-        
+
+            contact = get_or_create_contact(
+                db,
+                From,
+            )
+
+            # El inbound se conserva siempre para auditoría.
+            mensaje_guardado = save_message(
+                db,
+                contact.id,
+                "incoming",
+                mensaje_entrada,
+            )
+
+            # Un contacto bloqueado no recibe tampoco
+            # respuestas de fallback.
+            if contacto_esta_bloqueado(
+                db,
+                contact.id,
+            ):
+                print(
+                    "🚫 FALLBACK AUDIO SUPRIMIDO: "
+                    f"contact_id={contact.id} bloqueado."
+                )
+
+                return {
+                    "status": "blocked_contact_audio",
+                    "contact_id": contact.id,
+                    "message_id": (
+                        mensaje_guardado.id
+                        if mensaje_guardado
+                        else None
+                    ),
+                }
+
+            resultado = enviar_respuesta_twilio(
+                From,
+                respuesta,
+            )
+
             twilio_sid = None
+
             if "SID:" in resultado:
-                twilio_sid = resultado.split("SID: ")[1].strip()
+                twilio_sid = (
+                    resultado
+                    .split("SID: ")[1]
+                    .strip()
+                )
+
+            save_message(
+                db,
+                contact.id,
+                "outgoing",
+                respuesta,
+                twilio_sid,
+            )
+
+            print(
+                f"🤖 BOT (fallback audio): {respuesta}"
+            )
+            print(
+                f"📤 Estado: {resultado}"
+            )
+
+            return {
+                "status": "processed_audio_fallback",
+                "contact_id": contact.id,
+            }
         
-            save_message(db, contact.id, 'incoming', mensaje_entrada)
-            save_message(db, contact.id, 'outgoing', respuesta, twilio_sid)
-        
-            print(f"🤖 BOT (fallback audio): {respuesta}")
-            print(f"📤 Estado: {resultado}")
-        
-            return {"status": "processed_audio_fallback", "contact_id": contact.id}
         
         print(f"\n{'='*60}")
         print(f"💬 WHATSAPP CHAT - {datetime.now().strftime('%H:%M:%S')}")
@@ -20237,6 +22072,87 @@ async def whatsapp_webhook(
             mensaje_entrada,
         )
 
+        # ====================================================
+        # PUERTA DE MODERACIÓN
+        # ====================================================
+        #
+        # El inbound ya quedó persistido para auditoría.
+        #
+        # A partir de aquí un contacto bloqueado:
+        # - no entra a Gemini;
+        # - no entra al flujo comercial;
+        # - no modifica una cita;
+        # - no genera respuesta automática.
+        # ====================================================
+
+        if contacto_esta_bloqueado(
+            db,
+            contact.id,
+        ):
+            print(
+                "🚫 INBOUND IGNORADO: "
+                f"contact_id={contact.id} "
+                "ya se encuentra bloqueado."
+            )
+
+            return {
+                "status": "blocked_contact",
+                "contact_id": contact.id,
+                "message_id": (
+                    mensaje_guardado.id
+                    if mensaje_guardado
+                    else None
+                ),
+            }
+
+        evaluacion_moderacion = (
+            evaluar_riesgo_mensaje_entrante(
+                mensaje_entrada
+            )
+        )
+
+        if (
+            evaluacion_moderacion.get(
+                "accion"
+            )
+            == "BLOCK"
+        ):
+            bloquear_contacto(
+                db=db,
+                contact=contact,
+                reason=(
+                    evaluacion_moderacion.get(
+                        "motivo",
+                        "",
+                    )
+                ),
+                risk_category=(
+                    evaluacion_moderacion.get(
+                        "categoria",
+                        "SPAM",
+                    )
+                ),
+                source="AUTO",
+                message_id=(
+                    mensaje_guardado.id
+                    if mensaje_guardado
+                    else None
+                ),
+            )
+
+            # Bloqueo silencioso:
+            # no respondemos al remitente.
+            return {
+                "status": (
+                    "blocked_by_moderation"
+                ),
+                "contact_id": contact.id,
+                "message_id": (
+                    mensaje_guardado.id
+                    if mensaje_guardado
+                    else None
+                ),
+            }
 
         # ====================================================
         # PRIORIDAD ABSOLUTA: COMPLETAR DATOS DE CITA CONFIRMADA
@@ -20254,14 +22170,95 @@ async def whatsapp_webhook(
             contact
         )
 
+        objetivo_pendiente_actual = str(
+            get_note_value(
+                contact,
+                "OBJETIVO_PENDIENTE",
+            )
+            or ""
+        ).strip().upper()
+
+        estado_comercial_actual = str(
+            getattr(
+                contact,
+                "status",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        # ====================================================
+        # INVARIANTE: CITA CONFIRMADA CON DATOS PENDIENTES
+        # ====================================================
+        #
+        # No dependemos de una sola marca de estado.
+        #
+        # Si cualquiera de las fuentes persistentes indica que
+        # todavía estamos completando una cita confirmada,
+        # preservamos ese objetivo y evitamos regresar al embudo.
+        #
+        # También recuperamos el estado si por alguna razón
+        # FLOW_STATE y OBJETIVO_PENDIENTE quedaron desalineados.
+        # ====================================================
+
+        datos_cita_realmente_pendientes = False
+
         if (
+            estado_comercial_actual
+            == "VISITA_CONFIRMADA"
+        ):
+            try:
+                datos_cita_realmente_pendientes = bool(
+                    construir_solicitud_datos_cita(
+                        contact
+                    )
+                )
+            except Exception as e:
+                print(
+                    "⚠️ No fue posible verificar datos "
+                    f"pendientes de cita: {e}"
+                )
+
+        cita_confirmada_con_datos_pendientes = bool(
             estado_flujo_actual
             == "ESPERANDO_DATOS_CITA"
-        ):
+            or objetivo_pendiente_actual
+            == "OBTENER_DATOS_CITA"
+            or (
+                estado_comercial_actual
+                == "VISITA_CONFIRMADA"
+                and datos_cita_realmente_pendientes
+            )
+        )
+
+        if cita_confirmada_con_datos_pendientes:
+
+            # Reparación defensiva de cualquier divergencia.
+            if (
+                estado_flujo_actual
+                != "ESPERANDO_DATOS_CITA"
+            ):
+                set_flow_state(
+                    contact,
+                    "ESPERANDO_DATOS_CITA",
+                )
+
+            if (
+                objetivo_pendiente_actual
+                != "OBTENER_DATOS_CITA"
+            ):
+                set_note_value(
+                    contact,
+                    "OBJETIVO_PENDIENTE",
+                    "OBTENER_DATOS_CITA",
+                )
+
+            db.commit()
+
             print(
-                "📌 Cita confirmada: "
-                "procesando únicamente datos faltantes "
-                "del registro."
+                "📌 Cita confirmada con datos pendientes: "
+                "se preserva OBTENER_DATOS_CITA y se procesa "
+                "el mensaje únicamente dentro del registro."
             )
 
             return procesar_datos_registro_cita(
@@ -20270,7 +22267,7 @@ async def whatsapp_webhook(
                 From,
                 mensaje_entrada,
             )
-
+            
         usar_flujo_estructurado = bool(
             USE_STRUCTURED_AI_FLOW
             or es_numero_prueba_flujo_estructurado(
@@ -20413,17 +22410,6 @@ async def whatsapp_webhook(
         return {"status": "error", "detail": str(e)}
 
 
-# Configuración del negocio
-NEGOCIO_INFO = """
-Eres el asistente virtual del Colegio. 
-Información clave:
-- Horarios: Lunes a Viernes 7am-3pm
-- Ubicación: [TU DIRECCIÓN AQUÍ]
-- Servicios: Primaria, Secundaria
-- Costo inscripción: $5,000 MXN
-- Agendar visita: https://calendly.com/tu-colegio
-Responde solo con esta información. Si no sabes algo, di: 'Te ayudo a agendar una cita.'
-"""
 
 # Configuración de Gemini
 GEMINI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
@@ -20465,6 +22451,11 @@ def get_or_create_contact(db: Session, phone_number: str):
         db.add(contact)
         db.commit()
         db.refresh(contact)
+        
+        crear_estado_crm_contacto_nuevo(
+            db=db,
+            contact=contact,
+        )
     
     return contact
 
@@ -20487,6 +22478,13 @@ def save_message(db: Session, contact_id: int, direction: str, content: str, twi
     if contact:
         contact.total_messages += 1
         contact.last_contact = datetime.now(timezone.utc)
+
+    actualizar_crm_por_mensaje(
+        db=db,
+        contact_id=contact_id,
+        direction=direction,
+        timestamp=timestamp,
+    )
     
     db.commit()
     return message
@@ -22640,6 +24638,7 @@ REGLAS:
 def extraer_datos_registro_cita(
     mensaje_usuario: str,
     contact,
+    ultimo_mensaje_asistente: str = "",
 ) -> dict:
     """
     Extrae los datos necesarios para completar una cita confirmada.
@@ -22849,10 +24848,19 @@ def extraer_datos_registro_cita(
         return datos
 
     prompt = f"""
-Extrae los datos necesarios para registrar una cita escolar
-desde el siguiente mensaje de WhatsApp.
+Extrae los datos necesarios para completar el registro de una
+cita escolar ya confirmada.
 
-MENSAJE DEL PROSPECTO:
+IMPORTANTE:
+El mensaje actual forma parte de una conversación existente.
+Nunca lo interpretes de manera aislada.
+
+ÚLTIMA SOLICITUD DEL ASISTENTE AL PROSPECTO:
+
+{ultimo_mensaje_asistente or "No disponible"}
+
+MENSAJE ACTUAL DEL PROSPECTO:
+
 {texto}
 
 DATOS YA EXTRAÍDOS:
@@ -22911,6 +24919,29 @@ Devuelve únicamente un objeto JSON válido con esta estructura:
 }}
 
 REGLAS OBLIGATORIAS:
+
+- Interpreta el MENSAJE ACTUAL como respuesta a la ÚLTIMA
+  SOLICITUD DEL ASISTENTE.
+
+- Si el prospecto responde de forma breve, con uno o varios
+  nombres, utiliza la pregunta previa y los datos que todavía
+  faltan para comprender razonablemente a quién corresponde
+  cada nombre.
+
+- Si el asistente solicitó varios datos en un orden determinado
+  y el prospecto responde varios valores claramente en ese mismo
+  orden, conserva esa correspondencia cuando sea razonable.
+
+- No exijas que el prospecto escriba frases como "yo me llamo",
+  "mi hijo se llama", "nombre del tutor" o expresiones similares
+  si el contexto conversacional permite comprender la respuesta.
+
+- Al mismo tiempo, no inventes una asociación cuando realmente
+  sea ambigua. Si no es posible determinar razonablemente a
+  quién corresponde un nombre, deja ese campo vacío.
+
+- La información ya persistida tiene prioridad. Completa lo
+  faltante; no reinicies ni reconstruyas el registro desde cero.
 
 - "padres" debe contener el nombre completo de la mamá,
   papá o tutor que agenda.
@@ -23468,9 +25499,43 @@ def procesar_datos_registro_cita(
     datos requeridos para la cita están completos.
     """
 
+    # --------------------------------------------------------
+    # CONTEXTO INMEDIATO DE LA RESPUESTA
+    # --------------------------------------------------------
+    #
+    # El prospecto puede contestar únicamente con nombres,
+    # grados u otros datos breves. Recuperamos la última
+    # solicitud que recibió para que Gemini interprete la
+    # respuesta dentro de su contexto real.
+    # --------------------------------------------------------
+
+    ultimo_mensaje_asistente_obj = (
+        db.query(Message)
+        .filter(
+            Message.contact_id == contact.id,
+            Message.direction == "outgoing",
+        )
+        .order_by(
+            Message.id.desc()
+        )
+        .first()
+    )
+
+    ultimo_mensaje_asistente = str(
+        getattr(
+            ultimo_mensaje_asistente_obj,
+            "content",
+            "",
+        )
+        or ""
+    ).strip()
+
     datos = extraer_datos_registro_cita(
         mensaje_usuario,
         contact,
+        ultimo_mensaje_asistente=(
+            ultimo_mensaje_asistente
+        ),
     )
 
     # --------------------------------------------------------
@@ -24178,6 +26243,10 @@ REGLAS:
 - Si el administrador propone alternativas, inclúyelas de forma clara.
 - No omitas información importante de la respuesta interna del administrador.
 - Cuando la cita quede confirmada y todavía deban solicitarse datos para completar el registro, no cierres la conversación.
+- MUY IMPORTANTE: no solicites nombres, nivel, grado ni datos de registro en esta respuesta.
+- Tu única función aquí es comunicar la decisión del administrador.
+- Si faltan datos para registrar la cita, Python los solicitará después de esta respuesta.
+- No preguntes el nombre del tutor, del alumno, el nivel ni el grado.
 - No utilices frases de despedida como "Que tenga un excelente día", "Estamos a sus órdenes", "Cualquier duda hágamelo saber", "Si requiere indicaciones para llegar" o expresiones equivalentes.
 - Evita cualquier despedida antes de que se hayan solicitado y recibido los datos faltantes del tutor y del alumno.
 - Si después de esta respuesta se solicitarán datos para completar el registro de la cita, termina la confirmación de forma natural y abierta, sin despedirte del prospecto.
@@ -24414,6 +26483,40 @@ Te muestro nuevamente el menú actualizado:
 
         print(f"⚠️ Contacto pendiente no encontrado: {resultado}")
         return {"status": "admin_contact_not_found"}
+
+    # --------------------------------------------------------
+    # MODERACIÓN TAMBIÉN AUTORIZA EL OUTBOUND ADMINISTRATIVO
+    # --------------------------------------------------------
+
+    if contacto_esta_bloqueado(
+        db,
+        contact.id,
+    ):
+        ADMIN_SELECTED_TASKS.pop(
+            admin_key,
+            None,
+        )
+
+        respuesta_admin = (
+            "⚠️ Este contacto se encuentra bloqueado "
+            "en el CRM. No se envió ningún mensaje "
+            "al prospecto."
+        )
+
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            respuesta_admin,
+        )
+
+        print(
+            "🚫 RESPUESTA ADMIN SUPRIMIDA POR MODERACIÓN: "
+            f"contact_id={contact.id}"
+        )
+
+        return {
+            "status": "admin_response_blocked_by_moderation",
+            "contact_id": contact.id,
+        }
 
     mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_limpio, tarea)
 
@@ -24695,6 +26798,24 @@ Te muestro nuevamente el menú actualizado:
                     )
 
         # ----------------------------------------------------
+        # PERSISTIR AUTORIDAD DE LA CITA ANTES DEL OUTBOUND
+        # ----------------------------------------------------
+        #
+        # La cita ya fue confirmada por administración.
+        # Esa verdad operativa no debe depender de que el
+        # prospecto tarde o no en responder al mensaje.
+        #
+        # Persistimos antes del envío para que cualquier
+        # inbound concurrente encuentre inmediatamente:
+        #
+        # VISITA_CONFIRMADA
+        # OBTENER_DATOS_CITA
+        # ESPERANDO_DATOS_CITA
+        # ----------------------------------------------------
+
+        db.commit()
+
+        # ----------------------------------------------------
         # SOLICITAR ÚNICAMENTE DATOS FALTANTES
         # ----------------------------------------------------
 
@@ -24703,12 +26824,9 @@ Te muestro nuevamente el menú actualizado:
                 contact
             )
         )
-        if (
-            "nombre completo"
-            not in mensaje_para_prospecto.lower()
-        ):
+        if solicitud_datos:
             mensaje_para_prospecto = (
-                f"{mensaje_para_prospecto}\n\n"
+                f"{mensaje_para_prospecto.rstrip()}\n\n"
                 f"{solicitud_datos}"
             )
 
@@ -25100,6 +27218,44 @@ async def view_full_conversation(
                 </body>
             </html>
         """, status_code=404)
+
+    # --------------------------------------------------------
+    # ESTADO DE MODERACIÓN DEL CONTACTO
+    # --------------------------------------------------------
+
+    estado_moderacion = obtener_estado_moderacion(
+        db,
+        contact.id,
+    )
+
+    contacto_bloqueado = bool(
+        estado_moderacion
+        and estado_moderacion.moderation_status
+        == MODERATION_STATUS_BLOCKED
+    )
+
+    categoria_moderacion = (
+        str(
+            estado_moderacion.risk_category
+            or ""
+        ).strip()
+        if estado_moderacion
+        else ""
+    )
+
+    motivo_moderacion = (
+        str(
+            estado_moderacion.block_reason
+            or ""
+        ).strip()
+        if estado_moderacion
+        else ""
+    )
+
+    telefono_url = clean_number.replace(
+        "+",
+        "%2B",
+    )
     
     # Obtener TODOS los mensajes ordenados
     messages = db.query(Message).filter(Message.contact_id == contact.id)\
@@ -25173,6 +27329,50 @@ async def view_full_conversation(
                 font-size: 0.9em;
                 opacity: 0.9;
                 margin-top: 3px;
+            }
+
+            /* MODERACIÓN */
+            .moderation-bar {
+                padding: 12px 20px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 15px;
+                border-bottom: 1px solid #ddd;
+                background: white;
+            }
+
+            .moderation-status {
+                font-size: 0.9em;
+                line-height: 1.4;
+            }
+
+            .moderation-status.blocked {
+                color: #b42318;
+                font-weight: 600;
+            }
+
+            .moderation-status.clear {
+                color: #166534;
+                font-weight: 600;
+            }
+
+            .moderation-button {
+                border: none;
+                border-radius: 8px;
+                padding: 9px 14px;
+                font-weight: 600;
+                cursor: pointer;
+            }
+
+            .moderation-button.block {
+                background: #fee2e2;
+                color: #991b1b;
+            }
+
+            .moderation-button.unblock {
+                background: #dcfce7;
+                color: #166534;
             }
             
             /* CONTENEDOR DE MENSAJES */
@@ -25372,8 +27572,83 @@ async def view_full_conversation(
                 </div>
             </div>
         </div>
-        
-        <div class="messages-container" id="messagesContainer">""")
+    """)
+
+    # --------------------------------------------------------
+    # BARRA DE MODERACIÓN
+    # --------------------------------------------------------
+
+    if contacto_bloqueado:
+
+        detalle_bloqueo = (
+            motivo_moderacion
+            or "Contacto bloqueado manual o automáticamente."
+        )
+
+        html_parts.append(f"""
+        <div class="moderation-bar">
+            <div class="moderation-status blocked">
+                🚫 CONTACTO BLOQUEADO
+                <div style="font-weight: normal; margin-top: 3px;">
+                    {categoria_moderacion or "SIN_CATEGORÍA"} —
+                    {detalle_bloqueo}
+                </div>
+            </div>
+
+            <form
+                action="/panel/conversations/{telefono_url}/moderation"
+                method="post"
+            >
+                <input
+                    type="hidden"
+                    name="action"
+                    value="unblock"
+                >
+
+                <button
+                    type="submit"
+                    class="moderation-button unblock"
+                >
+                    Desbloquear contacto
+                </button>
+            </form>
+        </div>
+        """)
+
+    else:
+
+        html_parts.append(f"""
+        <div class="moderation-bar">
+            <div class="moderation-status clear">
+                ✅ Contacto habilitado
+            </div>
+
+            <form
+                action="/panel/conversations/{telefono_url}/moderation"
+                method="post"
+            >
+                <input
+                    type="hidden"
+                    name="action"
+                    value="block"
+                >
+
+                <button
+                    type="submit"
+                    class="moderation-button block"
+                    onclick="return confirm(
+                        '¿Deseas bloquear este contacto?'
+                    );"
+                >
+                    Bloquear contacto
+                </button>
+            </form>
+        </div>
+        """)
+
+    html_parts.append("""
+        <div class="messages-container" id="messagesContainer">
+    """)
     
     # Agrupar mensajes por fecha
     current_date = None
@@ -25423,11 +27698,32 @@ async def view_full_conversation(
             </div>
         """)
 
-    telefono_url = clean_number.replace("+", "%2B")
 
-    html_parts.append(f"""
+    html_parts.append("""
         </div>
+    """)
 
+    if contacto_bloqueado:
+
+        html_parts.append("""
+        <div class="message-composer">
+            <div
+                style="
+                    text-align: center;
+                    color: #991b1b;
+                    font-weight: 600;
+                    padding: 10px;
+                "
+            >
+                🚫 Este contacto está bloqueado.
+                Desbloquéalo para enviar mensajes.
+            </div>
+        </div>
+        """)
+
+    else:
+
+        html_parts.append(f"""
         <div class="message-composer">
             <form
                 action="/panel/conversations/{telefono_url}/send"
@@ -25451,7 +27747,10 @@ async def view_full_conversation(
                 </button>
             </form>
         </div>
-        
+        """)
+
+    html_parts.append("""
+    
         <div class="footer">
             <a href="/panel" class="footer-link">← Volver al Panel</a>
             <span style="color: #ccc;">•</span>
@@ -25482,6 +27781,89 @@ async def view_full_conversation(
     
     return HTMLResponse(content=''.join(html_parts))
 
+@app.post(
+    "/panel/conversations/{phone_number}/moderation"
+)
+async def update_contact_moderation_from_panel(
+    phone_number: str,
+    action: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Bloquea o desbloquea un contacto desde el panel CRM.
+    """
+
+    if phone_number.startswith("whatsapp:"):
+        clean_number = phone_number.replace(
+            "whatsapp:",
+            "",
+        )
+    else:
+        clean_number = phone_number
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.phone_number == clean_number
+        )
+        .first()
+    )
+
+    if not contact:
+        raise HTTPException(
+            status_code=404,
+            detail="Contacto no encontrado",
+        )
+
+    accion = str(
+        action or ""
+    ).strip().lower()
+
+    if accion == "block":
+
+        bloquear_contacto(
+            db=db,
+            contact=contact,
+            reason="Bloqueo manual desde panel CRM.",
+            risk_category="SPAM",
+            source="MANUAL_PANEL",
+            message_id=None,
+        )
+
+    elif accion == "unblock":
+
+        desbloquear_contacto(
+            db=db,
+            contact=contact,
+        )
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Acción de moderación no válida.",
+        )
+
+    telefono_url = clean_number.replace(
+        "+",
+        "%2B",
+    )
+
+    return HTMLResponse(
+        content=f"""
+        <html>
+        <head>
+            <meta
+                http-equiv="refresh"
+                content="0;url=/panel/conversations/{telefono_url}"
+            >
+        </head>
+        <body>
+            Estado de moderación actualizado.
+        </body>
+        </html>
+        """
+    )
+
 @app.post("/panel/conversations/{phone_number}/send")
 async def send_manual_message_from_panel(
     phone_number: str,
@@ -25510,6 +27892,23 @@ async def send_manual_message_from_panel(
             detail="Contacto no encontrado"
         )
 
+    # --------------------------------------------------------
+    # AUTORIDAD DE MODERACIÓN
+    # --------------------------------------------------------
+
+    if contacto_esta_bloqueado(
+        db,
+        contact.id,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "El contacto está bloqueado. "
+                "Debe desbloquearse antes de enviar "
+                "un mensaje manual."
+            ),
+        )
+    
     # Limpiar mensaje
     mensaje_limpio = str(message or "").strip()
 
