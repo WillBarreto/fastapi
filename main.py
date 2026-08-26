@@ -6421,7 +6421,62 @@ def existe_mensaje_entrante_posterior_al_turno(
         )
 
         return False
-        
+
+def existe_mensaje_saliente_posterior_al_turno(
+    db: Session,
+    contact,
+    max_message_id: Optional[int],
+) -> bool:
+    """
+    Determina si, mientras se procesaba el turno actual,
+    apareció un mensaje saliente más reciente del mismo contacto.
+
+    Un outbound posterior puede provenir de:
+    - una respuesta administrativa;
+    - una respuesta manual desde el panel;
+    - otro procesamiento que ya tomó autoridad.
+
+    Si existe, la respuesta que este turno estaba preparando
+    debe considerarse obsoleta.
+    """
+
+    if (
+        db is None
+        or contact is None
+        or not isinstance(max_message_id, int)
+        or max_message_id <= 0
+    ):
+        return False
+
+    try:
+        mensaje_mas_reciente = (
+            db.query(Message.id)
+            .filter(
+                Message.contact_id == contact.id,
+                Message.direction == "outgoing",
+                Message.id > max_message_id,
+            )
+            .order_by(
+                Message.id.asc()
+            )
+            .first()
+        )
+
+        return (
+            mensaje_mas_reciente
+            is not None
+        )
+
+    except Exception as e:
+        print(
+            "⚠️ No fue posible comprobar "
+            "si apareció un outbound posterior "
+            f"al turno: {e}"
+        )
+
+        return False
+
+      
         
 def detectar_pausa_conversacion_simple(
     mensaje: str,
@@ -23465,35 +23520,69 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # ----------------------------------------------------
         # 5. ENVÍO REAL AL PROSPECTO
         # ----------------------------------------------------
-
-        if existe_mensaje_entrante_posterior_al_turno(
-            db=db,
-            contact=contact,
-            max_message_id=max_message_id,
-        ):
+        
+        # Releer el estado actual antes de decidir si este turno
+        # conserva todavía autoridad para responder.
+        db.refresh(contact)
+        
+        existe_inbound_posterior = (
+            existe_mensaje_entrante_posterior_al_turno(
+                db=db,
+                contact=contact,
+                max_message_id=max_message_id,
+            )
+        )
+        
+        existe_outbound_posterior = (
+            existe_mensaje_saliente_posterior_al_turno(
+                db=db,
+                contact=contact,
+                max_message_id=max_message_id,
+            )
+        )
+        
+        turno_superado = bool(
+            existe_inbound_posterior
+            or existe_outbound_posterior
+        )
+        
+        if turno_superado:
+        
+            motivo_supresion = (
+                "INBOUND_POSTERIOR"
+                if existe_inbound_posterior
+                else "OUTBOUND_AUTORITATIVO_POSTERIOR"
+            )
+        
             print(
                 "🛑 RESPUESTA OBSOLETA SUPRIMIDA: "
-                "llegó un mensaje entrante posterior "
-                f"al corte {max_message_id}."
+                f"contact_id={contact.id}, "
+                f"motivo={motivo_supresion}, "
+                f"corte={max_message_id}."
             )
-
+        
             resultado_final[
                 "procesado"
             ] = True
-
+        
             resultado_final[
                 "mensaje_enviado"
             ] = False
-
+        
             resultado_final[
                 "respuesta_suprimida_por_turno_nuevo"
             ] = True
-
+        
+            resultado_final[
+                "motivo_supresion_turno"
+            ] = motivo_supresion
+        
             resultado_final[
                 "error"
             ] = ""
-
+        
             return resultado_final
+            
         
         resultado_twilio = (
             enviar_respuesta_twilio(
