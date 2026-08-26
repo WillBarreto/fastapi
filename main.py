@@ -1920,6 +1920,8 @@ def clasificar_tipo_tarea_gemini(
             "clasificacion de intención",
             "clasificación respuesta admin cita",
             "clasificacion respuesta admin cita",
+            "clasificación resolución admin zona",
+            "clasificacion resolucion admin zona",
         ]
     ):
         return "ETIQUETA"
@@ -6255,22 +6257,62 @@ def clasificar_zona_determinista(
 
 def zona_previamente_validada_en_flujo(
     contact=None,
+    zona_actual: str = "",
 ) -> bool:
     """
-    Determina si la zona del contacto ya fue validada
+    Determina si la MISMA zona actual ya fue validada
     de forma autoritativa.
 
-    La validación NO se infiere a partir de FLOW_STATE,
-    etapa conversacional ni memoria IA.
+    Prioridad:
+    1. ZONA_VALIDADA_AUTORITATIVA.
+    2. Compatibilidad histórica con ZONA_VALIDADA +
+       ZONA_INTERES.
 
-    Únicamente se considera validada cuando existe
-    el hito persistido ZONA_VALIDADA.
+    Una zona distinta nunca hereda automáticamente
+    la autorización de otra.
     """
 
     if contact is None:
         return False
 
     try:
+        zona_actual_normalizada = (
+            normalizar_texto_geografico(
+                zona_actual
+            )
+        )
+
+        # ----------------------------------------------------
+        # 1. AUTORIDAD ESPECÍFICA DE ZONA
+        # ----------------------------------------------------
+
+        zona_autoritativa = str(
+            get_note_value(
+                contact,
+                "ZONA_VALIDADA_AUTORITATIVA",
+            )
+            or ""
+        ).strip()
+
+        if zona_autoritativa:
+            zona_autoritativa_normalizada = (
+                normalizar_texto_geografico(
+                    zona_autoritativa
+                )
+            )
+
+            if not zona_actual_normalizada:
+                return True
+
+            return (
+                zona_actual_normalizada
+                == zona_autoritativa_normalizada
+            )
+
+        # ----------------------------------------------------
+        # 2. COMPATIBILIDAD CON CONTACTOS ANTERIORES
+        # ----------------------------------------------------
+
         hitos_raw = get_note_value(
             contact,
             "HITOS_COMERCIALES",
@@ -6291,10 +6333,7 @@ def zona_previamente_validada_en_flujo(
         ):
             return False
 
-        if not isinstance(
-            hitos,
-            list,
-        ):
+        if not isinstance(hitos, list):
             return False
 
         hitos_normalizados = {
@@ -6305,9 +6344,35 @@ def zona_previamente_validada_en_flujo(
             if str(hito or "").strip()
         }
 
-        return (
+        if (
             "ZONA_VALIDADA"
-            in hitos_normalizados
+            not in hitos_normalizados
+        ):
+            return False
+
+        zona_interes = str(
+            get_note_value(
+                contact,
+                "ZONA_INTERES",
+            )
+            or ""
+        ).strip()
+
+        if not zona_interes:
+            return False
+
+        zona_interes_normalizada = (
+            normalizar_texto_geografico(
+                zona_interes
+            )
+        )
+
+        if not zona_actual_normalizada:
+            return False
+
+        return (
+            zona_actual_normalizada
+            == zona_interes_normalizada
         )
 
     except Exception as e:
@@ -6318,7 +6383,6 @@ def zona_previamente_validada_en_flujo(
         )
 
         return False
-
 def construir_datos_detectados_para_decision(
     analisis: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -7936,6 +8000,7 @@ def aplicar_reglas_negocio_estructuradas(
         ) or ""
     ).strip()
 
+
     clasificacion_zona_determinista = (
         clasificar_zona_determinista(
             mensaje_usuario=mensaje_usuario,
@@ -7943,21 +8008,62 @@ def aplicar_reglas_negocio_estructuradas(
             campus_mencionado=campus_mencionado,
         )
     )
+
     decision["datos_detectados"][
         "clasificacion_zona_determinista"
     ] = clasificacion_zona_determinista
 
+    # ========================================================
+    # AUTORIDAD PERSISTENTE DE ZONA
+    # ========================================================
+    #
+    # Antes de volver a consultar Google, comprobamos si
+    # exactamente esta misma localidad ya fue autorizada.
+    # ========================================================
+
+    zona_valida_previamente = (
+        zona_previamente_validada_en_flujo(
+            contact=contact,
+            zona_actual=zona_para_decision,
+        )
+    )
+
     validacion_geografica = None
 
-    if clasificacion_zona_determinista.get(
+    if zona_valida_previamente:
+
+        clasificacion_zona_determinista[
+            "clasificacion"
+        ] = "ZONA_VALIDADA_PREVIAMENTE"
+
+        clasificacion_zona_determinista[
+            "es_zona_validada"
+        ] = True
+
+        clasificacion_zona_determinista[
+            "requiere_validacion_geografica"
+        ] = False
+
+        decision["datos_detectados"][
+            "zona_validada_previamente"
+        ] = True
+
+        print(
+            "✅ ZONA AUTORITATIVA REUTILIZADA: "
+            f"contact_id={getattr(contact, 'id', None)}, "
+            f"zona={zona_para_decision!r}"
+        )
+
+    elif clasificacion_zona_determinista.get(
         "requiere_validacion_geografica",
         False,
     ):
+
         localidad_para_validar = (
             zona_para_decision
             or campus_mencionado
         )
-        
+
         validacion_geografica = (
             validar_zona_desconocida_con_google(
                 localidad_para_validar
@@ -7971,6 +8077,7 @@ def aplicar_reglas_negocio_estructuradas(
         if validacion_geografica.get(
             "zona_validada"
         ):
+
             clasificacion_zona_determinista[
                 "clasificacion"
             ] = "ZONA_VALIDA_POR_RUTA"
@@ -7990,16 +8097,11 @@ def aplicar_reglas_negocio_estructuradas(
         )
     )
 
-    zona_valida_previamente = (
-        zona_previamente_validada_en_flujo(
-            contact
-        )
-    )
-
-    zona_validada = (
+    zona_validada = bool(
         zona_valida_en_mensaje
         or zona_valida_previamente
     )
+
 
     campus_externo_determinista = bool(
         clasificacion_zona_determinista.get(
@@ -16157,6 +16259,25 @@ def persistir_resultado_estructurado(
                 "ZONA_VALIDADA",
                 True,
             )
+
+            zona_validada_actual = str(
+                analisis.get(
+                    "zona_mencionada",
+                    "",
+                )
+                or get_note_value(
+                    contact,
+                    "ZONA_INTERES",
+                )
+                or ""
+            ).strip()
+
+            if zona_validada_actual:
+
+                guardar_valor(
+                    "ZONA_VALIDADA_AUTORITATIVA",
+                    zona_validada_actual,
+                )
 
         if analisis.get("campus_externo") is True:
             guardar_valor(
@@ -27213,6 +27334,182 @@ def admin_confirma_cita_final(texto_admin: str, tarea: AdminPendingTask = None) 
 
     return False
 
+def clasificar_resolucion_admin_zona(
+    texto_admin: str,
+    tarea=None,
+) -> str:
+    """
+    Clasifica una resolución administrativa relacionada
+    específicamente con la viabilidad de una zona.
+
+    Devuelve:
+    - APRUEBA_ZONA
+    - RECHAZA_ZONA
+    - NO_DETERMINADO
+    """
+
+    texto = str(
+        texto_admin or ""
+    ).strip()
+
+    if not texto:
+        return "NO_DETERMINADO"
+
+    contexto_tarea = ""
+
+    if tarea is not None:
+        contexto_tarea = str(
+            getattr(
+                tarea,
+                "trigger_message",
+                "",
+            )
+            or ""
+        ).strip()
+
+    if GEMINI_API_KEY:
+
+        prompt = f"""
+Eres un clasificador estricto para decisiones internas
+de admisiones de un colegio.
+
+La consulta administrativa se refiere a determinar si
+una localidad o zona puede ser atendida por el colegio.
+
+MENSAJE DEL PROSPECTO O CONTEXTO DE LA CONSULTA:
+{contexto_tarea}
+
+RESPUESTA INTERNA DEL ADMINISTRADOR:
+{texto}
+
+Clasifica la respuesta del administrador en UNA sola etiqueta.
+
+ETIQUETAS VÁLIDAS:
+
+APRUEBA_ZONA
+El administrador confirma que sí se puede atender a la familia
+desde esa localidad, autoriza continuar, dice que la zona es
+viable o proporciona una respuesta positiva equivalente.
+
+Ejemplos:
+- sí, esa zona está bien
+- sí podemos atenderlos
+- adelante
+- Atlapulco sí es una zona que les permite llegar
+- tenemos alumnos de esa localidad
+- puedes continuar con la familia
+
+RECHAZA_ZONA
+El administrador indica expresamente que la zona no debe
+atenderse o que no es viable continuar desde esa localidad.
+
+Ejemplos:
+- esa zona no la atendemos
+- no es viable
+- está demasiado lejos, no continuar
+- no podemos atenderlos desde ahí
+
+NO_DETERMINADO
+La respuesta no permite concluir claramente si la localidad
+fue autorizada o rechazada.
+
+REGLAS:
+- Responde únicamente con una etiqueta.
+- No expliques nada.
+- No agregues puntuación.
+"""
+
+        try:
+            response, modelo_usado = (
+                generar_con_gemini_con_fallback(
+                    prompt,
+                    generation_config=(
+                        genai.types.GenerationConfig(
+                            temperature=0.0
+                        )
+                    ),
+                    tarea=(
+                        "clasificación resolución admin zona"
+                    ),
+                )
+            )
+
+            etiqueta = (
+                extraer_texto_respuesta_gemini(
+                    response
+                )
+                .strip()
+                .upper()
+            )
+
+            if etiqueta in {
+                "APRUEBA_ZONA",
+                "RECHAZA_ZONA",
+                "NO_DETERMINADO",
+            }:
+                print(
+                    "👑 Clasificación admin zona IA: "
+                    f"{etiqueta} usando {modelo_usado}"
+                )
+                return etiqueta
+
+            print(
+                "⚠️ Clasificación admin zona no válida: "
+                f"{repr(etiqueta)}"
+            )
+
+        except Exception as e:
+            print(
+                "⚠️ Error clasificando resolución "
+                f"administrativa de zona: {e}"
+            )
+
+    # --------------------------------------------------------
+    # FALLBACK CONSERVADOR
+    # --------------------------------------------------------
+
+    normalizado = (
+        normalizar_texto_para_deteccion(
+            texto
+        )
+    )
+
+    expresiones_rechazo = [
+        "no se puede",
+        "no podemos atender",
+        "no atender",
+        "zona no autorizada",
+        "zona no viable",
+        "no es viable",
+    ]
+
+    expresiones_aprobacion = [
+        "si puede",
+        "si se puede",
+        "puedes continuar",
+        "puede continuar",
+        "zona autorizada",
+        "zona aprobada",
+        "si atendemos",
+        "si podemos atender",
+        "tenemos alumnos",
+        "si es una zona",
+    ]
+
+    if any(
+        expresion in normalizado
+        for expresion in expresiones_rechazo
+    ):
+        return "RECHAZA_ZONA"
+
+    if any(
+        expresion in normalizado
+        for expresion in expresiones_aprobacion
+    ):
+        return "APRUEBA_ZONA"
+
+    return "NO_DETERMINADO"
+    
 
 def formatear_fecha_larga_es(fecha):
     """
@@ -30015,6 +30312,66 @@ Te muestro nuevamente el menú actualizado:
 
     if revision_admin_no_cita:
 
+        # ----------------------------------------------------
+        # RESOLUCIÓN ADMINISTRATIVA NO RELACIONADA CON CITA
+        # ----------------------------------------------------
+
+        clasificacion_admin_zona = (
+            clasificar_resolucion_admin_zona(
+                mensaje_limpio,
+                tarea,
+            )
+        )
+
+        if (
+            clasificacion_admin_zona
+            == "APRUEBA_ZONA"
+        ):
+
+            zona_aprobada = str(
+                get_note_value(
+                    contact,
+                    "ZONA_INTERES",
+                )
+                or ""
+            ).strip()
+
+            if zona_aprobada:
+
+                set_note_value(
+                    contact,
+                    "ZONA_VALIDADA_AUTORITATIVA",
+                    zona_aprobada,
+                )
+
+                set_note_value(
+                    contact,
+                    "ZONA_VALIDADA",
+                    "true",
+                )
+
+                agregar_hito_comercial_contacto(
+                    contact,
+                    "ZONA_VALIDADA",
+                )
+
+                print(
+                    "✅ ZONA APROBADA POR ADMIN Y PERSISTIDA: "
+                    f"contact_id={contact.id}, "
+                    f"zona={zona_aprobada!r}"
+                )
+
+        elif (
+            clasificacion_admin_zona
+            == "RECHAZA_ZONA"
+        ):
+            print(
+                "🚫 ZONA RECHAZADA POR ADMIN: "
+                f"contact_id={contact.id}, "
+                f"zona="
+                f"{get_note_value(contact, 'ZONA_INTERES')!r}"
+            )
+
         # La decisión humana ya fue comunicada.
         # La espera administrativa termina aquí.
         set_note_value(
@@ -30044,7 +30401,7 @@ Te muestro nuevamente el menú actualizado:
             f"contact_id={contact.id}, "
             "se cerró ESPERAR_CONFIRMACION_ADMIN."
         )
-
+        
     tarea.status = "RESUELTA"
     tarea.admin_response = mensaje_limpio
     tarea.final_response = mensaje_para_prospecto
@@ -30100,6 +30457,69 @@ async def list_contacts(
             for c in contacts
         ]
     }
+
+def agregar_hito_comercial_contacto(
+    contact,
+    hito: str,
+) -> bool:
+
+    if contact is None:
+        return False
+
+    hito_normalizado = str(
+        hito or ""
+    ).strip().upper()
+
+    if (
+        not hito_normalizado
+        or hito_normalizado
+        not in HITOS_COMERCIALES_VALIDOS
+    ):
+        return False
+
+    hitos_raw = get_note_value(
+        contact,
+        "HITOS_COMERCIALES",
+    )
+
+    hitos = []
+
+    if hitos_raw:
+        try:
+            decodificados = json.loads(
+                hitos_raw
+            )
+
+            if isinstance(
+                decodificados,
+                list,
+            ):
+                hitos = [
+                    str(valor or "")
+                    .strip()
+                    .upper()
+                    for valor in decodificados
+                    if str(valor or "").strip()
+                ]
+
+        except Exception:
+            hitos = []
+
+    if hito_normalizado not in hitos:
+        hitos.append(
+            hito_normalizado
+        )
+
+    set_note_value(
+        contact,
+        "HITOS_COMERCIALES",
+        json.dumps(
+            hitos,
+            ensure_ascii=False,
+        ),
+    )
+
+    return True
 
 @app.get("/conversations/{phone_number}")
 async def get_conversations_by_phone(
