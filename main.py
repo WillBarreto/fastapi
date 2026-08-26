@@ -2839,6 +2839,28 @@ REGLAS DE CLASIFICACIÓN:
 el historial para resolver referencias como "sí", "eso",
 "la vacante", "mi hijo" o "el pago".
 
+2-A. La ruta identifica el DOMINIO de la conversación, no si existe
+una nueva solicitud que deba resolverse.
+
+Si el historial muestra que existe una conversación de ADMISIONES
+ya establecida, también pertenecen a ADMISIONES las respuestas que:
+
+- aceptan o rechazan continuar;
+- cancelan o posponen el proceso;
+- indican que ya eligieron o inscribieron al alumno en otra escuela;
+- agradecen y dan por terminada la conversación;
+- responden a una decisión previamente comunicada por el colegio;
+- cierran naturalmente el proceso de admisiones.
+
+Un cierre, desistimiento, negativa o agradecimiento dentro de una
+conversación de admisiones NO es una nueva ruta y NO debe
+clasificarse como SIN_RUTA_CONFIGURADA solamente porque ya no
+requiera más información.
+
+SIN_RUTA_CONFIGURADA se utiliza para un motivo real distinto,
+comprensible y sin ruta institucional definida; no para cerrar una
+ruta que ya estaba identificada.
+
 3. No clasifiques automáticamente como ADMISIONES porque
 la conversación provenga de una campaña publicitaria.
 
@@ -14330,12 +14352,12 @@ def calcular_transicion_comercial_post_envio(
     # CONTINUIDAD GENÉRICA DEL OBJETIVO PENDIENTE
     # ========================================================
     #
-    # La IA interpreta la relación semántica del mensaje con
-    # aquello que la conversación estaba esperando.
+    # NO_AFECTA_OBJETIVO protege conversaciones incidentales,
+    # pero nunca puede invalidar una decisión comercial
+    # explícita que Python ya tomó para este turno.
     #
-    # Python únicamente protege la invariante:
-    # una conversación incidental no puede destruir ni mover
-    # el objetivo comercial/conversacional pendiente.
+    # Si decidir_siguiente_accion_estructurada() determinó una
+    # acción que mueve el embudo, esa decisión es la autoridad.
     # ========================================================
 
     relacion_objetivo = str(
@@ -14346,9 +14368,29 @@ def calcular_transicion_comercial_post_envio(
         or "SIN_OBJETIVO"
     ).strip().upper()
 
+    acciones_con_transicion_autoritativa = {
+        "PEDIR_ZONA",
+        "PEDIR_NIVEL_COSTOS",
+        "PEDIR_REFERENCIA",
+        "PRESENTAR_PROPUESTA_VALOR",
+        "EXPLICAR_METODO_FILADELFIA",
+        "PREGUNTAR_AREA_INTERES",
+        "PROFUNDIZAR_AREA_INTERES",
+        "RESPONDER_TEMA",
+        "RESPONDER_COSTOS",
+        "INVITAR_CITA",
+        "PEDIR_FECHA_CITA",
+        "PEDIR_HORA_CITA",
+        "CONFIRMAR_FECHA_CITA",
+        "CONSULTAR_ADMIN",
+        "SEGUIMIENTO",
+    }
+
     if (
         objetivo_actual
         and relacion_objetivo == "NO_AFECTA_OBJETIVO"
+        and accion
+        not in acciones_con_transicion_autoritativa
     ):
         transicion.update({
             "etapa_conversacional": etapa_actual,
@@ -14734,6 +14776,29 @@ def calcular_transicion_comercial_post_envio(
                 "CITA_SOLICITADA"
             )
 
+        else:
+            # ------------------------------------------------
+            # REVISIÓN ADMINISTRATIVA NO RELACIONADA CON CITA
+            # ------------------------------------------------
+            #
+            # Se conserva la etapa y estado comercial actuales
+            # porque indican en qué punto surgió la revisión.
+            #
+            # Lo que sí cambia es la autoridad del siguiente
+            # movimiento: ahora corresponde a administración.
+            # ------------------------------------------------
+
+            transicion.update({
+                "etapa_conversacional": etapa_actual,
+                "estado_comercial": estado_actual,
+                "transicion_aplicable": True,
+                "motivo": (
+                    "La conversación quedó pendiente de "
+                    "una decisión administrativa antes de "
+                    "continuar el flujo comercial."
+                ),
+            })
+
     elif accion == "SEGUIMIENTO":
         transicion.update({
             "etapa_conversacional": (
@@ -14806,6 +14871,14 @@ def calcular_transicion_comercial_post_envio(
             "SEGUIMIENTO": (
                 "ESPERAR_REACTIVACION_PROSPECTO"
             ),
+            "PEDIR_NIVEL_COSTOS": (
+                "OBTENER_NIVEL_PARA_COSTOS"
+            ),
+
+            "RESPONDER_TEMA": (
+                "OBTENER_CONFIRMACION_INTERES"
+            ),
+
         }
 
         datos_decision = decision.get(
@@ -19368,6 +19441,30 @@ def sincronizar_crm_desde_transicion(
     ):
         return estado
 
+    # --------------------------------------------------------
+    # UNA NO-TRANSICIÓN NO PUEDE MODIFICAR EL CRM
+    # --------------------------------------------------------
+    #
+    # Si el motor comercial determinó que este turno no cambia
+    # el estado, el CRM debe conservar exactamente la posición
+    # anterior. En particular, nunca borrar current_objective.
+    # --------------------------------------------------------
+
+    if not bool(
+        transicion.get(
+            "transicion_aplicada",
+            False,
+        )
+    ):
+        print(
+            "🛡️ CRM SIN CAMBIO: "
+            f"contact_id={contact.id}, "
+            "la transición comercial no fue aplicada; "
+            "se conserva stage/status/objective actuales."
+        )
+
+        return estado
+
     ahora = datetime.now(
         timezone.utc
     )
@@ -19495,11 +19592,23 @@ def sincronizar_crm_desde_transicion(
             "OBTENER_FECHA_CITA",
             "OBTENER_HORA_CITA",
             "CONFIRMAR_FECHA_CITA_CALENDARIO",
-            "ESPERAR_CONFIRMACION_ADMIN",
         }:
             estado.active_goal = (
                 "CONCRETAR_CITA"
             )
+
+        elif objetivo == "ESPERAR_CONFIRMACION_ADMIN":
+            if (
+                estado_comercial
+                == "CITA_PENDIENTE_CONFIRMACION"
+            ):
+                estado.active_goal = (
+                    "CONCRETAR_CITA"
+                )
+            else:
+                estado.active_goal = (
+                    "ESPERAR_DECISION_ADMIN"
+                )
 
         elif objetivo == "OBTENER_DATOS_CITA":
             estado.active_goal = (
@@ -22284,11 +22393,182 @@ def procesar_mensaje_whatsapp_estructurado_real(
         )
 
     else:
+
+        # ----------------------------------------------------
+        # ARBITRAJE DE AUTORIDAD ADMINISTRATIVA
+        # ----------------------------------------------------
+        #
+        # Si este contacto ya tiene una tarea administrativa
+        # pendiente, una clasificación SIN_RUTA_CONFIGURADA
+        # no puede generar otra promesa de "revisión".
+        #
+        # Administración ya posee la autoridad del siguiente
+        # movimiento.
+        # ----------------------------------------------------
+
+        if categoria_alcance == "SIN_RUTA_CONFIGURADA":
+
+            tarea_admin_pendiente_actual = (
+                db.query(AdminPendingTask)
+                .filter(
+                    AdminPendingTask.contact_id
+                    == contact.id,
+                    AdminPendingTask.status
+                    == "PENDIENTE",
+                )
+                .order_by(
+                    AdminPendingTask.created_at.desc()
+                )
+                .first()
+            )
+
+            if tarea_admin_pendiente_actual:
+                print(
+                    "🔐 RESPUESTA DE ALCANCE SUPRIMIDA: "
+                    f"contact_id={contact.id}, "
+                    "administración ya tiene una tarea "
+                    f"pendiente id="
+                    f"{tarea_admin_pendiente_actual.id}."
+                )
+
+                resultado_final.update({
+                    "procesado": True,
+                    "mensaje_enviado": False,
+                    "respuesta": "",
+                    "twilio_resultado": "",
+                    "twilio_sid": None,
+                    "resultado_orquestador": {
+                        "version": "1.0",
+                        "flujo": (
+                            "clasificacion_alcance"
+                        ),
+                        "procesado": True,
+                        "ruta": (
+                            "ADMIN_YA_POSEE_AUTORIDAD"
+                        ),
+                        "respuesta_generada": "",
+                        "requiere_admin": True,
+                        "error": "",
+                    },
+                    "respuesta_suprimida_por_admin_pendiente": (
+                        True
+                    ),
+                    "error": "",
+                })
+
+                return resultado_final
+
+        # ----------------------------------------------------
+        # CONTINUIDAD DE RUTA: EMPLEO
+        # ----------------------------------------------------
+        #
+        # La primera vez se proporciona el canal para enviar CV.
+        #
+        # Si la persona vuelve a escribir dentro de la misma
+        # conversación de empleo, no repetimos las instrucciones.
+        #
+        # Después del segundo mensaje de cierre, una cortesía
+        # adicional queda en silencio.
+        # ----------------------------------------------------
+
+        empleo_derivacion_atendida = bool(
+            str(
+                get_note_value(
+                    contact,
+                    "EMPLEO_DERIVACION_ATENDIDA",
+                )
+                or ""
+            ).strip().upper()
+            == "SI"
+        )
+
+        cierre_social_empleo = bool(
+            str(
+                get_note_value(
+                    contact,
+                    "CIERRE_SOCIAL_ACTIVO",
+                )
+                or ""
+            ).strip().upper()
+            == "SI"
+        )
+
+        respuesta_empleo = (
+            "¡Gracias por tu interés en colaborar con nosotros! "
+            "Nos puedes enviar tu currículum por WhatsApp a este "
+            "número, por favor: 55 4812 3885."
+        )
+
+        empleo_segundo_contacto = False
+
+        if (
+            categoria_alcance == "EMPLEO"
+            and empleo_derivacion_atendida
+        ):
+
+            evaluacion_cortesia_empleo = (
+                evaluar_cortesia_estructurada(
+                    mensaje_usuario=mensaje,
+                    contact=contact,
+                )
+            )
+
+            es_cortesia_empleo = bool(
+                evaluacion_cortesia_empleo.get(
+                    "es_cortesia",
+                    False,
+                )
+            )
+
+            # ------------------------------------------------
+            # YA CERRAMOS Y SÓLO VUELVEN A AGRADECER
+            # ------------------------------------------------
+
+            if (
+                cierre_social_empleo
+                and es_cortesia_empleo
+            ):
+                print(
+                    "🤫 EMPLEO CERRADO: "
+                    f"contact_id={contact.id}, "
+                    "cortesía adicional sin respuesta."
+                )
+
+                resultado_final.update({
+                    "procesado": True,
+                    "mensaje_enviado": False,
+                    "respuesta": "",
+                    "twilio_resultado": "",
+                    "twilio_sid": None,
+                    "resultado_orquestador": {
+                        "version": "1.0",
+                        "flujo": (
+                            "clasificacion_alcance"
+                        ),
+                        "procesado": True,
+                        "ruta": "EMPLEO_CERRADO",
+                        "respuesta_generada": "",
+                        "requiere_admin": False,
+                        "error": "",
+                    },
+                    "error": "",
+                })
+
+                return resultado_final
+
+            # ------------------------------------------------
+            # SEGUNDO CONTACTO DE EMPLEO
+            # ------------------------------------------------
+
+            respuesta_empleo = (
+                "Gracias. Ya el área correspondiente dará "
+                "seguimiento directamente por ese medio."
+            )
+
+            empleo_segundo_contacto = True
+    
         respuestas_por_alcance = {
-            "EMPLEO": (
-                "¡Gracias por tu interés en colaborar con nosotros! Nos puedes enviar tu currículum por "
-                "WhatsApp a este número, por favor: 55 4812 3885."
-            ),
+            "EMPLEO": respuesta_empleo,
             "ALUMNOS_ACTUALES": (
                 "Gracias por escribirnos. Identificamos que "
                 "su consulta corresponde a una familia o alumno "
@@ -22410,6 +22690,26 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 respuesta_alcance,
                 twilio_sid,
             )
+
+            if categoria_alcance == "EMPLEO":
+
+                set_note_value(
+                    contact,
+                    "EMPLEO_DERIVACION_ATENDIDA",
+                    "SI",
+                )
+
+                # Después del segundo intercambio nuestra
+                # intervención queda socialmente cerrada.
+                #
+                # Un siguiente "gracias", "perfecto", etc.
+                # debe quedar en silencio.
+                if empleo_segundo_contacto:
+                    set_note_value(
+                        contact,
+                        "CIERRE_SOCIAL_ACTIVO",
+                        "SI",
+                    )
 
             db.commit()
 
@@ -28699,13 +28999,55 @@ Te muestro nuevamente el menú actualizado:
             "contact_id": contact.id,
         }
 
+    contexto_admin_actual = (
+        construir_contexto_comercial_desde_contacto(
+            contact
+        )
+    )
+
+    etapa_admin_actual = str(
+        contexto_admin_actual.get(
+            "etapa_conversacional",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    estado_admin_actual = str(
+        contexto_admin_actual.get(
+            "estado_comercial",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    objetivo_admin_actual = str(
+        contexto_admin_actual.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    revision_admin_no_cita = bool(
+        objetivo_admin_actual
+        == "ESPERAR_CONFIRMACION_ADMIN"
+        and etapa_admin_actual
+        != "ESPERANDO_CONFIRMACION_ADMIN"
+        and estado_admin_actual
+        != "CITA_PENDIENTE_CONFIRMACION"
+    )
+
     mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_limpio, tarea)
 
     # Si el admin está confirmando definitivamente la cita,
     # primero enriquecemos el mensaje antes de enviarlo al prospecto.
-    if admin_confirma_cita_final(
-        mensaje_limpio,
-        tarea,
+    if (
+        not revision_admin_no_cita
+        and admin_confirma_cita_final(
+            mensaje_limpio,
+            tarea,
+        )
     ):
         # ----------------------------------------------------
         # CITA CONFIRMADA POR ADMINISTRACIÓN
@@ -29056,6 +29398,38 @@ Te muestro nuevamente el menú actualizado:
         mensaje_para_prospecto,
         twilio_sid,
     )
+
+    if revision_admin_no_cita:
+
+        # La decisión humana ya fue comunicada.
+        # La espera administrativa termina aquí.
+        set_note_value(
+            contact,
+            "OBJETIVO_PENDIENTE",
+            "",
+        )
+
+        estado_crm_admin = (
+            obtener_estado_followup_crm(
+                db,
+                contact.id,
+            )
+        )
+
+        if estado_crm_admin is not None:
+            estado_crm_admin.current_objective = ""
+            estado_crm_admin.next_followup_at = None
+            estado_crm_admin.updated_at = (
+                datetime.now(
+                    timezone.utc
+                )
+            )
+
+        print(
+            "🔓 AUTORIDAD ADMIN RESUELTA: "
+            f"contact_id={contact.id}, "
+            "se cerró ESPERAR_CONFIRMACION_ADMIN."
+        )
 
     tarea.status = "RESUELTA"
     tarea.admin_response = mensaje_limpio
