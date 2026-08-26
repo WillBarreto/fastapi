@@ -9570,6 +9570,139 @@ def aplicar_reglas_negocio_estructuradas(
             return decision
 
         # ----------------------------------------------------
+        # INTENCIÓN EXPLÍCITA DE COSTOS TODAVÍA NO SATISFECHA
+        # ----------------------------------------------------
+        #
+        # Si la familia pidió costos anteriormente y ya recibió
+        # la contextualización comercial prevista, no debemos
+        # avanzar a la visita dejando esa pregunta olvidada.
+        # ----------------------------------------------------
+
+        costos_pendientes = bool(
+            "SOLICITO_COSTOS_INICIAL"
+            in hitos_comerciales
+            and "RECIBIO_COSTOS"
+            not in hitos_comerciales
+        )
+
+        if costos_pendientes:
+
+            niveles_costos_pendientes = (
+                obtener_niveles_costos_solicitados(
+                    analisis_seguro,
+                    decision,
+                )
+            )
+
+            # Recuperar también niveles ya conocidos
+            # del contexto comercial persistido.
+            if not niveles_costos_pendientes:
+
+                alumnos_contexto = (
+                    contexto_secuencial.get(
+                        "alumnos",
+                        [],
+                    )
+                    if isinstance(
+                        contexto_secuencial,
+                        dict,
+                    )
+                    else []
+                )
+
+                if isinstance(
+                    alumnos_contexto,
+                    list,
+                ):
+                    for alumno_contexto in (
+                        alumnos_contexto
+                    ):
+
+                        if not isinstance(
+                            alumno_contexto,
+                            dict,
+                        ):
+                            continue
+
+                        nivel_contexto = str(
+                            alumno_contexto.get(
+                                "nivel",
+                                "",
+                            )
+                            or ""
+                        ).strip()
+
+                        if (
+                            nivel_contexto
+                            in {
+                                "Kínder",
+                                "Primaria",
+                                "Secundaria",
+                            }
+                            and nivel_contexto
+                            not in niveles_costos_pendientes
+                        ):
+                            niveles_costos_pendientes.append(
+                                nivel_contexto
+                            )
+
+            if not niveles_costos_pendientes:
+
+                decision.update({
+                    "accion": "PEDIR_NIVEL_COSTOS",
+                    "motivo": (
+                        "La familia solicitó costos anteriormente "
+                        "y esa intención sigue pendiente, pero falta "
+                        "identificar el nivel."
+                    ),
+                    "requiere_admin": False,
+                    "puede_compartir_costos": False,
+                    "debe_finalizar_conversacion": False,
+                })
+
+                decision[
+                    "datos_detectados"
+                ].update({
+                    "objetivo_pendiente_sugerido": (
+                        "OBTENER_NIVEL_PARA_COSTOS"
+                    ),
+                    "intencion_costos_pendiente": True,
+                })
+
+                return decision
+
+            decision.update({
+                "accion": "RESPONDER_COSTOS",
+                "motivo": (
+                    "La familia solicitó costos previamente, "
+                    "ya recibió la contextualización comercial "
+                    "y corresponde atender esa intención antes "
+                    "de continuar a la invitación de visita."
+                ),
+                "requiere_admin": False,
+                "puede_compartir_costos": True,
+                "debe_finalizar_conversacion": False,
+            })
+
+            decision[
+                "datos_detectados"
+            ].update({
+                "niveles_costos": (
+                    niveles_costos_pendientes
+                ),
+                "nivel_costos": (
+                    niveles_costos_pendientes[0]
+                    if len(
+                        niveles_costos_pendientes
+                    ) == 1
+                    else ""
+                ),
+                "intencion_costos_pendiente": False,
+            })
+
+            return decision
+
+        # ----------------------------------------------------
         # PASO 7: INVITACIÓN A VISITA
         # ----------------------------------------------------
 
@@ -12622,6 +12755,19 @@ def generar_respuesta_final_estructurada(
         indent=2,
     )
 
+    ahora_local_respuesta = datetime.now(
+        LOCAL_TZ
+    )
+
+    if ahora_local_respuesta.hour < 12:
+        saludo_temporal = "buenos días"
+
+    elif ahora_local_respuesta.hour < 19:
+        saludo_temporal = "buenas tardes"
+
+    else:
+        saludo_temporal = "buenas noches"
+
     prompt_base = f"""
 Eres el asistente de admisiones del Colegio Valle de Filadelfia,
 Campus Santa Cruz Atizapán.
@@ -12643,6 +12789,14 @@ DECISIÓN DEFINITIVA DE PYTHON:
 
 PLAN DE RESPUESTA:
 {plan_json}
+
+CONTEXTO TEMPORAL LOCAL:
+En este momento corresponde decir "{saludo_temporal}".
+
+Si el mensaje del prospecto justifica comenzar con un saludo,
+cualquier saludo temporal debe ser coherente con este dato.
+No digas "buen día" durante la noche ni "buenas noches" durante
+la mañana.
 
 INSTRUCCIONES:
 
@@ -17337,8 +17491,60 @@ CRM_COMMERCIAL_GOAL_VISITA = (
     "LOGRAR_VISITA_PRESENCIAL"
 )
 
-CRM_FOLLOWUP_INITIAL_MINUTES = 15
+# ============================================================
+# POLÍTICA DE FOLLOW-UP
+# ============================================================
+
+# F1: microseguimiento.
+CRM_FOLLOWUP_INITIAL_MINUTES = 7
+
+# F2: recuperación.
+CRM_FOLLOWUP_SECOND_DELAY_HOURS = 4
+
+# Horario silencioso para F2/F3.
+CRM_FOLLOWUP_ACTIVE_START_HOUR = 7
+CRM_FOLLOWUP_ACTIVE_END_HOUR = 21
+
+# F3: antes de vencer la ventana WhatsApp.
+CRM_FOLLOWUP_FINAL_LEAD_MINUTES = 90
+
+# Si F3 caería de madrugada, adelantar al día anterior.
+CRM_FOLLOWUP_FINAL_EVENING_HOUR = 20
+CRM_FOLLOWUP_FINAL_EVENING_MINUTE = 30
+
+# Frecuencia con la que el worker consulta pendientes.
+CRM_FOLLOWUP_POLL_SECONDS = 30
+
+# Después del ciclo corto sin respuesta.
 CRM_NURTURING_COOLDOWN_DAYS = 3
+
+# Lock global PostgreSQL para evitar que dos instancias
+# de Railway procesen el mismo lote simultáneamente.
+CRM_FOLLOWUP_ADVISORY_LOCK_KEY = 26082026
+
+# Interruptor maestro.
+#
+# IMPORTANTE:
+# dejar FALSE durante el primer deploy.
+# Lo activaremos en Railway después de validar.
+FOLLOWUP_AUTOMATION_MASTER_ENABLED = (
+    str(
+        os.getenv(
+            "FOLLOWUP_AUTOMATION_ENABLED",
+            "false",
+        )
+        or "false"
+    )
+    .strip()
+    .lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
+
 
 
 def registrar_evento_followup_crm(
@@ -17349,6 +17555,8 @@ def registrar_evento_followup_crm(
     step_number: Optional[int] = None,
     scheduled_for=None,
     metadata: Optional[Dict[str, Any]] = None,
+    message_id: Optional[int] = None,
+    twilio_sid: Optional[str] = None,
 ):
     """
     Registra un evento histórico del ciclo CRM.
@@ -17385,6 +17593,16 @@ def registrar_evento_followup_crm(
         ),
 
         scheduled_for=scheduled_for,
+
+        message_id=message_id,
+
+        twilio_sid=(
+            str(
+                twilio_sid
+                or ""
+            ).strip()
+            or None
+        ),
 
         occurred_at=datetime.now(
             timezone.utc
@@ -17446,7 +17664,9 @@ def crear_estado_crm_contacto_nuevo(
         contact_id=contact.id,
         prospect_phone=contact.phone_number,
 
-        automation_enabled=False,
+        automation_enabled=(
+            FOLLOWUP_AUTOMATION_MASTER_ENABLED
+        ),
         automation_enrolled_at=None,
 
         commercial_goal="",
@@ -17486,7 +17706,8 @@ def crear_estado_crm_contacto_nuevo(
         event_type="CRM_STATE_CREATED",
         reason=(
             "Contacto nuevo posterior al rollout. "
-            "Automatización todavía no activada."
+            f"automation_enabled="
+            f"{estado.automation_enabled}"
         ),
     )
 
@@ -17497,7 +17718,8 @@ def crear_estado_crm_contacto_nuevo(
         "🆕 CRM FOLLOWUP STATE CREADO: "
         f"contact_id={contact.id}, "
         "journey=NOT_ENROLLED, "
-        "automation_enabled=False"
+        f"automation_enabled="
+        f"{estado.automation_enabled}"
     )
 
     return estado
@@ -17523,6 +17745,1374 @@ def obtener_estado_followup_crm(
         .first()
     )
 
+def normalizar_datetime_utc(
+    valor,
+):
+    """
+    Normaliza timestamps provenientes de PostgreSQL para
+    realizar comparaciones seguras en UTC.
+    """
+
+    if valor is None:
+        return None
+
+    if valor.tzinfo is None:
+        return valor.replace(
+            tzinfo=timezone.utc
+        )
+
+    return valor.astimezone(
+        timezone.utc
+    )
+
+
+def obtener_expiracion_ventana_whatsapp(
+    last_inbound_at,
+):
+    """
+    La ventana de servicio se calcula siempre desde el
+    último mensaje INBOUND del prospecto.
+
+    Nuestros mensajes outbound no la renuevan.
+    """
+
+    inbound_utc = (
+        normalizar_datetime_utc(
+            last_inbound_at
+        )
+    )
+
+    if inbound_utc is None:
+        return None
+
+    return (
+        inbound_utc
+        + timedelta(hours=24)
+    )
+
+
+def ajustar_followup_a_horario_activo(
+    fecha_utc,
+):
+    """
+    F2 y F3 no deben despertar al prospecto.
+
+    Horario permitido:
+    07:00 <= hora < 21:00
+    """
+
+    if fecha_utc is None:
+        return None
+
+    fecha_utc = normalizar_datetime_utc(
+        fecha_utc
+    )
+
+    local = fecha_utc.astimezone(
+        LOCAL_TZ
+    )
+
+    # Antes de las 07:00 -> hoy a las 07:00.
+    if (
+        local.hour
+        < CRM_FOLLOWUP_ACTIVE_START_HOUR
+    ):
+        local = local.replace(
+            hour=(
+                CRM_FOLLOWUP_ACTIVE_START_HOUR
+            ),
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    # Desde las 21:00 -> mañana a las 07:00.
+    elif (
+        local.hour
+        >= CRM_FOLLOWUP_ACTIVE_END_HOUR
+    ):
+        local = (
+            local
+            + timedelta(days=1)
+        ).replace(
+            hour=(
+                CRM_FOLLOWUP_ACTIVE_START_HOUR
+            ),
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    return local.astimezone(
+        timezone.utc
+    )
+
+
+def calcular_momento_followup_final(
+    last_inbound_at,
+):
+    """
+    Calcula F3 aproximadamente 90 minutos antes del cierre
+    de la ventana de 24 horas.
+
+    Si el candidato cae:
+    - antes de las 07:00 -> 20:30 del día anterior;
+    - desde las 21:00 -> 20:30 del mismo día.
+
+    Nunca debe quedar antes del último inbound.
+    """
+
+    inbound_utc = normalizar_datetime_utc(
+        last_inbound_at
+    )
+
+    if inbound_utc is None:
+        return None
+
+    expiracion = (
+        obtener_expiracion_ventana_whatsapp(
+            inbound_utc
+        )
+    )
+
+    if expiracion is None:
+        return None
+
+    candidato = (
+        expiracion
+        - timedelta(
+            minutes=(
+                CRM_FOLLOWUP_FINAL_LEAD_MINUTES
+            )
+        )
+    )
+
+    candidato_local = candidato.astimezone(
+        LOCAL_TZ
+    )
+
+    # --------------------------------------------------------
+    # MADRUGADA:
+    # usar 20:30 del día anterior
+    # --------------------------------------------------------
+
+    if (
+        candidato_local.hour
+        < CRM_FOLLOWUP_ACTIVE_START_HOUR
+    ):
+        fecha_objetivo = (
+            candidato_local.date()
+            - timedelta(days=1)
+        )
+
+        candidato_local = datetime(
+            year=fecha_objetivo.year,
+            month=fecha_objetivo.month,
+            day=fecha_objetivo.day,
+            hour=(
+                CRM_FOLLOWUP_FINAL_EVENING_HOUR
+            ),
+            minute=(
+                CRM_FOLLOWUP_FINAL_EVENING_MINUTE
+            ),
+            tzinfo=LOCAL_TZ,
+        )
+
+    # --------------------------------------------------------
+    # NOCHE:
+    # usar 20:30 DEL MISMO DÍA
+    # --------------------------------------------------------
+
+    elif (
+        candidato_local.hour
+        >= CRM_FOLLOWUP_ACTIVE_END_HOUR
+    ):
+        fecha_objetivo = (
+            candidato_local.date()
+        )
+
+        candidato_local = datetime(
+            year=fecha_objetivo.year,
+            month=fecha_objetivo.month,
+            day=fecha_objetivo.day,
+            hour=(
+                CRM_FOLLOWUP_FINAL_EVENING_HOUR
+            ),
+            minute=(
+                CRM_FOLLOWUP_FINAL_EVENING_MINUTE
+            ),
+            tzinfo=LOCAL_TZ,
+        )
+
+    candidato_utc = (
+        candidato_local.astimezone(
+            timezone.utc
+        )
+    )
+
+    # Nunca programar F3 antes de que comenzara
+    # la propia conversación.
+    if candidato_utc <= inbound_utc:
+        return None
+
+    # Tampoco fuera de la ventana.
+    if candidato_utc >= expiracion:
+        return None
+
+    return candidato_utc
+def construir_followup_fallback(
+    estado_crm,
+    numero_followup: int,
+) -> str:
+    """
+    Sólo se utiliza si Gemini no puede redactar.
+
+    No intenta reconstruir el funnel.
+    """
+    objetivo = str(
+        estado_crm.current_objective
+        or ""
+    ).strip().upper()
+
+    if numero_followup == 1:
+
+        if objetivo == "OBTENER_DECISION_VISITA":
+            return (
+                "Sólo quería confirmar si le gustaría "
+                "que le ayudemos a coordinar una visita "
+                "para conocer el colegio."
+            )
+
+        return (
+            "Sólo quería retomar el mensaje anterior. "
+            "Cuando tenga oportunidad, con gusto "
+            "continuamos apoyándole."
+        )
+
+    if numero_followup == 2:
+        return (
+            "Buen día. Retomo nuestra conversación "
+            "por si todavía podemos ayudarle con la "
+            "información que estaba revisando."
+        )
+
+    return (
+        "Antes de cerrar por ahora esta conversación, "
+        "queríamos saber si todavía desea que le "
+        "ayudemos a continuar con la información. "
+        "Con gusto podemos retomarla cuando lo necesite."
+    )
+
+
+def generar_followup_contextual_crm(
+    db: Session,
+    contact,
+    estado_crm,
+    numero_followup: int,
+) -> str:
+    """
+    Gemini redacta; Python decide cuándo y por qué.
+
+    El seguimiento debe conservar el contexto,
+    pero nunca avanzar el estado por sí solo.
+    """
+
+    fallback = construir_followup_fallback(
+        estado_crm,
+        numero_followup,
+    )
+
+    if contact is None:
+        return fallback
+
+    try:
+        historial = (
+            obtener_historial_completo_contacto(
+                db=db,
+                contact=contact,
+            )
+        )
+
+        conversacion = historial.get(
+            "conversacion",
+            [],
+        )
+
+        if not isinstance(
+            conversacion,
+            list,
+        ):
+            conversacion = []
+
+        lineas = []
+
+        for item in conversacion[-12:]:
+
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            emisor = str(
+                item.get(
+                    "emisor",
+                    "Conversación",
+                )
+                or "Conversación"
+            ).strip()
+
+            contenido = str(
+                item.get(
+                    "contenido",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if contenido:
+                lineas.append(
+                    f"{emisor}: {contenido}"
+                )
+
+        historial_texto = (
+            "\n".join(lineas)
+            if lineas
+            else "Sin historial disponible."
+        )
+
+        ahora_local = datetime.now(
+            LOCAL_TZ
+        )
+
+        if ahora_local.hour < 12:
+            momento_dia = "mañana"
+        elif ahora_local.hour < 19:
+            momento_dia = "tarde"
+        else:
+            momento_dia = "noche"
+
+        prompt = f"""
+Eres el asistente de admisiones del Colegio Valle de Filadelfia,
+Campus Santa Cruz Atizapán.
+
+Debes redactar un mensaje breve de seguimiento por WhatsApp porque
+el prospecto dejó de responder temporalmente.
+
+FOLLOW-UP:
+{numero_followup} de 3
+
+MOMENTO LOCAL:
+{momento_dia}
+
+OBJETIVO QUE SIGUE PENDIENTE:
+{estado_crm.current_objective or "SIN_OBJETIVO"}
+
+ETAPA:
+{estado_crm.current_stage or "SIN_ETAPA"}
+
+HISTORIAL:
+{historial_texto}
+
+REGLAS ABSOLUTAS:
+
+- No inventes información.
+- No cambies de tema.
+- No avances artificialmente el embudo.
+- No repitas una explicación larga ya enviada.
+- No vuelvas a presentarte.
+- No digas que eres una IA o bot.
+- No menciones que es un mensaje automático.
+- No menciones la ventana de 24 horas de WhatsApp.
+- No presiones.
+- No utilices urgencia artificial.
+- Conserva trato institucional de usted.
+- Usa el historial para continuar exactamente desde el punto pendiente.
+- Si ya se hizo una pregunta concreta, puedes retomarla de manera natural.
+- Como máximo una pregunta.
+- Máximo 320 caracteres aproximadamente.
+- Devuelve solamente el mensaje que se enviará.
+
+TONO SEGÚN EL PASO:
+
+F1:
+Microseguimiento natural. Debe sentirse como continuación inmediata.
+
+F2:
+Recuperación cordial después de varias horas. Puede reconocer que
+se retoma la conversación.
+
+F3:
+Último intento del ciclo corto. Debe ser amable, sin presión y dejar
+la puerta abierta para retomarlo posteriormente.
+"""
+
+        response, modelo_usado = (
+            generar_con_gemini_con_fallback(
+                prompt,
+                generation_config=(
+                    genai.types.GenerationConfig(
+                        temperature=0.25,
+                    )
+                ),
+                tarea=(
+                    "followup conversacional CRM"
+                ),
+            )
+        )
+
+        texto = (
+            extraer_texto_respuesta_gemini(
+                response
+            )
+            .strip()
+        )
+
+        if not texto:
+            return fallback
+
+        if len(texto) > 500:
+            return fallback
+
+        print(
+            "🧠 FOLLOWUP IA: "
+            f"contact_id={contact.id}, "
+            f"step={numero_followup}, "
+            f"modelo={modelo_usado}"
+        )
+
+        return texto
+
+    except Exception as e:
+
+        print(
+            "⚠️ FOLLOWUP IA FALLÓ: "
+            f"contact_id={contact.id}, "
+            f"error={e}"
+        )
+
+        return fallback
+
+OBJETIVOS_SIN_FOLLOWUP_AUTOMATICO = {
+    "",
+    "ESPERAR_CONFIRMACION_ADMIN",
+    "CONFIRMAR_FECHA_CITA_CALENDARIO",
+}
+
+
+def finalizar_ciclo_followup_sin_respuesta(
+    db: Session,
+    estado_crm,
+):
+    """
+    Termina el ciclo corto después de F3.
+    """
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    estado_crm.followup_step = 3
+    estado_crm.next_followup_at = None
+    estado_crm.journey_status = "NURTURING"
+    estado_crm.active_goal_status = "PAUSED"
+
+    if estado_crm.nurturing_started_at is None:
+        estado_crm.nurturing_started_at = ahora
+
+    estado_crm.next_nurturing_at = (
+        ahora
+        + timedelta(
+            days=CRM_NURTURING_COOLDOWN_DAYS
+        )
+    )
+
+    registrar_evento_followup_crm(
+        db=db,
+        estado_crm=estado_crm,
+        event_type=(
+            "FOLLOWUP_CYCLE_COMPLETED"
+        ),
+        reason=(
+            "Se enviaron los tres seguimientos "
+            "sin nueva respuesta del prospecto."
+        ),
+        step_number=3,
+        scheduled_for=(
+            estado_crm.next_nurturing_at
+        ),
+    )
+
+
+def programar_siguiente_followup_crm(
+    db: Session,
+    estado_crm,
+    numero_enviado: int,
+):
+    """
+    Programa exclusivamente el paso posterior
+    al seguimiento recién enviado.
+    """
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    expiracion = (
+        obtener_expiracion_ventana_whatsapp(
+            estado_crm.last_inbound_at
+        )
+    )
+
+    if expiracion is None:
+        estado_crm.next_followup_at = None
+        return
+
+    # --------------------------------------------------------
+    # DESPUÉS DE F1 → F2
+    # --------------------------------------------------------
+
+    if numero_enviado == 1:
+
+        candidato_f2 = (
+            ahora
+            + timedelta(
+                hours=(
+                    CRM_FOLLOWUP_SECOND_DELAY_HOURS
+                )
+            )
+        )
+
+        candidato_f2 = (
+            ajustar_followup_a_horario_activo(
+                candidato_f2
+            )
+        )
+
+        candidato_f3 = (
+            calcular_momento_followup_final(
+                estado_crm.last_inbound_at
+            )
+        )
+
+        # Si ya no existe espacio real para F2,
+        # saltamos directamente a F3.
+        if (
+            candidato_f3 is not None
+            and candidato_f2
+            >= candidato_f3
+        ):
+            estado_crm.followup_step = 2
+            estado_crm.next_followup_at = (
+                candidato_f3
+            )
+
+        else:
+            estado_crm.followup_step = 1
+            estado_crm.next_followup_at = (
+                candidato_f2
+            )
+
+        return
+
+    # --------------------------------------------------------
+    # DESPUÉS DE F2 → F3
+    # --------------------------------------------------------
+
+    if numero_enviado == 2:
+
+        candidato_f3 = (
+            calcular_momento_followup_final(
+                estado_crm.last_inbound_at
+            )
+        )
+
+        if (
+            candidato_f3 is None
+            or candidato_f3 <= ahora
+            or candidato_f3 >= expiracion
+        ):
+            finalizar_ciclo_followup_sin_respuesta(
+                db,
+                estado_crm,
+            )
+            return
+
+        estado_crm.followup_step = 2
+        estado_crm.next_followup_at = (
+            candidato_f3
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # DESPUÉS DE F3
+    # --------------------------------------------------------
+
+    finalizar_ciclo_followup_sin_respuesta(
+        db,
+        estado_crm,
+    )
+
+def procesar_followup_estado_crm(
+    db: Session,
+    estado_crm,
+):
+    """
+    Revalida TODO inmediatamente antes de enviar.
+
+    Ninguna programación antigua es suficiente por sí sola
+    para autorizar un outbound.
+    """
+
+    if estado_crm is None:
+        return False
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    # --------------------------------------------------------
+    # AUTORIZACIÓN GLOBAL
+    # --------------------------------------------------------
+
+    if not FOLLOWUP_AUTOMATION_MASTER_ENABLED:
+        return False
+
+    if not estado_crm.automation_enabled:
+        return False
+
+    if (
+        estado_crm.journey_status
+        != "ACTIVE_CONVERSION"
+    ):
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    if (
+        estado_crm.active_goal_status
+        != "ACTIVE"
+    ):
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    objetivo = str(
+        estado_crm.current_objective
+        or ""
+    ).strip().upper()
+
+    # --------------------------------------------------------
+    # SNAPSHOT AUTORITATIVO DEL CONTEXTO
+    # --------------------------------------------------------
+    #
+    # Si durante la generación IA cambia cualquiera de estos
+    # datos, el follow-up que estamos construyendo queda obsoleto.
+    # --------------------------------------------------------
+
+    snapshot_objetivo = objetivo
+
+    snapshot_last_inbound_at = (
+        normalizar_datetime_utc(
+            estado_crm.last_inbound_at
+        )
+    )
+
+    snapshot_last_outbound_at = (
+        normalizar_datetime_utc(
+            estado_crm.last_outbound_at
+        )
+    )
+
+    snapshot_cycle_id = str(
+        estado_crm.conversation_cycle_id
+        or ""
+    ).strip()
+
+    if (
+        objetivo
+        in OBJETIVOS_SIN_FOLLOWUP_AUTOMATICO
+    ):
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    # --------------------------------------------------------
+    # CONTACTO
+    # --------------------------------------------------------
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.id
+            == estado_crm.contact_id
+        )
+        .first()
+    )
+
+    if contact is None:
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    # --------------------------------------------------------
+    # MODERACIÓN
+    # --------------------------------------------------------
+
+    if contacto_esta_bloqueado(
+        db,
+        contact.id,
+    ):
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    # --------------------------------------------------------
+    # NUNCA HACER FOLLOW-UP SI EL ÚLTIMO MENSAJE ES INBOUND
+    # --------------------------------------------------------
+
+    ultimo_mensaje = (
+        db.query(Message)
+        .filter(
+            Message.contact_id
+            == contact.id
+        )
+        .order_by(
+            Message.timestamp.desc(),
+            Message.id.desc(),
+        )
+        .first()
+    )
+
+    if ultimo_mensaje is None:
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    if (
+        str(
+            ultimo_mensaje.direction
+            or ""
+        ).strip().lower()
+        == "incoming"
+    ):
+        # Hay un mensaje que nosotros todavía debemos
+        # procesar/responder. No es silencio del prospecto.
+        estado_crm.next_followup_at = None
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado_crm,
+            event_type="FOLLOWUP_CANCELLED",
+            reason=(
+                "El último mensaje pertenece al "
+                "prospecto."
+            ),
+        )
+
+        db.commit()
+        return False
+
+    # --------------------------------------------------------
+    # VENTANA DE 24 HORAS
+    # --------------------------------------------------------
+
+    expiracion = (
+        obtener_expiracion_ventana_whatsapp(
+            estado_crm.last_inbound_at
+        )
+    )
+
+    if (
+        expiracion is None
+        or ahora >= expiracion
+    ):
+        estado_crm.next_followup_at = None
+        estado_crm.journey_status = "NURTURING"
+        estado_crm.active_goal_status = "PAUSED"
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado_crm,
+            event_type=(
+                "WHATSAPP_WINDOW_EXPIRED"
+            ),
+            reason=(
+                "Se cerró la ventana calculada desde "
+                "el último inbound del prospecto."
+            ),
+        )
+
+        db.commit()
+        return False
+
+    # --------------------------------------------------------
+    # IDENTIFICAR F1 / F2 / F3
+    # --------------------------------------------------------
+
+    step_actual = int(
+        estado_crm.followup_step
+        or 0
+    )
+
+    numero_followup = (
+        step_actual + 1
+    )
+
+    if numero_followup > 3:
+        estado_crm.next_followup_at = None
+        db.commit()
+        return False
+
+    # F2/F3 respetan horario silencioso.
+    if numero_followup >= 2:
+
+        ahora_local = ahora.astimezone(
+            LOCAL_TZ
+        )
+
+        if (
+            ahora_local.hour
+            < CRM_FOLLOWUP_ACTIVE_START_HOUR
+            or ahora_local.hour
+            >= CRM_FOLLOWUP_ACTIVE_END_HOUR
+        ):
+            estado_crm.next_followup_at = (
+                ajustar_followup_a_horario_activo(
+                    ahora
+                )
+            )
+
+            db.commit()
+            return False
+
+    # --------------------------------------------------------
+    # GENERACIÓN
+    # --------------------------------------------------------
+
+    mensaje_followup = (
+        generar_followup_contextual_crm(
+            db=db,
+            contact=contact,
+            estado_crm=estado_crm,
+            numero_followup=(
+                numero_followup
+            ),
+        )
+    )
+
+    if not mensaje_followup:
+        return False
+
+    # --------------------------------------------------------
+    # REVALIDACIÓN FINAL JUSTO ANTES DE TWILIO
+    # --------------------------------------------------------
+
+    db.refresh(
+        estado_crm
+    )
+
+    # --------------------------------------------------------
+    # REVALIDACIÓN DEL MISMO CONTEXTO QUE GENERÓ EL FOLLOW-UP
+    # --------------------------------------------------------
+
+    objetivo_revalidado = str(
+        estado_crm.current_objective
+        or ""
+    ).strip().upper()
+
+    inbound_revalidado = (
+        normalizar_datetime_utc(
+            estado_crm.last_inbound_at
+        )
+    )
+
+    outbound_revalidado = (
+        normalizar_datetime_utc(
+            estado_crm.last_outbound_at
+        )
+    )
+
+    cycle_revalidado = str(
+        estado_crm.conversation_cycle_id
+        or ""
+    ).strip()
+
+    contexto_cambio = bool(
+        objetivo_revalidado
+        != snapshot_objetivo
+
+        or inbound_revalidado
+        != snapshot_last_inbound_at
+
+        or outbound_revalidado
+        != snapshot_last_outbound_at
+
+        or cycle_revalidado
+        != snapshot_cycle_id
+    )
+
+    if contexto_cambio:
+
+        print(
+            "🛑 FOLLOWUP OBSOLETO CANCELADO: "
+            f"contact_id={contact.id}, "
+            "el contexto cambió durante la generación."
+        )
+
+        return False
+
+    if (
+        estado_crm.active_goal_status
+        != "ACTIVE"
+    ):
+        return False
+
+    expiracion_revalidada = (
+        obtener_expiracion_ventana_whatsapp(
+            estado_crm.last_inbound_at
+        )
+    )
+
+    ahora_revalidado = datetime.now(
+        timezone.utc
+    )
+
+    if (
+        expiracion_revalidada is None
+        or ahora_revalidado
+        >= expiracion_revalidada
+    ):
+        return False
+
+    if (
+        contacto_esta_bloqueado(
+            db,
+            contact.id,
+        )
+        or not estado_crm.automation_enabled
+        or estado_crm.journey_status
+        != "ACTIVE_CONVERSION"
+    ):
+        return False
+
+    ultimo_mensaje_revalidado = (
+        db.query(Message)
+        .filter(
+            Message.contact_id
+            == contact.id
+        )
+        .order_by(
+            Message.timestamp.desc(),
+            Message.id.desc(),
+        )
+        .first()
+    )
+
+    if (
+        ultimo_mensaje_revalidado is None
+        or str(
+            ultimo_mensaje_revalidado.direction
+            or ""
+        ).strip().lower()
+        != "outgoing"
+    ):
+        return False
+
+    # --------------------------------------------------------
+    # RESERVA PERSISTENTE PRE-ENVÍO
+    # --------------------------------------------------------
+    #
+    # Preferimos at-most-once:
+    # si el proceso cae exactamente después de que Twilio
+    # acepta el mensaje, no debe reenviarse al reiniciar.
+    # --------------------------------------------------------
+
+    scheduled_original = (
+        estado_crm.next_followup_at
+    )
+
+    estado_crm.next_followup_at = None
+    estado_crm.updated_at = datetime.now(
+        timezone.utc
+    )
+
+    registrar_evento_followup_crm(
+        db=db,
+        estado_crm=estado_crm,
+        event_type="FOLLOWUP_SEND_STARTED",
+        reason=(
+            "Seguimiento reservado antes del envío "
+            "para prevenir duplicados por reinicio."
+        ),
+        step_number=numero_followup,
+        scheduled_for=scheduled_original,
+    )
+
+    db.commit()
+
+    # --------------------------------------------------------
+    # TWILIO
+    # --------------------------------------------------------
+
+    destino = str(
+        estado_crm.prospect_phone
+        or contact.phone_number
+        or ""
+    ).strip()
+
+    if not destino.startswith(
+        "whatsapp:"
+    ):
+        destino = (
+            f"whatsapp:{destino}"
+        )
+
+    resultado_twilio = (
+        enviar_respuesta_twilio(
+            destino,
+            mensaje_followup,
+        )
+    )
+
+    if not str(
+        resultado_twilio
+    ).startswith(
+        "✅"
+    ):
+        estado_crm = (
+            obtener_estado_followup_crm(
+                db,
+                contact.id,
+            )
+        )
+
+        if estado_crm is not None:
+
+            registrar_evento_followup_crm(
+                db=db,
+                estado_crm=estado_crm,
+                event_type="FOLLOWUP_SEND_FAILED",
+                reason=str(
+                    resultado_twilio
+                ),
+                step_number=numero_followup,
+            )
+
+            # Error controlado de Twilio:
+            # reintentar en 5 minutos siempre que la
+            # ventana legal siga abierta.
+            expiracion_retry = (
+                obtener_expiracion_ventana_whatsapp(
+                    estado_crm.last_inbound_at
+                )
+            )
+
+            candidato_retry = (
+                datetime.now(timezone.utc)
+                + timedelta(minutes=5)
+            )
+
+            if (
+                expiracion_retry is not None
+                and candidato_retry
+                < expiracion_retry
+            ):
+                estado_crm.next_followup_at = (
+                    candidato_retry
+                )
+
+            else:
+                estado_crm.next_followup_at = None
+
+        db.commit()
+        return False
+        
+    # Extraer SID del helper actual.
+    coincidencia_sid = re.search(
+        r"SID:\s*([A-Za-z0-9]+)",
+        str(resultado_twilio),
+    )
+
+    twilio_sid = (
+        coincidencia_sid.group(1)
+        if coincidencia_sid
+        else None
+    )
+
+    # Persistir como un mensaje normal.
+    mensaje_guardado = save_message(
+        db=db,
+        contact_id=contact.id,
+        direction="outgoing",
+        content=mensaje_followup,
+        twilio_sid=twilio_sid,
+    )
+
+    estado_crm = (
+        obtener_estado_followup_crm(
+            db,
+            contact.id,
+        )
+    )
+
+    if estado_crm is None:
+        return True
+
+    estado_crm.last_followup_at = (
+        datetime.now(
+            timezone.utc
+        )
+    )
+
+    estado_crm.followup_count = int(
+        estado_crm.followup_count
+        or 0
+    ) + 1
+
+    registrar_evento_followup_crm(
+        db=db,
+        estado_crm=estado_crm,
+        event_type="FOLLOWUP_SENT",
+        reason=(
+            "Seguimiento automático enviado "
+            "después de revalidar contexto."
+        ),
+        step_number=numero_followup,
+        message_id=(
+            mensaje_guardado.id
+            if mensaje_guardado
+            else None
+        ),
+        twilio_sid=twilio_sid,
+    )
+
+    programar_siguiente_followup_crm(
+        db=db,
+        estado_crm=estado_crm,
+        numero_enviado=numero_followup,
+    )
+
+    estado_crm.updated_at = (
+        datetime.now(
+            timezone.utc
+        )
+    )
+
+    db.commit()
+
+    print(
+        "📨 FOLLOWUP ENVIADO: "
+        f"contact_id={contact.id}, "
+        f"step={numero_followup}, "
+        f"next={estado_crm.next_followup_at}"
+    )
+
+    return True
+    
+
+def procesar_followups_vencidos():
+    """
+    Procesa un lote pequeño de seguimientos vencidos.
+    """
+
+    ahora = datetime.now(
+        timezone.utc
+    )
+
+    db = SessionLocal()
+
+    try:
+        estados = (
+            db.query(
+                ContactFollowUpState
+            )
+            .filter(
+                ContactFollowUpState.next_followup_at
+                .isnot(None),
+
+                ContactFollowUpState.next_followup_at
+                <= ahora,
+
+                ContactFollowUpState.journey_status
+                == "ACTIVE_CONVERSION",
+            )
+            .order_by(
+                ContactFollowUpState.next_followup_at
+                .asc()
+            )
+            .limit(20)
+            .all()
+        )
+
+        for estado_crm in estados:
+
+            try:
+                procesar_followup_estado_crm(
+                    db=db,
+                    estado_crm=estado_crm,
+                )
+
+            except Exception as e:
+
+                db.rollback()
+
+                print(
+                    "❌ ERROR PROCESANDO FOLLOWUP: "
+                    f"contact_id="
+                    f"{getattr(estado_crm, 'contact_id', None)}, "
+                    f"error={e}"
+                )
+
+    finally:
+        db.close()
+
+
+def ejecutar_ciclo_followup_con_lock():
+    """
+    Sólo una instancia Railway puede ejecutar un lote
+    simultáneamente.
+    """
+
+    if not FOLLOWUP_AUTOMATION_MASTER_ENABLED:
+        return
+
+    if not DATABASE_URL.startswith(
+        "postgresql"
+    ):
+        procesar_followups_vencidos()
+        return
+
+    with engine.connect() as conn:
+
+        adquirido = conn.execute(
+            text(
+                "SELECT pg_try_advisory_lock(:lock_key)"
+            ),
+            {
+                "lock_key": (
+                    CRM_FOLLOWUP_ADVISORY_LOCK_KEY
+                )
+            },
+        ).scalar()
+
+        if not adquirido:
+            return
+
+        try:
+            procesar_followups_vencidos()
+
+        finally:
+            try:
+                conn.execute(
+                    text(
+                        "SELECT pg_advisory_unlock(:lock_key)"
+                    ),
+                    {
+                        "lock_key": (
+                            CRM_FOLLOWUP_ADVISORY_LOCK_KEY
+                        )
+                    },
+                )
+            except Exception:
+                pass
+
+
+FOLLOWUP_WORKER_STOP_EVENT = (
+    threading.Event()
+)
+
+
+def followup_worker_loop():
+    """
+    Worker persistente.
+
+    No utiliza threading.Timer para esperas largas.
+    El calendario vive en PostgreSQL.
+    """
+
+    print(
+        "🕒 FOLLOWUP WORKER iniciado."
+    )
+
+    while not (
+        FOLLOWUP_WORKER_STOP_EVENT.is_set()
+    ):
+
+        try:
+            ejecutar_ciclo_followup_con_lock()
+
+        except Exception as e:
+            print(
+                "❌ ERROR FOLLOWUP WORKER: "
+                f"{e}"
+            )
+
+        FOLLOWUP_WORKER_STOP_EVENT.wait(
+            CRM_FOLLOWUP_POLL_SECONDS
+        )
+
+    print(
+        "🛑 FOLLOWUP WORKER detenido."
+    )
+
+def sincronizar_habilitacion_followup_cohorte():
+    """
+    Actualiza exclusivamente contactos que ya pertenecen
+    a la cohorte CRM.
+
+    Los contactos históricos siguen excluidos porque nunca
+    tuvieron ContactFollowUpState.
+    """
+
+    if not FOLLOWUP_AUTOMATION_MASTER_ENABLED:
+        return
+
+    db = SessionLocal()
+
+    try:
+        estados = (
+            db.query(
+                ContactFollowUpState
+            )
+            .filter(
+                ContactFollowUpState.automation_enrolled_at
+                .isnot(None)
+            )
+            .all()
+        )
+
+        actualizados = 0
+
+        for estado in estados:
+
+            if not estado.automation_enabled:
+                estado.automation_enabled = True
+                estado.updated_at = datetime.now(
+                    timezone.utc
+                )
+                actualizados += 1
+
+        db.commit()
+
+        print(
+            "🤖 FOLLOWUP COHORTE HABILITADA: "
+            f"actualizados={actualizados}"
+        )
+
+    except Exception as e:
+
+        db.rollback()
+
+        print(
+            "❌ Error habilitando cohorte followup: "
+            f"{e}"
+        )
+
+    finally:
+        db.close()
+        
 
 def activar_crm_admisiones_si_elegible(
     db: Session,
@@ -17567,8 +19157,11 @@ def activar_crm_admisiones_si_elegible(
 
         estado.automation_enrolled_at = ahora
 
-        # Sigue apagado hasta activar el motor en otra fase.
-        estado.automation_enabled = False
+        # La cohorte puede utilizar automatización cuando
+        # el interruptor maestro de producción está activo.
+        estado.automation_enabled = (
+            FOLLOWUP_AUTOMATION_MASTER_ENABLED
+        )
 
         estado.commercial_goal = (
             CRM_COMMERCIAL_GOAL_VISITA
@@ -17726,7 +19319,19 @@ def actualizar_crm_por_mensaje(
             )
 
     elif direccion == "outgoing":
+
         estado.last_outbound_at = timestamp
+
+        # Cualquier mensaje nuevo de nuestro lado invalida
+        # la programación anterior.
+        #
+        # Si es una respuesta normal del bot, la transición
+        # comercial abrirá inmediatamente después la nueva
+        # ventana correcta.
+        #
+        # Si fue mensaje manual/admin, evitamos que quede
+        # vivo un seguimiento viejo.
+        estado.next_followup_at = None
 
     estado.updated_at = datetime.now(
         timezone.utc
@@ -18158,6 +19763,40 @@ def obtener_historial_completo_contacto(
 
 # ================= APLICACIÓN FASTAPI =================
 app = FastAPI(title="WhatsApp Bot CRM", version="1.0.0")
+
+@app.on_event("startup")
+def iniciar_followup_worker():
+    """
+    El worker sólo arranca cuando el interruptor maestro
+    está explícitamente habilitado en Railway.
+    """
+
+    if not FOLLOWUP_AUTOMATION_MASTER_ENABLED:
+
+        print(
+            "⏸️ FOLLOWUP AUTOMATION deshabilitada "
+            "por variable de entorno."
+        )
+
+        return
+
+    worker = threading.Thread(
+        target=followup_worker_loop,
+        name="crm-followup-worker",
+        daemon=True,
+    )
+
+    worker.start()
+
+    print(
+        "✅ FOLLOWUP AUTOMATION habilitada."
+    )
+
+
+@app.on_event("shutdown")
+def detener_followup_worker():
+
+    FOLLOWUP_WORKER_STOP_EVENT.set()
 
 
 # ================= ENDPOINTS PRINCIPALES =================
