@@ -1118,6 +1118,641 @@ def crear_contexto_comercial_vacio() -> Dict[str, Any]:
     return ContextoComercialConversacion().model_dump()
 
 # ============================================================
+# PISO MONOTÓNICO DEL EMBUDO COMERCIAL
+# ============================================================
+#
+# Principio:
+# una vez consumada una etapa comercial, una interpretación
+# posterior nunca puede devolver automáticamente a la familia
+# a una etapa anterior.
+#
+# Gemini interpreta el significado.
+# Python protege el progreso ya consumado.
+# ============================================================
+
+NIVELES_ACCIONES_EMBUDO = {
+    "PEDIR_ZONA": 10,
+    "PEDIR_REFERENCIA": 25,
+    "PRESENTAR_PROPUESTA_VALOR": 30,
+    "EXPLICAR_METODO_FILADELFIA": 40,
+    "PREGUNTAR_AREA_INTERES": 50,
+    "PROFUNDIZAR_AREA_INTERES": 60,
+    "RESPONDER_COSTOS": 70,
+    "INVITAR_CITA": 70,
+    "PEDIR_FECHA_CITA": 80,
+    "PEDIR_HORA_CITA": 80,
+    "CONFIRMAR_FECHA_CITA": 80,
+}
+
+
+def obtener_piso_progreso_comercial(
+    contexto_comercial: Optional[
+        Dict[str, Any]
+    ],
+) -> Dict[str, Any]:
+    """
+    Obtiene el punto mínimo del embudo que ya fue consumado.
+
+    Se apoya principalmente en hitos autoritativos, pero también
+    utiliza etapa y estado persistidos como evidencia adicional.
+
+    No modifica BD.
+    No consulta Gemini.
+    """
+
+    contexto = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else {}
+    )
+
+    hitos_raw = contexto.get(
+        "hitos_comerciales",
+        [],
+    )
+
+    if not isinstance(
+        hitos_raw,
+        list,
+    ):
+        hitos_raw = []
+
+    hitos = {
+        str(
+            hito or ""
+        ).strip().upper()
+        for hito in hitos_raw
+        if str(
+            hito or ""
+        ).strip()
+    }
+
+    etapa = str(
+        contexto.get(
+            "etapa_conversacional",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    estado = str(
+        contexto.get(
+            "estado_comercial",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    objetivo = str(
+        contexto.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    # --------------------------------------------------------
+    # 90 - CITA CONFIRMADA
+    # --------------------------------------------------------
+
+    if (
+        "CITA_CONFIRMADA" in hitos
+        or etapa == "VISITA_CONFIRMADA"
+        or estado == "VISITA_CONFIRMADA"
+    ):
+        return {
+            "nivel": 90,
+            "piso": "CITA_CONFIRMADA",
+            "etapa": "VISITA_CONFIRMADA",
+            "estado": "VISITA_CONFIRMADA",
+            "objetivo": (
+                objetivo
+                or "OBTENER_DATOS_CITA"
+            ),
+        }
+
+    # --------------------------------------------------------
+    # 80 - CITA EN NEGOCIACIÓN / CONFIRMACIÓN
+    # --------------------------------------------------------
+
+    if (
+        "CITA_SOLICITADA" in hitos
+        or etapa
+        in {
+            "NEGOCIACION_CITA",
+            "ESPERANDO_CONFIRMACION_ADMIN",
+        }
+        or estado
+        in {
+            "PENDIENTE_DE_AGENDAR",
+            "CITA_PENDIENTE_CONFIRMACION",
+        }
+    ):
+        return {
+            "nivel": 80,
+            "piso": "CITA_EN_PROCESO",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": objetivo,
+        }
+
+    # --------------------------------------------------------
+    # 70 - POST COSTOS / INVITACIÓN A VISITA
+    # --------------------------------------------------------
+
+    if (
+        "RECIBIO_COSTOS" in hitos
+        or "RECIBIO_OPCIONES_PAGO" in hitos
+        or etapa == "INVITACION_VISITA"
+        or estado == "COSTOS_PRESENTADOS"
+    ):
+        return {
+            "nivel": 70,
+            "piso": "POST_COSTOS_VISITA",
+            "etapa": "INVITACION_VISITA",
+            "estado": "COSTOS_PRESENTADOS",
+            "objetivo": "OBTENER_DECISION_VISITA",
+        }
+
+    # --------------------------------------------------------
+    # 60 - RESPUESTA PERSONALIZADA YA ENTREGADA
+    # --------------------------------------------------------
+
+    if (
+        "RECIBIO_RESPUESTA_PERSONALIZADA"
+        in hitos
+        or etapa == "PROFUNDIZACION_INTERES"
+    ):
+        return {
+            "nivel": 60,
+            "piso": "RESPUESTA_PERSONALIZADA",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": (
+                objetivo
+                or "OBTENER_CONFIRMACION_INTERES"
+            ),
+        }
+
+    # --------------------------------------------------------
+    # 50 - ÁREA DE INTERÉS
+    # --------------------------------------------------------
+
+    if (
+        "EXPRESO_AREA_INTERES" in hitos
+        or etapa == "IDENTIFICACION_INTERES"
+    ):
+        return {
+            "nivel": 50,
+            "piso": "AREA_INTERES",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": (
+                objetivo
+                or "OBTENER_AREA_INTERES"
+            ),
+        }
+
+    # --------------------------------------------------------
+    # 40 - MÉTODO YA EXPLICADO
+    # --------------------------------------------------------
+
+    if (
+        "RECIBIO_EXPLICACION_METODO"
+        in hitos
+        or etapa == "EXPLICACION_METODO"
+    ):
+        return {
+            "nivel": 40,
+            "piso": "METODO_EXPLICADO",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": (
+                objetivo
+                or "OBTENER_AREA_INTERES"
+            ),
+        }
+
+    # --------------------------------------------------------
+    # 30 - PROPUESTA DE VALOR YA PRESENTADA
+    # --------------------------------------------------------
+
+    if (
+        "RECIBIO_PRESENTACION_VALOR"
+        in hitos
+        or etapa == "PRESENTACION_VALOR"
+    ):
+        return {
+            "nivel": 30,
+            "piso": "VALOR_PRESENTADO",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": (
+                objetivo
+                or "OBTENER_RESPUESTA_METODO"
+            ),
+        }
+
+    # --------------------------------------------------------
+    # 25 - REFERENCIA YA RESPONDIDA
+    # --------------------------------------------------------
+
+    if "RESPONDIO_REFERENCIA" in hitos:
+        return {
+            "nivel": 25,
+            "piso": "REFERENCIA_RESPONDIDA",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": objetivo,
+        }
+
+    # --------------------------------------------------------
+    # 20 - ZONA YA VALIDADA
+    # --------------------------------------------------------
+
+    if "ZONA_VALIDADA" in hitos:
+        return {
+            "nivel": 20,
+            "piso": "ZONA_VALIDADA",
+            "etapa": etapa,
+            "estado": estado,
+            "objetivo": objetivo,
+        }
+
+    return {
+        "nivel": 0,
+        "piso": "SIN_PISO",
+        "etapa": etapa,
+        "estado": estado,
+        "objetivo": objetivo,
+    }
+
+
+def aplicar_candado_progreso_comercial(
+    decision: Dict[str, Any],
+    analisis: Dict[str, Any],
+    contexto_comercial: Optional[
+        Dict[str, Any]
+    ],
+) -> Dict[str, Any]:
+    """
+    Arbitra la decisión ANTES de redactar la respuesta.
+
+    Objetivos:
+    1. impedir regresiones del embudo;
+    2. responder preguntas paralelas sin perder progreso;
+    3. proteger el flujo incluso si Gemini falla o devuelve
+       una interpretación incompleta.
+
+    No modifica BD.
+    """
+
+    decision_segura = (
+        dict(decision)
+        if isinstance(
+            decision,
+            dict,
+        )
+        else {}
+    )
+
+    analisis_seguro = (
+        analisis
+        if isinstance(
+            analisis,
+            dict,
+        )
+        else {}
+    )
+
+    contexto = (
+        contexto_comercial
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else {}
+    )
+
+    datos_decision = decision_segura.get(
+        "datos_detectados",
+        {},
+    )
+
+    if not isinstance(
+        datos_decision,
+        dict,
+    ):
+        datos_decision = {}
+
+    else:
+        datos_decision = dict(
+            datos_decision
+        )
+
+    decision_segura[
+        "datos_detectados"
+    ] = datos_decision
+
+    piso = obtener_piso_progreso_comercial(
+        contexto
+    )
+
+    nivel_piso = int(
+        piso.get(
+            "nivel",
+            0,
+        )
+        or 0
+    )
+
+    accion_original = str(
+        decision_segura.get(
+            "accion",
+            "CONTINUAR_CONVERSACION",
+        )
+        or "CONTINUAR_CONVERSACION"
+    ).strip().upper()
+
+    nivel_accion = (
+        NIVELES_ACCIONES_EMBUDO.get(
+            accion_original
+        )
+    )
+
+    relacion_objetivo = str(
+        analisis_seguro.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
+
+    intencion_principal = str(
+        analisis_seguro.get(
+            "intencion_principal",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    tema_interes = str(
+        analisis_seguro.get(
+            "tema_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    es_consulta_paralela = bool(
+        analisis_seguro.get(
+            "pregunta_paralela",
+            False,
+        )
+        or relacion_objetivo
+        == "NO_AFECTA_OBJETIVO"
+        or intencion_principal
+        == "PREGUNTAR_TEMA_EDUCATIVO"
+        or tema_interes
+    )
+
+    solicitud_costos_explicita = bool(
+        analisis_seguro.get(
+            "pide_costos",
+            False,
+        )
+        or intencion_principal
+        == "PEDIR_COSTOS"
+    )
+
+    solicitud_cita_explicita = bool(
+        analisis_seguro.get(
+            "pide_cita",
+            False,
+        )
+        or intencion_principal
+        in {
+            "PEDIR_CITA",
+            "PROPONER_FECHA_CITA",
+            "PROPONER_HORA_CITA",
+        }
+    )
+
+    acciones_explicitas_protegidas = {
+        "RESPONDER_COSTOS",
+        "PEDIR_NIVEL_COSTOS",
+        "RESPONDER_HORARIOS",
+        "RESPONDER_UBICACION",
+        "PEDIR_FECHA_CITA",
+        "PEDIR_HORA_CITA",
+        "CONFIRMAR_FECHA_CITA",
+        "CONSULTAR_ADMIN",
+        "PEDIR_DATOS_CITA",
+        "REGISTRAR_DATOS_CITA",
+        "CITA_DIA_NO_LABORAL",
+        "CITA_FUERA_HORARIO",
+        "SEGUIMIENTO",
+        "RECHAZAR_CAMPUS",
+        "ORIENTAR_PRE_KINDER",
+        "PEDIR_FECHA_NACIMIENTO",
+    }
+
+    acciones_blandas_embudo = {
+        "PEDIR_ZONA",
+        "PEDIR_REFERENCIA",
+        "PRESENTAR_PROPUESTA_VALOR",
+        "EXPLICAR_METODO_FILADELFIA",
+        "PREGUNTAR_AREA_INTERES",
+        "PROFUNDIZAR_AREA_INTERES",
+        "INVITAR_CITA",
+        "CONTINUAR_INFORMES",
+        "RESPONDER_TEMA",
+        "CONTINUAR_CONVERSACION",
+    }
+
+    # --------------------------------------------------------
+    # PREGUNTA PARALELA:
+    # se responde sin consumir ni reiniciar el funnel.
+    # --------------------------------------------------------
+
+    if (
+        es_consulta_paralela
+        and accion_original
+        in acciones_blandas_embudo
+        and not solicitud_costos_explicita
+        and not solicitud_cita_explicita
+    ):
+        decision_segura[
+            "accion"
+        ] = "RESPONDER_TEMA"
+
+        if nivel_piso >= 70:
+            decision_segura[
+                "puede_compartir_costos"
+            ] = True
+
+        decision_segura[
+            "motivo"
+        ] = (
+            "El prospecto realizó una consulta paralela. "
+            "Se responde directamente sin modificar el "
+            "progreso comercial ya alcanzado."
+        )
+
+        objetivo_contexto = str(
+            contexto.get(
+                "objetivo_pendiente",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        objetivo_piso = str(
+            piso.get(
+                "objetivo",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        if objetivo_contexto in {
+            "",
+            "ESPERAR_REACTIVACION_PROSPECTO",
+        }:
+            objetivo_retorno = objetivo_piso
+        else:
+            objetivo_retorno = objetivo_contexto
+
+        datos_decision.update({
+            "preservar_progreso_comercial": True,
+            "piso_comercial": piso.get(
+                "piso",
+                "",
+            ),
+            "objetivo_retorno": (
+                objetivo_retorno
+            ),
+        })
+        
+
+        print(
+            "🧭 CONSULTA PARALELA SIN REGRESIÓN: "
+            f"accion_original={accion_original}, "
+            f"piso={piso.get('piso')}"
+        )
+
+        return decision_segura
+
+    # --------------------------------------------------------
+    # ACCIONES QUE NO REPRESENTAN PROGRESO LINEAL
+    # --------------------------------------------------------
+
+    if (
+        accion_original
+        in acciones_explicitas_protegidas
+    ):
+        return decision_segura
+
+    if nivel_accion is None:
+        return decision_segura
+
+    # --------------------------------------------------------
+    # SIN REGRESIÓN
+    # --------------------------------------------------------
+
+    if nivel_accion >= nivel_piso:
+        return decision_segura
+
+    # --------------------------------------------------------
+    # REGRESIÓN DETECTADA
+    # --------------------------------------------------------
+
+    if nivel_piso >= 70:
+        nueva_accion = "RESPONDER_TEMA"
+
+    elif nivel_piso >= 60:
+        nueva_accion = "INVITAR_CITA"
+
+    elif nivel_piso >= 50:
+        nueva_accion = (
+            "PROFUNDIZAR_AREA_INTERES"
+        )
+
+    elif nivel_piso >= 40:
+        nueva_accion = (
+            "PREGUNTAR_AREA_INTERES"
+        )
+
+    elif nivel_piso >= 30:
+        nueva_accion = (
+            "EXPLICAR_METODO_FILADELFIA"
+        )
+
+    elif nivel_piso >= 25:
+        nueva_accion = (
+            "PRESENTAR_PROPUESTA_VALOR"
+        )
+
+    elif nivel_piso >= 20:
+        nueva_accion = "PEDIR_REFERENCIA"
+
+    else:
+        nueva_accion = accion_original
+
+    decision_segura[
+        "accion"
+    ] = nueva_accion
+
+    decision_segura[
+        "motivo"
+    ] = (
+        "La acción originalmente propuesta implicaba "
+        "regresar a una etapa comercial ya consumada. "
+        "Python aplicó el piso monotónico del embudo."
+    )
+
+    datos_decision.update({
+        "regresion_comercial_bloqueada": True,
+        "accion_original_bloqueada": (
+            accion_original
+        ),
+        "piso_comercial": piso.get(
+            "piso",
+            "",
+        ),
+        "nivel_piso_comercial": nivel_piso,
+        "objetivo_retorno": str(
+            contexto.get(
+                "objetivo_pendiente",
+                "",
+            )
+            or piso.get(
+                "objetivo",
+                "",
+            )
+            or ""
+        ).strip().upper(),
+    })
+
+    if nueva_accion == "RESPONDER_TEMA":
+        datos_decision[
+            "preservar_progreso_comercial"
+        ] = True
+
+    print(
+        "🛡️ REGRESIÓN COMERCIAL BLOQUEADA: "
+        f"propuesta={accion_original}, "
+        f"piso={piso.get('piso')}, "
+        f"accion_corregida={nueva_accion}"
+    )
+
+    return decision_segura
+    
+
+# ============================================================
 # CONTRATO DE MEMORIA HISTÓRICA DE LA CONVERSACIÓN
 # ============================================================
 
@@ -11593,12 +12228,77 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
+    if accion == "RESPONDER_TEMA":
+
+        objetivo_retorno = str(
+            datos_detectados.get(
+                "objetivo_retorno",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        debe_incluir_tema = [
+            (
+                "Responder primero y directamente la "
+                "pregunta o comentario actual del prospecto."
+            ),
+        ]
+
+        if (
+            objetivo_retorno
+            == "OBTENER_DECISION_VISITA"
+        ):
+            debe_incluir_tema.append(
+                (
+                    "Después de responder la duda, retomar "
+                    "de forma breve y natural la posibilidad "
+                    "de visitar el colegio, sin repetir "
+                    "información comercial anterior."
+                )
+            )
+
+        plan.update({
+            "objetivo": (
+                "Resolver la consulta actual sin reiniciar "
+                "ni hacer retroceder el embudo comercial."
+            ),
+            "debe_incluir": (
+                debe_incluir_tema
+            ),
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    (
+                        "Volver a pedir información que ya "
+                        "fue proporcionada anteriormente."
+                    ),
+                    (
+                        "Volver a explicar etapas del embudo "
+                        "que la familia ya superó."
+                    ),
+                    (
+                        "Reiniciar la presentación general "
+                        "del colegio."
+                    ),
+                    (
+                        "Volver al Método Filadelfia, "
+                        "referencia o área de interés sólo "
+                        "para reconstruir artificialmente "
+                        "el embudo."
+                    ),
+                ]
+            ),
+        })
+
+        return plan
+
     if accion in [
         "CONTINUAR_INFORMES",
-        "RESPONDER_TEMA",
         "INVITAR_CITA",
         "CONTINUAR_CONVERSACION",
     ]:
+        
         plan.update({
             "objetivo": (
                 "Continuar atendiendo la intención del prospecto "
@@ -13795,12 +14495,27 @@ def procesar_mensaje_prospecto_estructurado(
             contexto_comercial=contexto_comercial,
         )
 
+        # ----------------------------------------------------
+        # ARBITRAJE MONOTÓNICO PRE-REDACCIÓN
+        # ----------------------------------------------------
+        #
+        # Antes de permitir que Gemini redacte, Python verifica
+        # que la decisión no regrese a una etapa ya consumada.
+        # ----------------------------------------------------
+
+        decision = aplicar_candado_progreso_comercial(
+            decision=decision,
+            analisis=analisis,
+            contexto_comercial=contexto_comercial,
+        )
+
         plan_respuesta = (
             construir_plan_respuesta_estructurada(
                 analisis=analisis,
                 decision=decision,
             )
         )
+        
 
         generacion_respuesta = (
             generar_respuesta_final_estructurada(
@@ -14857,6 +15572,62 @@ def calcular_transicion_comercial_post_envio(
     }
 
     # ========================================================
+    # CANDADO MONOTÓNICO FINAL DE PERSISTENCIA
+    # ========================================================
+    #
+    # Es una segunda defensa independiente.
+    # Aunque una ruta futura omitiera el arbitraje previo,
+    # la máquina de estados no puede persistir una regresión.
+    # ========================================================
+
+    piso_persistencia = (
+        obtener_piso_progreso_comercial(
+            contexto
+        )
+    )
+
+    nivel_piso_persistencia = int(
+        piso_persistencia.get(
+            "nivel",
+            0,
+        )
+        or 0
+    )
+
+    nivel_accion_persistencia = (
+        NIVELES_ACCIONES_EMBUDO.get(
+            accion
+        )
+    )
+
+    if (
+        nivel_accion_persistencia
+        is not None
+        and nivel_accion_persistencia
+        < nivel_piso_persistencia
+    ):
+        transicion.update({
+            "etapa_conversacional": etapa_actual,
+            "estado_comercial": estado_actual,
+            "objetivo_pendiente": objetivo_actual,
+            "transicion_aplicable": False,
+            "motivo": (
+                "Candado monotónico final: se bloqueó "
+                "una transición que pretendía regresar "
+                "a una etapa comercial ya consumada."
+            ),
+        })
+
+        print(
+            "🛡️ TRANSICIÓN REGRESIVA NO PERSISTIDA: "
+            f"accion={accion}, "
+            f"piso={piso_persistencia.get('piso')}"
+        )
+
+        return transicion
+        
+
+    # ========================================================
     # CANDADO DE INTEGRIDAD: CITA PENDIENTE DE ADMINISTRACIÓN
     # ========================================================
     #
@@ -15180,10 +15951,7 @@ def calcular_transicion_comercial_post_envio(
             ),
         })
 
-    elif accion in {
-        "PROFUNDIZAR_AREA_INTERES",
-        "RESPONDER_TEMA",
-    }:
+    elif accion == "PROFUNDIZAR_AREA_INTERES":
         transicion.update({
             "etapa_conversacional": (
                 "PROFUNDIZACION_INTERES"
@@ -15201,6 +15969,32 @@ def calcular_transicion_comercial_post_envio(
         agregar_hito(
             "RECIBIO_RESPUESTA_PERSONALIZADA"
         )
+
+    elif accion == "RESPONDER_TEMA":
+        # ----------------------------------------------------
+        # RESPUESTA INCIDENTAL SIN MOVER EL EMBUDO
+        # ----------------------------------------------------
+        #
+        # Responder una duda concreta no significa entrar
+        # nuevamente a PROFUNDIZACION_INTERES.
+        #
+        # Conservamos etapa, estado y objetivo actuales.
+        # Marcamos la transición como aplicable para que el CRM
+        # pueda abrir nuevamente la ventana de seguimiento desde
+        # el objetivo que ya estaba pendiente.
+        # ----------------------------------------------------
+
+        transicion.update({
+            "etapa_conversacional": etapa_actual,
+            "estado_comercial": estado_actual,
+            "objetivo_pendiente": objetivo_actual,
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se respondió una consulta paralela sin "
+                "modificar la posición ni el objetivo "
+                "comercial pendiente."
+            ),
+        })
 
     elif accion == "RESPONDER_COSTOS":
         transicion.update({
@@ -15441,10 +16235,6 @@ def calcular_transicion_comercial_post_envio(
                 "OBTENER_NIVEL_PARA_COSTOS"
             ),
 
-            "RESPONDER_TEMA": (
-                "OBTENER_CONFIRMACION_INTERES"
-            ),
-
         }
 
         datos_decision = decision.get(
@@ -15476,12 +16266,18 @@ def calcular_transicion_comercial_post_envio(
             ] = objetivo_pendiente_sugerido
 
         else:
-            transicion[
-                "objetivo_pendiente"
-            ] = objetivos_por_accion.get(
-                accion,
-                "",
-            )
+            if accion == "RESPONDER_TEMA":
+                transicion[
+                    "objetivo_pendiente"
+                ] = objetivo_actual
+
+            else:
+                transicion[
+                    "objetivo_pendiente"
+                ] = objetivos_por_accion.get(
+                    accion,
+                    "",
+                )
 
     # ========================================================
     # VALIDACIÓN FINAL
@@ -15807,6 +16603,109 @@ def persistir_transicion_comercial_post_envio(
     campos_actualizados = []
 
     try:
+
+        # ====================================================
+        # SNAPSHOT ANTES DE UNA PAUSA TEMPORAL
+        # ====================================================
+        #
+        # SEGUIMIENTO no sustituye la posición comercial.
+        # Sólo la pausa.
+        #
+        # Guardamos el punto anterior para poder restaurarlo
+        # cuando el prospecto vuelva a escribir.
+        # ====================================================
+
+        accion_transicion = str(
+            transicion.get(
+                "accion",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        if accion_transicion == "SEGUIMIENTO":
+
+            etapa_pre_seguimiento = str(
+                contexto.get(
+                    "etapa_conversacional",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+
+            estado_pre_seguimiento = str(
+                contexto.get(
+                    "estado_comercial",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+
+            objetivo_pre_seguimiento = str(
+                contexto.get(
+                    "objetivo_pendiente",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+
+            if (
+                etapa_pre_seguimiento
+                and etapa_pre_seguimiento
+                != "SEGUIMIENTO"
+                and etapa_pre_seguimiento
+                in ETAPAS_CONVERSACIONALES_VALIDAS
+            ):
+                set_note_value(
+                    contact,
+                    "ETAPA_ANTES_SEGUIMIENTO",
+                    etapa_pre_seguimiento,
+                )
+
+                campos_actualizados.append(
+                    "ETAPA_ANTES_SEGUIMIENTO"
+                )
+
+            if (
+                estado_pre_seguimiento
+                and estado_pre_seguimiento
+                in ESTADOS_COMERCIALES_VALIDOS
+            ):
+                set_note_value(
+                    contact,
+                    "ESTADO_ANTES_SEGUIMIENTO",
+                    estado_pre_seguimiento,
+                )
+
+                campos_actualizados.append(
+                    "ESTADO_ANTES_SEGUIMIENTO"
+                )
+
+            if (
+                objetivo_pre_seguimiento
+                and objetivo_pre_seguimiento
+                != "ESPERAR_REACTIVACION_PROSPECTO"
+                and objetivo_pre_seguimiento
+                in OBJETIVOS_PENDIENTES_VALIDOS
+            ):
+                set_note_value(
+                    contact,
+                    "OBJETIVO_ANTES_SEGUIMIENTO",
+                    objetivo_pre_seguimiento,
+                )
+
+                campos_actualizados.append(
+                    "OBJETIVO_ANTES_SEGUIMIENTO"
+                )
+
+            print(
+                "📸 SNAPSHOT PRE-SEGUIMIENTO: "
+                f"contact_id={contact.id}, "
+                f"etapa={etapa_pre_seguimiento}, "
+                f"estado={estado_pre_seguimiento}, "
+                f"objetivo={objetivo_pre_seguimiento}"
+            )
+    
         etapa_anterior_guardada = get_note_value(
             contact,
             "ETAPA_CONVERSACIONAL",
@@ -18642,16 +19541,18 @@ def construir_followup_fallback(
             )
 
         return (
-            "Sólo quería retomar el mensaje anterior. "
-            "Cuando tenga oportunidad, con gusto "
-            "continuamos apoyándole."
+            "Cuando tenga oportunidad, compártame "
+            "el dato que quedó pendiente y con gusto "
+            "continuamos."
         )
 
     if numero_followup == 2:
         return (
-            "Buen día. Retomo nuestra conversación "
-            "por si todavía podemos ayudarle con la "
-            "información que estaba revisando."
+            "Buen día. Espero que se encuentre muy bien."
+            "\n\n"
+            "Retomo nuestra conversación por si todavía "
+            "podemos ayudarle con la información que "
+            "estaba revisando."
         )
 
     return (
@@ -18791,18 +19692,46 @@ REGLAS ABSOLUTAS:
 - Máximo 320 caracteres aproximadamente.
 - Devuelve solamente el mensaje que se enviará.
 
-TONO SEGÚN EL PASO:
+TONO Y FORMATO SEGÚN EL PASO:
 
 F1:
-Microseguimiento natural. Debe sentirse como continuación inmediata.
+- Es una continuación inmediata de la conversación.
+- NO vuelvas a saludar.
+- NO comiences con "Buenos días", "Buenas tardes",
+  "Buenas noches", "Hola" ni equivalentes.
+- NO utilices frases formales como
+  "Solo para dar seguimiento a su solicitud".
+- NO anuncies que estás retomando la conversación.
+- Debe sentirse como si la conversación simplemente
+  continuara unos minutos después.
+- Retoma naturalmente la pregunta o acción pendiente.
+- Sé especialmente breve.
 
 F2:
-Recuperación cordial después de varias horas. Puede reconocer que
-se retoma la conversación.
+- Ya transcurrieron varias horas.
+- Sí puedes iniciar con un saludo breve y natural
+  acorde con el momento del día.
+- Después del saludo o frase introductoria utiliza
+  una línea en blanco antes del contenido principal.
+- Debe sentirse como una reactivación cordial,
+  no como una conversación nueva.
+- Retoma exactamente el objetivo pendiente.
 
 F3:
-Último intento del ciclo corto. Debe ser amable, sin presión y dejar
-la puerta abierta para retomarlo posteriormente.
+- Es el último intento del ciclo corto.
+- Puede llevar un saludo breve si corresponde
+  al momento del día.
+- Si utilizas saludo o frase introductoria,
+  deja una línea en blanco antes del contenido principal.
+- Debe ser amable, breve y sin presión.
+- Deja abierta la posibilidad de retomarlo posteriormente.
+
+FORMATO:
+- F1: máximo uno o dos bloques muy breves.
+- F2 y F3: máximo dos párrafos breves.
+- Para separar párrafos utiliza dos saltos de línea.
+- No amontones saludo, introducción y solicitud
+  en un solo párrafo.
 """
 
         response, modelo_usado = (
@@ -18831,6 +19760,49 @@ la puerta abierta para retomarlo posteriormente.
 
         if len(texto) > 500:
             return fallback
+
+        # ----------------------------------------------------
+        # VALIDACIÓN DETERMINISTA DE F1
+        # ----------------------------------------------------
+        #
+        # F1 ocurre pocos minutos después.
+        # Aunque Gemini incumpla el estilo solicitado,
+        # nunca debe volver a saludar ni presentar el mensaje
+        # como un seguimiento formal.
+        # ----------------------------------------------------
+
+        if numero_followup == 1:
+
+            inicio_f1 = (
+                normalizar_texto_para_deteccion(
+                    texto
+                )
+            )
+
+            inicios_no_permitidos_f1 = [
+                "buenos dias",
+                "buenas tardes",
+                "buenas noches",
+                "hola",
+                "solo para dar seguimiento",
+                "solo para darle seguimiento",
+                "retomo nuestra conversacion",
+            ]
+
+            if any(
+                inicio_f1.startswith(
+                    inicio_no_permitido
+                )
+                for inicio_no_permitido
+                in inicios_no_permitidos_f1
+            ):
+                print(
+                    "🛡️ FOLLOWUP F1 REEMPLAZADO POR FALLBACK: "
+                    f"contact_id={contact.id}, "
+                    "motivo=INICIO_NO_NATURAL"
+                )
+
+                return fallback
 
         print(
             "🧠 FOLLOWUP IA: "
@@ -19881,6 +20853,243 @@ def activar_crm_admisiones_si_elegible(
 
     if estado.journey_status == "NURTURING":
 
+        # ====================================================
+        # RESTAURAR POSICIÓN PREVIA A UNA PAUSA EXPLÍCITA
+        # ====================================================
+
+        etapa_contacto_actual = str(
+            get_note_value(
+                contact,
+                "ETAPA_CONVERSACIONAL",
+            )
+            or ""
+        ).strip().upper()
+
+        etapa_retorno = str(
+            get_note_value(
+                contact,
+                "ETAPA_ANTES_SEGUIMIENTO",
+            )
+            or ""
+        ).strip().upper()
+
+        estado_retorno = str(
+            get_note_value(
+                contact,
+                "ESTADO_ANTES_SEGUIMIENTO",
+            )
+            or ""
+        ).strip().upper()
+
+        objetivo_retorno = str(
+            get_note_value(
+                contact,
+                "OBJETIVO_ANTES_SEGUIMIENTO",
+            )
+            or ""
+        ).strip().upper()
+
+        restauracion_aplicable = bool(
+            etapa_contacto_actual
+            == "SEGUIMIENTO"
+            and etapa_retorno
+            in ETAPAS_CONVERSACIONALES_VALIDAS
+            and estado_retorno
+            in ESTADOS_COMERCIALES_VALIDOS
+        )
+
+        # ----------------------------------------------------
+        # COMPATIBILIDAD CON PAUSAS ANTERIORES AL SNAPSHOT
+        # ----------------------------------------------------
+        #
+        # Algunos contactos pudieron entrar a SEGUIMIENTO antes
+        # de que existieran ETAPA_ANTES_SEGUIMIENTO,
+        # ESTADO_ANTES_SEGUIMIENTO y
+        # OBJETIVO_ANTES_SEGUIMIENTO.
+        #
+        # En ese caso recuperamos el último punto comercial
+        # autoritativo mediante los hitos ya persistidos.
+        # ----------------------------------------------------
+
+        if (
+            etapa_contacto_actual == "SEGUIMIENTO"
+            and not restauracion_aplicable
+        ):
+            contexto_recuperacion = (
+                construir_contexto_comercial_desde_contacto(
+                    contact
+                )
+            )
+
+            piso_recuperacion = (
+                obtener_piso_progreso_comercial(
+                    contexto_recuperacion
+                )
+            )
+
+            nivel_recuperacion = int(
+                piso_recuperacion.get(
+                    "nivel",
+                    0,
+                )
+                or 0
+            )
+
+            etapa_recuperada = str(
+                piso_recuperacion.get(
+                    "etapa",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+
+            estado_recuperado = str(
+                piso_recuperacion.get(
+                    "estado",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+
+            objetivo_recuperado = str(
+                piso_recuperacion.get(
+                    "objetivo",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+
+            if (
+                nivel_recuperacion > 0
+                and etapa_recuperada
+                in ETAPAS_CONVERSACIONALES_VALIDAS
+                and etapa_recuperada != "SEGUIMIENTO"
+                and estado_recuperado
+                in ESTADOS_COMERCIALES_VALIDOS
+            ):
+                etapa_retorno = etapa_recuperada
+                estado_retorno = estado_recuperado
+                objetivo_retorno = objetivo_recuperado
+
+                restauracion_aplicable = True
+
+                print(
+                    "🧭 POSICIÓN PRE-SEGUIMIENTO "
+                    "RECUPERADA POR HITOS: "
+                    f"contact_id={contact.id}, "
+                    f"piso={piso_recuperacion.get('piso')}, "
+                    f"etapa={etapa_retorno}, "
+                    f"estado={estado_retorno}, "
+                    f"objetivo={objetivo_retorno}"
+                )
+
+        if restauracion_aplicable:
+
+            set_note_value(
+                contact,
+                "ETAPA_CONVERSACIONAL",
+                etapa_retorno,
+            )
+
+            contact.status = estado_retorno
+
+            if (
+                objetivo_retorno
+                in OBJETIVOS_PENDIENTES_VALIDOS
+            ):
+                set_note_value(
+                    contact,
+                    "OBJETIVO_PENDIENTE",
+                    objetivo_retorno,
+                )
+
+            equivalencias_reactivacion_flow = {
+                "CONTACTO_INICIAL": (
+                    "SALUDO_INICIAL"
+                ),
+                "REFERENCIA_COLEGIO": (
+                    "ESPERANDO_REFERENCIA"
+                ),
+                "VALIDACION_ZONA": (
+                    "VALIDACION_ZONA"
+                ),
+                "PRESENTACION_VALOR": (
+                    "PRESENTACION_VALOR"
+                ),
+                "EXPLICACION_METODO": (
+                    "EXPLICACION_METODO"
+                ),
+                "IDENTIFICACION_INTERES": (
+                    "ESPERANDO_AREA_INTERES"
+                ),
+                "PROFUNDIZACION_INTERES": (
+                    "PROFUNDIZACION_INTERES"
+                ),
+                "INVITACION_VISITA": (
+                    "INVITACION_CITA"
+                ),
+                "NEGOCIACION_CITA": (
+                    "ESPERANDO_FECHA_CITA"
+                ),
+                "ESPERANDO_CONFIRMACION_ADMIN": (
+                    "ESPERANDO_CONFIRMACION_ADMIN"
+                ),
+                "ESPERANDO_DATOS_CITA": (
+                    "ESPERANDO_DATOS_CITA"
+                ),
+                "VISITA_CONFIRMADA": (
+                    "CITA_DATOS_COMPLETOS"
+                ),
+            }
+
+            flow_retorno = (
+                equivalencias_reactivacion_flow.get(
+                    etapa_retorno,
+                    get_flow_state(
+                        contact
+                    ),
+                )
+            )
+
+            if (
+                etapa_retorno
+                == "NEGOCIACION_CITA"
+                and objetivo_retorno
+                == "OBTENER_HORA_CITA"
+            ):
+                flow_retorno = (
+                    "ESPERANDO_HORA_CITA"
+                )
+
+            set_flow_state(
+                contact,
+                flow_retorno,
+            )
+
+            estado.current_stage = (
+                etapa_retorno
+            )
+
+            estado.current_commercial_status = (
+                estado_retorno
+            )
+
+            if (
+                objetivo_retorno
+                in OBJETIVOS_PENDIENTES_VALIDOS
+            ):
+                estado.current_objective = (
+                    objetivo_retorno
+                )
+
+            print(
+                "♻️ POSICIÓN PRE-SEGUIMIENTO RESTAURADA: "
+                f"contact_id={contact.id}, "
+                f"etapa={etapa_retorno}, "
+                f"estado={estado_retorno}, "
+                f"objetivo={objetivo_retorno}"
+            )
+
         estado.journey_status = (
             "ACTIVE_CONVERSION"
         )
@@ -19893,9 +21102,32 @@ def activar_crm_admisiones_si_elegible(
             "REACTIVACION"
         )
 
-        estado.active_goal = (
-            "CONDUCIR_A_CITA"
-        )
+        objetivo_reactivado = str(
+            estado.current_objective
+            or ""
+        ).strip().upper()
+
+        if objetivo_reactivado in {
+            "OBTENER_FECHA_CITA",
+            "OBTENER_HORA_CITA",
+            "CONFIRMAR_FECHA_CITA_CALENDARIO",
+            "ESPERAR_CONFIRMACION_ADMIN",
+        }:
+            estado.active_goal = (
+                "CONCRETAR_CITA"
+            )
+
+        elif objetivo_reactivado == (
+            "OBTENER_DECISION_VISITA"
+        ):
+            estado.active_goal = (
+                "LOGRAR_DECISION_VISITA"
+            )
+
+        else:
+            estado.active_goal = (
+                "CONDUCIR_A_CITA"
+            )
 
         estado.active_goal_status = "ACTIVE"
 
