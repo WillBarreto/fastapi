@@ -597,13 +597,13 @@ def obtener_ubicacion_institucional_campus() -> Dict[str, str]:
     """
     Devuelve exclusivamente la ubicación institucional autorizada.
 
-    La URL de Google Maps nunca es generada por Gemini.
-
-    Estrategia:
-    1. Lee nombre y dirección desde configuración autorizada.
-    2. Construye una Google Maps URL universal.
-    3. Si existe un Place ID autorizado, lo incorpora.
-    4. Si falta configuración crítica, falla de forma segura.
+    Principios:
+    - Gemini nunca genera ni reconstruye una URL de Google Maps.
+    - La fuente principal es nombre + dirección institucional.
+    - Si existe Place ID autorizado, se incorpora a la URL universal.
+    - Puede existir una URL autorizada de respaldo configurable
+      desde Railway.
+    - Ninguna URL de ubicación se guarda de forma rígida en el código.
     """
 
     nombre = str(
@@ -630,37 +630,82 @@ def obtener_ubicacion_institucional_campus() -> Dict[str, str]:
         or ""
     ).strip()
 
+    url_autorizada_respaldo = str(
+        os.getenv(
+            "CAMPUS_MAPS_URL",
+            "",
+        )
+        or ""
+    ).strip()
+
     resultado = {
         "nombre": nombre,
         "direccion": direccion,
         "place_id": place_id,
+        "url_autorizada_respaldo": (
+            url_autorizada_respaldo
+        ),
         "url": "",
+        "fuente": "",
         "configurada": False,
     }
 
-    if not nombre or not direccion:
-        return resultado
+    # ========================================================
+    # FUENTE PRINCIPAL:
+    # URL UNIVERSAL CON DATOS INSTITUCIONALES
+    # ========================================================
 
-    consulta = quote_plus(
-        f"{nombre}, {direccion}"
-    )
+    if nombre and direccion:
 
-    url = (
-        "https://www.google.com/maps/search/"
-        f"?api=1&query={consulta}"
-    )
-
-    if place_id:
-        url += (
-            "&query_place_id="
-            + quote_plus(place_id)
+        consulta = quote_plus(
+            f"{nombre}, {direccion}"
         )
 
-    resultado["url"] = url
-    resultado["configurada"] = True
+        url = (
+            "https://www.google.com/maps/search/"
+            f"?api=1&query={consulta}"
+        )
+
+        if place_id:
+            url += (
+                "&query_place_id="
+                + quote_plus(place_id)
+            )
+
+        resultado["url"] = url
+        resultado["fuente"] = (
+            "GOOGLE_MAPS_UNIVERSAL"
+        )
+        resultado["configurada"] = True
+
+        return resultado
+
+    # ========================================================
+    # RESPALDO OPERATIVO:
+    # URL AUTORIZADA CONFIGURABLE
+    # ========================================================
+    #
+    # Permite continuar operando aun cuando todavía no tengamos
+    # nombre/dirección/Place ID completamente parametrizados.
+    #
+    # La URL vive en Railway, no en main.py, por lo que puede
+    # reemplazarse sin modificar lógica de negocio.
+    # ========================================================
+
+    if url_autorizada_respaldo:
+        resultado["url"] = (
+            url_autorizada_respaldo
+        )
+        resultado["fuente"] = (
+            "URL_AUTORIZADA_RESPALDO"
+        )
+        resultado["configurada"] = True
+
+        return resultado
 
     return resultado
-    
+
+   
 
 # ============================================================
 # CONTRATO DE ANÁLISIS ESTRUCTURADO DEL MENSAJE DEL PROSPECTO
@@ -5130,6 +5175,35 @@ def crear_analisis_determinista_basico(
         analisis["nivel"] = "Kínder"
 
     # ========================================================
+    # SOLICITUD DE UBICACIÓN INSTITUCIONAL
+    # ========================================================
+    #
+    # Esta es una intención logística inequívoca.
+    # Si Gemini falla, Python puede recuperarla sin alterar
+    # el embudo comercial.
+    # ========================================================
+
+    if detectar_solicitud_ubicacion_institucional(
+        mensaje_original
+    ):
+        analisis.update({
+            "intencion_principal": (
+                "PEDIR_UBICACION"
+            ),
+            "accion_recomendada": (
+                "RESPONDER_UBICACION"
+            ),
+            "pregunta_paralela": True,
+            "confianza": 0.98,
+        })
+
+        analisis["datos_detectados"] = [
+            "solicitud_ubicacion_institucional",
+        ]
+
+        return analisis
+
+    # ========================================================
     # SOLICITUD DE INFORMES
     # ========================================================
 
@@ -5450,7 +5524,29 @@ las demás en "intenciones_secundarias".
 7. Si pide visitar, conocer, agendar o tener una cita nueva:
 "pide_cita": true
 
-8. Debes interpretar el mensaje actual como continuación de la
+8. Si solicita la ubicación física del colegio, la dirección,
+un enlace de Maps, indicaciones para llegar o pregunta dónde
+se encuentra el campus:
+
+"intencion_principal": "PEDIR_UBICACION"
+
+o, si existe otra intención claramente más importante,
+incluye "PEDIR_UBICACION" en "intenciones_secundarias".
+
+Esta regla aplica aunque la cita ya esté confirmada y aunque
+la solicitud de ubicación aparezca como una pregunta paralela.
+
+No clasifiques una solicitud clara de ubicación únicamente como:
+"OTRO"
+"PREGUNTAR_TEMA_EDUCATIVO"
+o una pregunta paralela genérica.
+
+Nunca inventes una dirección, coordenadas, Place ID ni enlace
+de Google Maps. Tu responsabilidad aquí es únicamente detectar
+la intención PEDIR_UBICACION. Python proporcionará la ubicación
+institucional autorizada.
+
+9. Debes interpretar el mensaje actual como continuación de la
 conversación, nunca como un mensaje aislado.
 
 Usa conjuntamente:
@@ -5790,6 +5886,8 @@ def crear_decision_negocio_vacia() -> Dict[str, Any]:
 
 ZONAS_VALIDAS_DIRECTAS = {
     "santa cruz atizapan",
+    "santa cruz",
+    "santacruz",
     "santiago tianguistenco",
     "tianguistenco",
     "capulhuac",
@@ -5889,7 +5987,162 @@ def normalizar_texto_geografico(
 
     return texto.strip()
 
+def detectar_solicitud_ubicacion_institucional(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta de forma determinista una solicitud inequívoca
+    de ubicación física del campus.
 
+    Esta función NO decide el flujo comercial.
+    Solamente protege una intención logística crítica cuando
+    Gemini la clasifica como OTRO o pregunta paralela.
+
+    Principios:
+    - Detecta intención, no frases exactas.
+    - Distingue entre informar la ubicación del prospecto
+      y solicitar la ubicación del colegio.
+    - Gemini sigue siendo el intérprete semántico principal;
+      esta función actúa como red de seguridad determinista.
+    """
+
+    texto = normalizar_texto_geografico(
+        mensaje_usuario
+    )
+
+    if not texto:
+        return False
+
+    # --------------------------------------------------------
+    # SOLICITUDES DIRECTAS
+    # --------------------------------------------------------
+
+    solicitudes_directas = {
+        "ubicacion",
+        "direccion",
+        "localizacion",
+        "maps",
+        "google maps",
+        "mapa",
+    }
+
+    if texto in solicitudes_directas:
+        return True
+
+    # --------------------------------------------------------
+    # PREGUNTAS DIRECTAS SOBRE DÓNDE ESTÁ EL COLEGIO
+    # --------------------------------------------------------
+
+    patrones_directos = [
+        r"\bdonde estan\b",
+        r"\bdonde estan ubicados\b",
+        r"\bdonde se ubican\b",
+        r"\bdonde queda\b",
+        r"\bdonde queda el colegio\b",
+        r"\bdonde esta el colegio\b",
+        r"\bcual es su direccion\b",
+        r"\bcual es la direccion\b",
+        r"\bcomo llegar\b",
+        r"\bcomo llego\b",
+        r"\bcomo puedo llegar\b",
+    ]
+
+    if any(
+        re.search(
+            patron,
+            texto,
+        )
+        for patron in patrones_directos
+    ):
+        return True
+
+    # --------------------------------------------------------
+    # TÉRMINOS QUE REPRESENTAN LA UBICACIÓN DEL CAMPUS
+    # --------------------------------------------------------
+
+    tiene_termino_ubicacion = bool(
+        re.search(
+            (
+                r"\b("
+                r"ubicacion|"
+                r"direccion|"
+                r"localizacion|"
+                r"maps|"
+                r"google maps|"
+                r"mapa"
+                r")\b"
+            ),
+            texto,
+        )
+    )
+
+    if not tiene_termino_ubicacion:
+        return False
+
+    # --------------------------------------------------------
+    # VERBOS DE SOLICITUD
+    # --------------------------------------------------------
+    #
+    # En lugar de enumerar frases completas como
+    # "me podrías pasar tu ubicación", detectamos la estructura:
+    #
+    # solicitud + verbo de entrega + concepto de ubicación
+    #
+    # Esto cubre variantes naturales sin convertir la lógica
+    # en una colección infinita de frases.
+    # --------------------------------------------------------
+
+    tiene_verbo_solicitud = bool(
+        re.search(
+            (
+                r"\b("
+                r"mand[a-z]*|"
+                r"envi[a-z]*|"
+                r"pas[a-z]*|"
+                r"compart[a-z]*|"
+                r"dame|dar|"
+                r"necesito|quiero"
+                r")\b"
+            ),
+            texto,
+        )
+    )
+
+    tiene_modal_solicitud = bool(
+        re.search(
+            (
+                r"\b("
+                r"puedes|"
+                r"podrias|"
+                r"podria|"
+                r"puede"
+                r")\b"
+            ),
+            texto,
+        )
+    )
+
+    tiene_pronombre_solicitud = bool(
+        re.search(
+            r"\b(me|nos)\b",
+            texto,
+        )
+    )
+
+    if (
+        tiene_termino_ubicacion
+        and (
+            tiene_verbo_solicitud
+            or (
+                tiene_modal_solicitud
+                and tiene_pronombre_solicitud
+            )
+        )
+    ):
+        return True
+
+    return False
+    
 def texto_contiene_alias_geografico(
     texto_normalizado: str,
     aliases: set,
@@ -9312,11 +9565,18 @@ def aplicar_reglas_negocio_estructuradas(
     ):
         intenciones_secundarias_actuales = []
 
+    solicitud_ubicacion_determinista = (
+        detectar_solicitud_ubicacion_institucional(
+            mensaje_usuario
+        )
+    )
+
     solicita_ubicacion = bool(
         intencion_principal_actual
         == "PEDIR_UBICACION"
         or "PEDIR_UBICACION"
         in intenciones_secundarias_actuales
+        or solicitud_ubicacion_determinista
     )
 
     if solicita_ubicacion:
@@ -9324,12 +9584,25 @@ def aplicar_reglas_negocio_estructuradas(
             "accion": "RESPONDER_UBICACION",
             "motivo": (
                 "El prospecto solicitó directamente "
-                "la ubicación del campus."
+                "la ubicación institucional del campus."
             ),
             "requiere_admin": False,
             "puede_compartir_costos": zona_validada,
             "debe_finalizar_conversacion": False,
         })
+
+        decision["datos_detectados"].update({
+            "solicitud_ubicacion_institucional": True,
+            "deteccion_ubicacion_determinista": (
+                solicitud_ubicacion_determinista
+            ),
+        })
+
+        print(
+            "📍 SOLICITUD DE UBICACIÓN PRIORIZADA: "
+            f"intencion_ia={intencion_principal_actual}, "
+            f"determinista={solicitud_ubicacion_determinista}"
+        )
 
         return decision
 
