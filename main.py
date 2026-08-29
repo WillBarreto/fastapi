@@ -25015,12 +25015,108 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
             db.commit()
 
+        # ----------------------------------------------------
+        # ESCALACIÓN DE ALCANCE SIN RUTA CONFIGURADA
+        # ----------------------------------------------------
+        #
+        # Si la puerta de alcance determinó que el motivo es
+        # comprensible pero requiere intervención humana,
+        # creamos/reutilizamos una tarea administrativa y
+        # notificamos al administrador por WhatsApp.
+        # ----------------------------------------------------
+
+        resultado_escalacion_alcance = {}
+
+        if (
+            categoria_alcance
+            == "SIN_RUTA_CONFIGURADA"
+        ):
+
+            try:
+                tarea_admin = (
+                    crear_tarea_admin_pendiente(
+                        db=db,
+                        contact=contact,
+                        mensaje_usuario=mensaje,
+                        respuesta_bot=respuesta_alcance,
+                    )
+                )
+
+                resultado_alerta_admin = (
+                    enviar_alerta_admin_whatsapp(
+                        db=db,
+                        contact=contact,
+                        mensaje_usuario=mensaje,
+                        respuesta_bot=respuesta_alcance,
+                        tarea_id=getattr(
+                            tarea_admin,
+                            "id",
+                            None,
+                        ),
+                    )
+                )
+
+                resultado_escalacion_alcance = {
+                    "requiere_escalacion": True,
+                    "ejecutada": True,
+                    "tarea_id": getattr(
+                        tarea_admin,
+                        "id",
+                        None,
+                    ),
+                    "alerta_admin": (
+                        resultado_alerta_admin
+                    ),
+                    "motivo": str(
+                        alcance_detectado.get(
+                            "motivo_escalacion",
+                            "",
+                        )
+                        or ""
+                    ).strip(),
+                    "error": "",
+                }
+
+                print(
+                    "📣 ESCALACIÓN DE ALCANCE EJECUTADA: "
+                    f"contact_id={contact.id}, "
+                    f"tarea_id="
+                    f"{getattr(tarea_admin, 'id', None)}"
+                )
+
+            except Exception as e:
+                db.rollback()
+
+                resultado_escalacion_alcance = {
+                    "requiere_escalacion": True,
+                    "ejecutada": False,
+                    "tarea_id": None,
+                    "alerta_admin": "",
+                    "motivo": str(
+                        alcance_detectado.get(
+                            "motivo_escalacion",
+                            "",
+                        )
+                        or ""
+                    ).strip(),
+                    "error": str(e),
+                }
+
+                print(
+                    "⚠️ ERROR ESCALANDO ALCANCE "
+                    "SIN_RUTA_CONFIGURADA: "
+                    f"{e}"
+                )
+
         resultado_final.update({
             "procesado": envio_exitoso,
             "mensaje_enviado": envio_exitoso,
             "respuesta": respuesta_alcance,
             "twilio_resultado": resultado_twilio,
             "twilio_sid": twilio_sid,
+            "escalacion_admin": (
+                resultado_escalacion_alcance
+            ),
             "resultado_orquestador": {
                 "version": "1.0",
                 "flujo": "clasificacion_alcance",
