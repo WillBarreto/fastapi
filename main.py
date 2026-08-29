@@ -18,6 +18,7 @@ import re
 import unicodedata
 import threading
 import uuid
+import time
 
 from urllib.parse import quote_plus
 from sqlalchemy.dialects.postgresql import ENUM
@@ -19345,6 +19346,10 @@ CRM_FOLLOWUP_FINAL_EVENING_MINUTE = 30
 # Frecuencia con la que el worker consulta pendientes.
 CRM_FOLLOWUP_POLL_SECONDS = 30
 
+# Ventana mínima para permitir que un inbound concurrente
+# termine de persistirse antes del envío irreversible a Twilio.
+CRM_FOLLOWUP_PRE_SEND_GRACE_SECONDS = 2
+
 # Después del ciclo corto sin respuesta.
 CRM_NURTURING_COOLDOWN_DAYS = 3
 
@@ -20654,6 +20659,115 @@ def procesar_followup_estado_crm(
     )
 
     db.commit()
+
+    # --------------------------------------------------------
+    # BARRERA FINAL DE CONCURRENCIA PRE-TWILIO
+    # --------------------------------------------------------
+    #
+    # Un inbound puede llegar exactamente después de la última
+    # revalidación y antes del envío irreversible a Twilio.
+    #
+    # Damos una ventana mínima para que ese inbound quede
+    # persistido y revalidamos usando una SESIÓN NUEVA, evitando
+    # depender del identity map o del contexto transaccional de
+    # la sesión utilizada por el worker.
+    # --------------------------------------------------------
+
+    time.sleep(
+        CRM_FOLLOWUP_PRE_SEND_GRACE_SECONDS
+    )
+
+    db_guard = SessionLocal()
+
+    try:
+
+        estado_guard = (
+            obtener_estado_followup_crm(
+                db_guard,
+                contact.id,
+            )
+        )
+
+        ultimo_mensaje_guard = (
+            db_guard.query(Message)
+            .filter(
+                Message.contact_id
+                == contact.id
+            )
+            .order_by(
+                Message.timestamp.desc(),
+                Message.id.desc(),
+            )
+            .first()
+        )
+
+        followup_sigue_autorizado = bool(
+            estado_guard is not None
+            and estado_guard.automation_enabled
+            and estado_guard.journey_status
+            == "ACTIVE_CONVERSION"
+            and estado_guard.active_goal_status
+            == "ACTIVE"
+            and str(
+                estado_guard.current_objective
+                or ""
+            ).strip().upper()
+            == snapshot_objetivo
+            and normalizar_datetime_utc(
+                estado_guard.last_inbound_at
+            )
+            == snapshot_last_inbound_at
+            and normalizar_datetime_utc(
+                estado_guard.last_outbound_at
+            )
+            == snapshot_last_outbound_at
+            and str(
+                estado_guard.conversation_cycle_id
+                or ""
+            ).strip()
+            == snapshot_cycle_id
+            and ultimo_mensaje_guard is not None
+            and str(
+                ultimo_mensaje_guard.direction
+                or ""
+            ).strip().lower()
+            == "outgoing"
+        )
+
+        if not followup_sigue_autorizado:
+
+            if estado_guard is not None:
+
+                estado_guard.next_followup_at = None
+
+                registrar_evento_followup_crm(
+                    db=db_guard,
+                    estado_crm=estado_guard,
+                    event_type=(
+                        "FOLLOWUP_CANCELLED_PRE_SEND"
+                    ),
+                    reason=(
+                        "El contexto cambió durante la "
+                        "barrera final pre-Twilio."
+                    ),
+                    step_number=numero_followup,
+                    scheduled_for=(
+                        scheduled_original
+                    ),
+                )
+
+                db_guard.commit()
+
+            print(
+                "🛑 FOLLOWUP CANCELADO PRE-TWILIO: "
+                f"contact_id={contact.id}, "
+                "se detectó actividad concurrente."
+            )
+
+            return False
+
+    finally:
+        db_guard.close()
 
     # --------------------------------------------------------
     # TWILIO
