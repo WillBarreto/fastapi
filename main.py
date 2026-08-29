@@ -21617,10 +21617,18 @@ def sincronizar_crm_desde_transicion(
             "COMPLETAR_CITA"
         )
 
-        estado.active_goal_status = (
-            "COMPLETED"
-        )
+        # La cita puede estar confirmada y, al mismo tiempo,
+        # quedar pendiente completar datos de registro.
+        #
+        # No debemos marcar COMPLETAR_CITA como terminado
+        # mientras Python siga esperando esos datos.
+        if objetivo == "OBTENER_DATOS_CITA":
+            estado.active_goal_status = "ACTIVE"
+        else:
+            estado.active_goal_status = "COMPLETED"
 
+        # Una cita ya confirmada nunca genera seguimiento
+        # comercial automático mientras se completa el registro.
         estado.next_followup_at = None
         estado.next_nurturing_at = None
 
@@ -31068,6 +31076,25 @@ def procesar_datos_registro_cita(
 
     db.commit()
 
+    # --------------------------------------------------------
+    # SINCRONIZAR CRM AL CERRAR EL REGISTRO DE LA CITA
+    # --------------------------------------------------------
+
+    sincronizar_crm_desde_transicion(
+        db,
+        contact,
+        {
+            "transicion_aplicada": True,
+            "etapa_conversacional": (
+                "VISITA_CONFIRMADA"
+            ),
+            "estado_comercial": (
+                "VISITA_CONFIRMADA"
+            ),
+            "objetivo_pendiente": "",
+        },
+    )
+
     enviar_resumen_cita_admin_whatsapp(
         contact
     )
@@ -31763,10 +31790,76 @@ Te muestro nuevamente el menú actualizado:
                 contact
             )
         )
+
         if solicitud_datos:
+
+            # La cita ya está confirmada, pero el registro
+            # todavía necesita datos del prospecto.
+            set_note_value(
+                contact,
+                "OBJETIVO_PENDIENTE",
+                "OBTENER_DATOS_CITA",
+            )
+
+            set_flow_state(
+                contact,
+                "ESPERANDO_DATOS_CITA",
+            )
+
+            db.commit()
+
+            sincronizar_crm_desde_transicion(
+                db,
+                contact,
+                {
+                    "transicion_aplicada": True,
+                    "etapa_conversacional": (
+                        "VISITA_CONFIRMADA"
+                    ),
+                    "estado_comercial": (
+                        "VISITA_CONFIRMADA"
+                    ),
+                    "objetivo_pendiente": (
+                        "OBTENER_DATOS_CITA"
+                    ),
+                },
+            )
+
             mensaje_para_prospecto = (
                 f"{mensaje_para_prospecto.rstrip()}\n\n"
                 f"{solicitud_datos}"
+            )
+
+        else:
+
+            # Todos los datos necesarios ya estaban disponibles.
+            # La cita queda completamente cerrada desde ahora.
+            set_note_value(
+                contact,
+                "OBJETIVO_PENDIENTE",
+                "",
+            )
+
+            set_flow_state(
+                contact,
+                "CITA_DATOS_COMPLETOS",
+            )
+
+            db.commit()
+
+            sincronizar_crm_desde_transicion(
+                db,
+                contact,
+                {
+                    "transicion_aplicada": True,
+                    "etapa_conversacional": (
+                        "VISITA_CONFIRMADA"
+                    ),
+                    "estado_comercial": (
+                        "VISITA_CONFIRMADA"
+                    ),
+                    "objetivo_pendiente": "",
+                },
             )
 
     print(f"👑 Texto admin original: {repr(mensaje_limpio)}")
