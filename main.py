@@ -9385,9 +9385,12 @@ def aplicar_reglas_negocio_estructuradas(
         or solicitud_confirmacion_cita_ia
     )
 
+    # La espera administrativa es un estado autoritativo.
+    # Gemini puede reconocer semántica de seguimiento,
+    # pero no puede crear por inferencia una autoridad
+    # administrativa que PostgreSQL todavía no posee.
     contexto_cita_pendiente = (
         contexto_cita_pendiente_determinista
-        or contexto_cita_pendiente_ia
     )
 
     if (
@@ -20104,7 +20107,6 @@ FORMATO:
 OBJETIVOS_SIN_FOLLOWUP_AUTOMATICO = {
     "",
     "ESPERAR_CONFIRMACION_ADMIN",
-    "CONFIRMAR_FECHA_CITA_CALENDARIO",
 }
 
 
@@ -21846,7 +21848,6 @@ def sincronizar_crm_desde_transicion(
         objetivos_sin_followup_automatico = {
             "",
             "ESPERAR_CONFIRMACION_ADMIN",
-            "CONFIRMAR_FECHA_CITA_CALENDARIO",
         }
 
         if (
