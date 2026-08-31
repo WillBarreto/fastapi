@@ -32253,32 +32253,963 @@ Mensaje enviado:
 @app.get("/contacts")
 async def list_contacts(
     db: Session = Depends(get_db),
-    status: str = None,
-    limit: int = 50
+    phone: str = "",
+    conversation_text: str = "",
+    status: str = "",
+    page: int = 1,
+    limit: int = 50,
 ):
-    """Lista todos los contactos con filtros"""
+    """
+    Vista HTML de contactos del CRM.
+
+    Permite:
+    - listar contactos ordenados por última interacción;
+    - buscar por fragmento de teléfono;
+    - buscar texto dentro de conversaciones;
+    - mostrar tutor y alumnos cuando estén disponibles;
+    - abrir directamente la conversación del contacto.
+    """
+
+    from fastapi.responses import HTMLResponse
+    from html import escape
+
+    phone = str(
+        phone or ""
+    ).strip()
+
+    conversation_text = str(
+        conversation_text or ""
+    ).strip()
+
+    status = str(
+        status or ""
+    ).strip()
+
+    # --------------------------------------------------------
+    # CONSULTA BASE
+    # --------------------------------------------------------
+
     query = db.query(Contact)
-    
+
+    # --------------------------------------------------------
+    # FILTRO POR ESTADO
+    # --------------------------------------------------------
+
     if status:
-        query = query.filter(Contact.status == status)
-    
-    contacts = query.order_by(Contact.last_contact.desc()).limit(limit).all()
-    
-    return {
-        "total": len(contacts),
-        "contacts": [
-            {
-                "id": c.id,
-                "phone_number": c.phone_number,
-                "status": c.status,
-                "first_contact": c.first_contact,
-                "last_contact": c.last_contact,
-                "total_messages": c.total_messages,
-                "is_competitor": c.is_competitor
+        query = query.filter(
+            Contact.status == status
+        )
+
+    # --------------------------------------------------------
+    # BÚSQUEDA PARCIAL POR TELÉFONO
+    # --------------------------------------------------------
+    #
+    # No se exige el número completo.
+    # Ejemplo:
+    # 713
+    # puede encontrar +5217131234567
+    # --------------------------------------------------------
+
+    if phone:
+
+        solo_digitos = re.sub(
+            r"\D",
+            "",
+            phone,
+        )
+
+        if solo_digitos:
+            query = query.filter(
+                Contact.phone_number.ilike(
+                    f"%{solo_digitos}%"
+                )
+            )
+
+    # --------------------------------------------------------
+    # BÚSQUEDA DE TEXTO EN CONVERSACIONES
+    # --------------------------------------------------------
+
+    if conversation_text:
+
+        # ----------------------------------------------------
+        # NORMALIZAR TEXTO DE BÚSQUEDA
+        # ----------------------------------------------------
+        #
+        # La búsqueda debe ignorar:
+        # - mayúsculas/minúsculas;
+        # - acentos españoles;
+        #
+        # Ejemplos equivalentes:
+        # "Educación" / "educacion"
+        # "Así como le comentamos" / "asi como le comentamos"
+        #
+        # No modificamos los mensajes almacenados.
+        # La normalización ocurre únicamente durante la búsqueda.
+        # ----------------------------------------------------
+
+        texto_busqueda_normalizado = (
+            conversation_text
+            .lower()
+            .translate(
+                str.maketrans(
+                    "áéíóúü",
+                    "aeiouu",
+                )
+            )
+        )
+
+        # ----------------------------------------------------
+        # ESCAPAR COMODINES DE LIKE
+        # ----------------------------------------------------
+        #
+        # Evita que %, _ o \ escritos por el usuario
+        # cambien accidentalmente la semántica de búsqueda.
+        # ----------------------------------------------------
+
+        texto_busqueda_escapado = (
+            texto_busqueda_normalizado
+            .replace(
+                "\\",
+                "\\\\",
+            )
+            .replace(
+                "%",
+                "\\%",
+            )
+            .replace(
+                "_",
+                "\\_",
+            )
+        )
+
+        # ----------------------------------------------------
+        # NORMALIZAR CONTENIDO DIRECTAMENTE EN POSTGRESQL
+        # ----------------------------------------------------
+        #
+        # translate() es función nativa de PostgreSQL.
+        # No requiere habilitar la extensión unaccent.
+        # ----------------------------------------------------
+
+        contenido_normalizado = (
+            func.translate(
+                func.lower(
+                    Message.content
+                ),
+                "áéíóúü",
+                "aeiouu",
+            )
+        )
+
+        contactos_con_match = (
+            db.query(
+                Message.contact_id
+            )
+            .filter(
+                contenido_normalizado.like(
+                    f"%{texto_busqueda_escapado}%",
+                    escape="\\",
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+
+        query = query.filter(
+            Contact.id.in_(
+                db.query(
+                    contactos_con_match.c.contact_id
+                )
+            )
+        )
+
+    # --------------------------------------------------------
+    # PAGINACIÓN SOBRE EL UNIVERSO COMPLETO DE RESULTADOS
+    # --------------------------------------------------------
+    #
+    # Los filtros se aplican primero sobre toda PostgreSQL.
+    # La paginación sólo limita cuántos registros mostramos
+    # simultáneamente en pantalla.
+    # --------------------------------------------------------
+
+    page = max(
+        1,
+        int(page or 1),
+    )
+
+    limit = max(
+        10,
+        min(
+            int(limit or 50),
+            100,
+        ),
+    )
+
+    total_resultados = query.count()
+
+    total_paginas = max(
+        1,
+        (
+            total_resultados
+            + limit
+            - 1
+        )
+        // limit,
+    )
+
+    if page > total_paginas:
+        page = total_paginas
+
+    offset = (
+        page - 1
+    ) * limit
+
+    contacts = (
+        query
+        .order_by(
+            Contact.last_contact.desc()
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    # --------------------------------------------------------
+    # PREPARAR DATOS DE PRESENTACIÓN
+    # --------------------------------------------------------
+
+    contactos_presentacion = []
+
+    for contact in contacts:
+
+        contexto = (
+            construir_contexto_comercial_desde_contacto(
+                contact
+            )
+        )
+
+        nombre_tutor = str(
+            contexto.get(
+                "nombre_tutor",
+                "",
+            )
+            or ""
+        ).strip()
+
+        alumnos = contexto.get(
+            "alumnos",
+            [],
+        )
+
+        if not isinstance(
+            alumnos,
+            list,
+        ):
+            alumnos = []
+
+        nombres_alumnos = []
+
+        for alumno in alumnos:
+
+            if not isinstance(
+                alumno,
+                dict,
+            ):
+                continue
+
+            nombre = str(
+                alumno.get(
+                    "nombre",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            nivel = str(
+                alumno.get(
+                    "nivel_interes",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            grado = str(
+                alumno.get(
+                    "grado_interes",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            descripcion = nombre
+
+            detalle_academico = " ".join(
+                valor
+                for valor in [
+                    nivel,
+                    grado,
+                ]
+                if valor
+            ).strip()
+
+            if (
+                nombre
+                and detalle_academico
+            ):
+                descripcion = (
+                    f"{nombre} "
+                    f"({detalle_academico})"
+                )
+
+            elif (
+                not nombre
+                and detalle_academico
+            ):
+                descripcion = (
+                    detalle_academico
+                )
+
+            if descripcion:
+                nombres_alumnos.append(
+                    descripcion
+                )
+
+        telefono = str(
+            contact.phone_number
+            or ""
+        ).strip()
+
+        telefono_url = telefono.replace(
+            "+",
+            "%2B",
+        )
+
+        ultima_interaccion = (
+            convertir_a_hora_local(
+                contact.last_contact
+            ).strftime(
+                "%d/%m/%Y %H:%M"
+            )
+            if contact.last_contact
+            else ""
+        )
+
+        contactos_presentacion.append({
+            "id": contact.id,
+            "telefono": telefono,
+            "telefono_url": telefono_url,
+            "status": str(
+                contact.status or ""
+            ),
+            "nombre_tutor": (
+                nombre_tutor
+                or "No identificado"
+            ),
+            "alumnos": (
+                nombres_alumnos
+                or ["No identificado"]
+            ),
+            "ultima_interaccion": (
+                ultima_interaccion
+            ),
+            "total_messages": int(
+                contact.total_messages
+                or 0
+            ),
+        })
+
+    # --------------------------------------------------------
+    # HTML
+    # --------------------------------------------------------
+
+    html_parts = []
+
+    html_parts.append("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Contactos - CRM WhatsApp Cole</title>
+
+        <meta charset="UTF-8">
+
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0"
+        >
+
+        <style>
+
+            * {
+                box-sizing: border-box;
             }
-            for c in contacts
-        ]
-    }
+
+            body {
+                font-family:
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    "Segoe UI",
+                    Roboto,
+                    Arial,
+                    sans-serif;
+
+                margin: 0;
+                background: #f5f5f5;
+                color: #222;
+            }
+
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+
+            .header {
+                background: #25D366;
+                color: white;
+                padding: 22px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+            }
+
+            .header h1 {
+                margin: 0 0 8px 0;
+            }
+
+            .menu {
+                margin-top: 15px;
+            }
+
+            .menu a {
+                color: white;
+                margin-right: 18px;
+            }
+
+            .search-panel {
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                box-shadow:
+                    0 2px 6px
+                    rgba(0,0,0,0.08);
+
+                margin-bottom: 20px;
+            }
+
+            .search-grid {
+                display: grid;
+
+                grid-template-columns:
+                    repeat(
+                        auto-fit,
+                        minmax(260px, 1fr)
+                    );
+
+                gap: 15px;
+            }
+
+            .search-box label {
+                display: block;
+                font-weight: 600;
+                margin-bottom: 7px;
+            }
+
+            .search-row {
+                display: flex;
+                gap: 8px;
+            }
+
+            .search-input {
+                width: 100%;
+                padding: 11px 12px;
+
+                border: 1px solid #ccc;
+                border-radius: 7px;
+
+                font-size: 15px;
+            }
+
+            .search-button {
+                border: none;
+                background: #25D366;
+                color: white;
+
+                padding: 10px 16px;
+                border-radius: 7px;
+
+                font-weight: 600;
+                cursor: pointer;
+            }
+
+            .search-button:hover {
+                background: #128C7E;
+            }
+
+            .clear-link {
+                display: inline-block;
+                margin-top: 15px;
+                color: #128C7E;
+                text-decoration: none;
+                font-weight: 600;
+            }
+
+            .results-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+
+                margin-bottom: 12px;
+            }
+
+            .contact-card {
+                background: white;
+
+                padding: 18px;
+                margin-bottom: 12px;
+
+                border-radius: 10px;
+
+                box-shadow:
+                    0 1px 4px
+                    rgba(0,0,0,0.08);
+
+                display: grid;
+
+                grid-template-columns:
+                    minmax(220px, 1.4fr)
+                    minmax(200px, 1fr)
+                    minmax(160px, 0.8fr)
+                    auto;
+
+                gap: 15px;
+                align-items: center;
+            }
+
+            .contact-name {
+                font-size: 17px;
+                font-weight: 700;
+                margin-bottom: 4px;
+            }
+
+            .student-name {
+                color: #555;
+                margin-top: 3px;
+            }
+
+            .phone {
+                font-weight: 600;
+                font-size: 16px;
+            }
+
+            .status {
+                display: inline-block;
+
+                background: #f0f2f5;
+                border-radius: 20px;
+
+                padding: 6px 10px;
+
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            .secondary {
+                color: #777;
+                font-size: 13px;
+                margin-top: 6px;
+            }
+
+            .conversation-button {
+                display: inline-block;
+
+                background: #25D366;
+                color: white;
+
+                padding: 10px 14px;
+                border-radius: 7px;
+
+                text-decoration: none;
+                font-weight: 600;
+
+                white-space: nowrap;
+            }
+
+            .conversation-button:hover {
+                background: #128C7E;
+            }
+
+            .empty {
+                background: white;
+                padding: 40px;
+
+                border-radius: 10px;
+
+                text-align: center;
+                color: #777;
+            }
+
+            @media (
+                max-width: 850px
+            ) {
+
+                .contact-card {
+                    grid-template-columns: 1fr;
+                }
+
+                .conversation-button {
+                    text-align: center;
+                }
+            }
+
+        </style>
+    </head>
+
+    <body>
+
+        <div class="container">
+
+            <div class="header">
+
+                <h1>
+                    📋 Contactos
+                </h1>
+
+                <div>
+                    Consulta y búsqueda del CRM
+                </div>
+
+                <div class="menu">
+                    <a href="/panel">
+                        🏠 Panel
+                    </a>
+
+                    <a href="/contacts">
+                        📋 Contactos
+                    </a>
+
+                    <a href="/health">
+                        🩺 Health
+                    </a>
+                </div>
+
+            </div>
+    """)
+
+    # --------------------------------------------------------
+    # BUSCADORES
+    # --------------------------------------------------------
+
+    phone_html = escape(
+        phone,
+        quote=True,
+    )
+
+    conversation_text_html = escape(
+        conversation_text,
+        quote=True,
+    )
+
+    html_parts.append(f"""
+        <div class="search-panel">
+
+            <div class="search-grid">
+
+                <div class="search-box">
+
+                    <form
+                        action="/contacts"
+                        method="get"
+                    >
+
+                        <label>
+                            📱 Buscar por número
+                        </label>
+
+                        <div class="search-row">
+
+                            <input
+                                type="text"
+                                name="phone"
+                                value="{phone_html}"
+                                class="search-input"
+                                placeholder="Ej. 713, 292, 553..."
+                            >
+
+                            <button
+                                type="submit"
+                                class="search-button"
+                            >
+                                Buscar
+                            </button>
+
+                        </div>
+
+                    </form>
+
+                </div>
+
+                <div class="search-box">
+
+                    <form
+                        action="/contacts"
+                        method="get"
+                    >
+
+                        <label>
+                            💬 Buscar en conversación
+                        </label>
+
+                        <div class="search-row">
+
+                            <input
+                                type="text"
+                                name="conversation_text"
+                                value="{conversation_text_html}"
+                                class="search-input"
+                                placeholder="Escriba una frase o fragmento..."
+                            >
+
+                            <button
+                                type="submit"
+                                class="search-button"
+                            >
+                                Buscar
+                            </button>
+
+                        </div>
+
+                    </form>
+
+                </div>
+
+            </div>
+
+            <a
+                href="/contacts"
+                class="clear-link"
+            >
+                Limpiar búsqueda
+            </a>
+
+        </div>
+    """)
+
+    # --------------------------------------------------------
+    # RESULTADOS
+    # --------------------------------------------------------
+
+    html_parts.append(f"""
+        <div class="results-header">
+
+            <h2>
+                Resultados
+            </h2>
+
+            <div>
+                {total_resultados}
+                contacto(s)
+                · Página {page} de {total_paginas}
+            </div>
+
+        </div>
+    """)
+
+    if contactos_presentacion:
+
+        for item in contactos_presentacion:
+
+            tutor_html = escape(
+                item["nombre_tutor"]
+            )
+
+            telefono_html = escape(
+                item["telefono"]
+            )
+
+            status_html = escape(
+                item["status"].replace(
+                    "_",
+                    " ",
+                ).title()
+            )
+
+            ultima_html = escape(
+                item[
+                    "ultima_interaccion"
+                ]
+            )
+
+            alumnos_html = "<br>".join(
+                escape(alumno)
+                for alumno
+                in item["alumnos"]
+            )
+
+            html_parts.append(f"""
+                <div class="contact-card">
+
+                    <div>
+
+                        <div class="contact-name">
+                            👤 {tutor_html}
+                        </div>
+
+                        <div class="student-name">
+                            🎓 {alumnos_html}
+                        </div>
+
+                    </div>
+
+                    <div>
+
+                        <div class="phone">
+                            📱 {telefono_html}
+                        </div>
+
+                        <div class="secondary">
+                            {item['total_messages']}
+                            mensajes
+                        </div>
+
+                    </div>
+
+                    <div>
+
+                        <span class="status">
+                            {status_html}
+                        </span>
+
+                        <div class="secondary">
+                            Último contacto:
+                            {ultima_html}
+                        </div>
+
+                    </div>
+
+                    <div>
+
+                        <a
+                            href="/panel/conversations/{item['telefono_url']}"
+                            class="conversation-button"
+                        >
+                            Ver conversación
+                        </a>
+
+                    </div>
+
+                </div>
+            """)
+
+    else:
+
+        html_parts.append("""
+            <div class="empty">
+                No se encontraron contactos
+                con esos criterios.
+            </div>
+        """)
+
+    # --------------------------------------------------------
+    # NAVEGACIÓN ENTRE PÁGINAS
+    # --------------------------------------------------------
+
+    parametros_paginacion = []
+
+    if phone:
+        parametros_paginacion.append(
+            "phone="
+            + quote_plus(phone)
+        )
+
+    if conversation_text:
+        parametros_paginacion.append(
+            "conversation_text="
+            + quote_plus(
+                conversation_text
+            )
+        )
+
+    if status:
+        parametros_paginacion.append(
+            "status="
+            + quote_plus(status)
+        )
+
+    parametros_paginacion.append(
+        f"limit={limit}"
+    )
+
+    query_base = "&".join(
+        parametros_paginacion
+    )
+
+    html_parts.append("""
+        <div
+            style="
+                display:flex;
+                justify-content:center;
+                align-items:center;
+                gap:12px;
+                margin:30px 0;
+            "
+        >
+    """)
+
+    if page > 1:
+
+        html_parts.append(
+            f"""
+            <a
+                href="/contacts?{query_base}&page={page - 1}"
+                class="conversation-button"
+            >
+                ← Anterior
+            </a>
+            """
+        )
+
+    html_parts.append(
+        f"""
+        <span
+            style="
+                background:white;
+                padding:10px 14px;
+                border-radius:7px;
+                color:#555;
+            "
+        >
+            Página {page} de {total_paginas}
+        </span>
+        """
+    )
+
+    if page < total_paginas:
+
+        html_parts.append(
+            f"""
+            <a
+                href="/contacts?{query_base}&page={page + 1}"
+                class="conversation-button"
+            >
+                Siguiente →
+            </a>
+            """
+        )
+
+    html_parts.append("""
+        </div>
+    """)
+
+    html_parts.append("""
+        </div>
+    </body>
+    </html>
+    """)
+
+    return HTMLResponse(
+        content="".join(
+            html_parts
+        )
+    )
+    
 
 def agregar_hito_comercial_contacto(
     contact,
