@@ -20475,27 +20475,34 @@ def procesar_followup_estado_crm(
         db.commit()
         return False
 
-    # F2/F3 respetan horario silencioso.
-    if numero_followup >= 2:
-
-        ahora_local = ahora.astimezone(
-            LOCAL_TZ
-        )
-
-        if (
-            ahora_local.hour
-            < CRM_FOLLOWUP_ACTIVE_START_HOUR
-            or ahora_local.hour
-            >= CRM_FOLLOWUP_ACTIVE_END_HOUR
-        ):
-            estado_crm.next_followup_at = (
-                ajustar_followup_a_horario_activo(
-                    ahora
-                )
+    # --------------------------------------------------------
+    # TODOS LOS FOLLOW-UPS RESPETAN HORARIO SILENCIOSO
+    # --------------------------------------------------------
+    #
+    # Aunque la programación ya intenta colocar F1/F2/F3
+    # dentro de la ventana activa, esta validación funciona
+    # como barrera final en caso de estados históricos,
+    # cambios de horario o seguimientos previamente programados.
+    # --------------------------------------------------------
+    
+    ahora_local = ahora.astimezone(
+        LOCAL_TZ
+    )
+    
+    if (
+        ahora_local.hour
+        < CRM_FOLLOWUP_ACTIVE_START_HOUR
+        or ahora_local.hour
+        >= CRM_FOLLOWUP_ACTIVE_END_HOUR
+    ):
+        estado_crm.next_followup_at = (
+            ajustar_followup_a_horario_activo(
+                ahora
             )
-
-            db.commit()
-            return False
+        )
+    
+        db.commit()
+        return False
 
     # --------------------------------------------------------
     # GENERACIÓN
@@ -21856,12 +21863,18 @@ def sincronizar_crm_desde_transicion(
         ):
             estado.followup_step = 0
 
-            estado.next_followup_at = (
+            candidato_f1 = (
                 ahora
                 + timedelta(
                     minutes=(
                         CRM_FOLLOWUP_INITIAL_MINUTES
                     )
+                )
+            )
+            
+            estado.next_followup_at = (
+                ajustar_followup_a_horario_activo(
+                    candidato_f1
                 )
             )
 
