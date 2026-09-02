@@ -8027,16 +8027,16 @@ def fecha_cita_requiere_confirmacion_calendario(
 
     return False
 
-
-def respuesta_afirmativa_confirmacion_cita(
+def respuesta_afirmativa_breve_contextual(
     mensaje_usuario: str,
 ) -> bool:
     """
-    Detecta respuestas afirmativas simples cuando el bot está
-    esperando que el prospecto confirme una fecha calendario.
+    Detecta respuestas afirmativas breves cuyo significado
+    depende de la pregunta u objetivo comercial pendiente.
 
-    Sólo debe utilizarse cuando el objetivo pendiente sea
-    CONFIRMAR_FECHA_CITA_CALENDARIO.
+    No decide por sí misma qué acción comercial ejecutar.
+    Sólo informa que el mensaje puede representar una
+    confirmación positiva dentro del contexto actual.
     """
 
     texto = normalizar_texto_para_deteccion(
@@ -8050,6 +8050,9 @@ def respuesta_afirmativa_confirmacion_cita(
         "si",
         "si correcto",
         "si es correcto",
+        "si claro",
+        "claro",
+        "claro que si",
         "correcto",
         "correcta",
         "asi es",
@@ -8061,9 +8064,34 @@ def respuesta_afirmativa_confirmacion_cita(
         "esta bien",
         "esta perfecto",
         "perfecto",
+        "excelente",
+        "ok",
+        "okay",
+        "listo",
+        "va",
+        "sale",
+        "me interesa",
+        "si me interesa",
     }
 
     return texto in respuestas_afirmativas
+    
+
+def respuesta_afirmativa_confirmacion_cita(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta una respuesta afirmativa breve cuando el bot está
+    esperando confirmar una fecha calendario.
+
+    La autoridad para interpretar esa afirmación como
+    confirmación de cita sigue dependiendo del objetivo
+    CONFIRMAR_FECHA_CITA_CALENDARIO.
+    """
+
+    return respuesta_afirmativa_breve_contextual(
+        mensaje_usuario
+    )
 
 def respuesta_negativa_confirmacion_cita(
     mensaje_usuario: str,
@@ -9958,10 +9986,20 @@ def aplicar_reglas_negocio_estructuradas(
         "PROPONER_HORA_CITA",
     }
 
+    respuesta_afirmativa_decision_visita = bool(
+        objetivo_confirmacion_cita
+        == "OBTENER_DECISION_VISITA"
+        and respuesta_afirmativa_breve_contextual(
+            mensaje_usuario
+        )
+    )
+
+
     tiene_intencion_cita = bool(
         correccion_cita_pendiente
         or objetivo_confirmacion_cita
         == "OBTENER_ZONA_PARA_CITA"
+        or respuesta_afirmativa_decision_visita
         or analisis_seguro.get(
             "pide_cita"
         )
@@ -23782,6 +23820,60 @@ def evaluar_cortesia_estructurada(
     )
 
     if not es_cortesia:
+        return resultado
+
+    # --------------------------------------------------------
+    # PRIORIDAD DEL OBJETIVO COMERCIAL SOBRE EL CIERRE SOCIAL
+    # --------------------------------------------------------
+    #
+    # Una expresión breve como:
+    #
+    # "Perfecto"
+    # "Ok"
+    # "Claro"
+    # "Va"
+    #
+    # puede ser una cortesía aislada, pero también puede ser
+    # una respuesta afirmativa directa a una pregunta comercial.
+    #
+    # El estado persistido determina cuál interpretación tiene
+    # prioridad. Si existe un objetivo que espera una decisión
+    # y el mensaje es afirmativo, NO debe consumirse aquí como
+    # cierre social.
+    # --------------------------------------------------------
+
+    objetivo_pendiente_actual = ""
+
+    if contact is not None:
+        objetivo_pendiente_actual = str(
+            get_note_value(
+                contact,
+                "OBJETIVO_PENDIENTE",
+            )
+            or ""
+        ).strip().upper()
+
+    objetivos_que_esperan_confirmacion = {
+        "OBTENER_RESPUESTA_METODO",
+        "OBTENER_CONFIRMACION_INTERES",
+        "OBTENER_DECISION_VISITA",
+        "CONFIRMAR_FECHA_CITA_CALENDARIO",
+    }
+
+    if (
+        objetivo_pendiente_actual
+        in objetivos_que_esperan_confirmacion
+        and respuesta_afirmativa_breve_contextual(
+            mensaje_original
+        )
+    ):
+        print(
+            "🎯 CORTESÍA RECLASIFICADA COMO "
+            "RESPUESTA COMERCIAL: "
+            f"objetivo={objetivo_pendiente_actual}, "
+            f"mensaje={mensaje_original!r}"
+        )
+
         return resultado
 
     resultado["es_cortesia"] = True
