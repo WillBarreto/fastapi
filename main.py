@@ -19560,6 +19560,20 @@ class AdminWhatsappState(Base):
         nullable=True,
     )
 
+    # Tarea administrativa actualmente seleccionada.
+    #
+    # La selección vive en PostgreSQL para que no se pierda
+    # durante deployments, reinicios o múltiples workers.
+    selected_task_id = Column(
+        Integer,
+        nullable=True,
+    )
+
+    selected_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -19640,6 +19654,45 @@ def setup_database():
                     "✅ ENUM contact_status_enum "
                     "sincronizado correctamente"
                 )
+
+                # ====================================================
+                # ESTADO PERSISTENTE DEL WHATSAPP ADMINISTRADOR
+                # ====================================================
+                #
+                # create_all() crea tablas nuevas, pero no agrega
+                # columnas nuevas a tablas PostgreSQL existentes.
+                #
+                # Estas columnas sustituyen progresivamente la
+                # dependencia de ADMIN_SELECTED_TASKS en memoria.
+                # ====================================================
+
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE admin_whatsapp_state
+                        ADD COLUMN IF NOT EXISTS
+                        selected_task_id INTEGER
+                        """
+                    )
+                )
+
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE admin_whatsapp_state
+                        ADD COLUMN IF NOT EXISTS
+                        selected_at TIMESTAMPTZ
+                        """
+                    )
+                )
+
+                conn.commit()
+
+                print(
+                    "✅ Estado persistente del WhatsApp admin "
+                    "sincronizado correctamente"
+                )
+
                 
                 # Verificar si existe el enum de message_direction
                 result = conn.execute(text("""
@@ -27490,9 +27543,9 @@ async def whatsapp_webhook(
                 )
 
             if button_payload_limpio == "VER_MENSAJE":
-                ADMIN_SELECTED_TASKS.pop(
-                    normalizar_numero_whatsapp(From),
-                    None,
+                limpiar_seleccion_admin_persistente(
+                    db=db,
+                    from_number=From,
                 )
 
                 tareas_pendientes = (
@@ -27524,9 +27577,11 @@ async def whatsapp_webhook(
                 if len(tareas_pendientes) == 1:
                     tarea = tareas_pendientes[0]
 
-                    ADMIN_SELECTED_TASKS[
-                        normalizar_numero_whatsapp(From)
-                    ] = tarea.id
+                    seleccionar_tarea_admin_persistente(
+                        db=db,
+                        from_number=From,
+                        tarea_id=tarea.id,
+                    )
 
                     contacto_tarea = (
                         db.query(Contact)
@@ -28236,6 +28291,187 @@ def registrar_inbound_admin_whatsapp(
         )
 
         return None
+
+def obtener_estado_admin_whatsapp(
+    db: Session,
+    from_number: str,
+    crear_si_no_existe: bool = True,
+):
+    """
+    Obtiene el estado persistente del canal administrador.
+
+    No actualiza last_inbound_at.
+    Esa responsabilidad continúa perteneciendo a
+    registrar_inbound_admin_whatsapp().
+    """
+
+    admin_number_normalizado = (
+        normalizar_numero_whatsapp(
+            from_number
+        )
+    )
+
+    if not admin_number_normalizado:
+        return None
+
+    estado_admin = (
+        db.query(AdminWhatsappState)
+        .filter(
+            AdminWhatsappState.admin_number
+            == admin_number_normalizado
+        )
+        .first()
+    )
+
+    if (
+        estado_admin is None
+        and crear_si_no_existe
+    ):
+        ahora_utc = datetime.now(
+            timezone.utc
+        )
+
+        estado_admin = AdminWhatsappState(
+            admin_number=admin_number_normalizado,
+            selected_task_id=None,
+            selected_at=None,
+            created_at=ahora_utc,
+            updated_at=ahora_utc,
+        )
+
+        db.add(
+            estado_admin
+        )
+        db.commit()
+        db.refresh(
+            estado_admin
+        )
+
+    return estado_admin
+
+
+def seleccionar_tarea_admin_persistente(
+    db: Session,
+    from_number: str,
+    tarea_id: int,
+):
+    """
+    Selecciona de manera persistente una tarea administrativa.
+    """
+
+    estado_admin = obtener_estado_admin_whatsapp(
+        db=db,
+        from_number=from_number,
+        crear_si_no_existe=True,
+    )
+
+    if estado_admin is None:
+        return False
+
+    estado_admin.selected_task_id = (
+        tarea_id
+    )
+
+    estado_admin.selected_at = (
+        datetime.now(
+            timezone.utc
+        )
+    )
+
+    estado_admin.updated_at = (
+        datetime.now(
+            timezone.utc
+        )
+    )
+
+    db.commit()
+
+    return True
+
+
+def limpiar_seleccion_admin_persistente(
+    db: Session,
+    from_number: str,
+):
+    """
+    Elimina la selección activa del administrador.
+
+    No modifica ni resuelve la propia AdminPendingTask.
+    """
+
+    estado_admin = obtener_estado_admin_whatsapp(
+        db=db,
+        from_number=from_number,
+        crear_si_no_existe=False,
+    )
+
+    if estado_admin is None:
+        return False
+
+    estado_admin.selected_task_id = None
+    estado_admin.selected_at = None
+
+    estado_admin.updated_at = (
+        datetime.now(
+            timezone.utc
+        )
+    )
+
+    db.commit()
+
+    return True
+
+
+def obtener_tarea_admin_seleccionada_persistente(
+    db: Session,
+    from_number: str,
+):
+    """
+    Devuelve únicamente una tarea seleccionada que todavía
+    continúe PENDIENTE.
+
+    Si la selección persistida quedó obsoleta, se limpia
+    automáticamente.
+    """
+
+    estado_admin = obtener_estado_admin_whatsapp(
+        db=db,
+        from_number=from_number,
+        crear_si_no_existe=False,
+    )
+
+    if (
+        estado_admin is None
+        or not estado_admin.selected_task_id
+    ):
+        return None
+
+    tarea = (
+        db.query(AdminPendingTask)
+        .filter(
+            AdminPendingTask.id
+            == estado_admin.selected_task_id,
+            AdminPendingTask.status
+            == "PENDIENTE",
+        )
+        .first()
+    )
+
+    if tarea is not None:
+        return tarea
+
+    # La tarea ya fue resuelta, eliminada o dejó de ser válida.
+    estado_admin.selected_task_id = None
+    estado_admin.selected_at = None
+    estado_admin.updated_at = (
+        datetime.now(
+            timezone.utc
+        )
+    )
+
+    db.commit()
+
+    return None
 
 def admin_whatsapp_tiene_ventana_abierta(
     db: Session,
@@ -32164,119 +32400,211 @@ def procesar_respuesta_admin(db: Session, from_number: str, mensaje_admin: str):
     2. Si el admin responde con un número, selecciona esa tarea.
     3. Si ya hay tarea seleccionada, procesa el siguiente mensaje como respuesta final.
     """
-    admin_key = normalizar_numero_whatsapp(from_number)
-    mensaje_limpio = (mensaje_admin or "").strip()
+    admin_key = normalizar_numero_whatsapp(
+        from_number
+    )
 
-    tareas = obtener_tareas_admin_pendientes(db)
+    mensaje_limpio = str(
+        mensaje_admin or ""
+    ).strip()
+
+    mensaje_admin_normalizado = (
+        normalizar_texto_para_deteccion(
+            mensaje_limpio
+        )
+    )
+
+    tareas = obtener_tareas_admin_pendientes(
+        db
+    )
+
+    # ========================================================
+    # COMANDOS RESERVADOS DEL CANAL ADMINISTRADOR
+    # ========================================================
+    #
+    # Estos comandos constituyen una pequeña API operativa.
+    #
+    # Nunca deben:
+    # - llegar a Gemini;
+    # - interpretarse como instrucciones para un prospecto;
+    # - enviarse a una conversación seleccionada.
+    # ========================================================
+
+    if mensaje_admin_normalizado == "ayuda":
+
+        respuesta_admin = (
+            "Comandos disponibles:\n\n"
+            "pendientes - mostrar conversaciones pendientes\n"
+            "menu - volver al menú de pendientes\n"
+            "cancelar - cancelar la selección actual\n"
+            "ayuda - mostrar esta ayuda\n\n"
+            "Para responder a un prospecto, primero seleccione "
+            "su conversación y después escriba la instrucción."
+        )
+
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            respuesta_admin,
+        )
+
+        print(
+            "ℹ️ Ayuda del canal admin enviada: "
+            f"{resultado}"
+        )
+
+        return {
+            "status": "admin_help_sent"
+        }
+
+    if mensaje_admin_normalizado in {
+        "pendientes",
+        "menu",
+    }:
+
+        limpiar_seleccion_admin_persistente(
+            db=db,
+            from_number=from_number,
+        )
+
+        menu = construir_menu_tareas_pendientes(
+            tareas
+        )
+
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            menu,
+        )
+
+        print(
+            "📋 Comando admin de pendientes: "
+            f"{resultado}"
+        )
+
+        return {
+            "status": "admin_menu_sent"
+        }
+
+    if mensaje_admin_normalizado in {
+        "cancelar",
+        "salir",
+    }:
+
+        limpiar_seleccion_admin_persistente(
+            db=db,
+            from_number=from_number,
+        )
+
+        menu = construir_menu_tareas_pendientes(
+            tareas
+        )
+
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            (
+                "Selección cancelada.\n\n"
+                + menu
+            ),
+        )
+
+        print(
+            "↩️ Selección admin cancelada: "
+            f"{resultado}"
+        )
+
+        return {
+            "status": "admin_selection_cancelled"
+        }
+
+    # ========================================================
+    # RECUPERAR SELECCIÓN PERSISTENTE
+    # ========================================================
+
+    tarea_seleccionada = (
+        obtener_tarea_admin_seleccionada_persistente(
+            db=db,
+            from_number=from_number,
+        )
+    )
+
+    tarea_id_seleccionada = (
+        tarea_seleccionada.id
+        if tarea_seleccionada is not None
+        else None
+    )
+
+    # ========================================================
+    # NO EXISTEN TAREAS
+    # ========================================================
 
     if not tareas:
-        ADMIN_SELECTED_TASKS.pop(admin_key, None)
 
-        respuesta_admin = "No hay conversaciones pendientes de confirmación en este momento."
-        resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
+        limpiar_seleccion_admin_persistente(
+            db=db,
+            from_number=from_number,
+        )
 
-        print(f"📣 Admin sin pendientes: {resultado}")
-        return {"status": "admin_no_pending"}
+        respuesta_admin = (
+            "No hay conversaciones pendientes "
+            "de atención en este momento."
+        )
 
-    # Si el admin escribe "cancelar", salimos de la selección actual.
-    if mensaje_limpio.lower() in ["cancelar", "salir", "menú", "menu"]:
-        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            respuesta_admin,
+        )
 
-        menu = construir_menu_tareas_pendientes(tareas)
-        resultado = enviar_respuesta_twilio(from_number, menu)
+        print(
+            "📣 Admin sin pendientes: "
+            f"{resultado}"
+        )
 
-        print(f"📋 Menú de pendientes enviado al admin: {resultado}")
-        return {"status": "admin_menu_sent"}
+        return {
+            "status": "admin_no_pending"
+        }
 
-    # Si no hay tarea seleccionada todavía, interpretamos el mensaje como selección
-    # o, si sólo hay una tarea pendiente, como respuesta directa.
-    tarea_id_seleccionada = ADMIN_SELECTED_TASKS.get(admin_key)
+    # ========================================================
+    # SIN TAREA SELECCIONADA
+    # ========================================================
+    #
+    # Regla crítica:
+    #
+    # Un texto libre jamás se asigna automáticamente al único
+    # prospecto pendiente.
+    #
+    # Primero debe existir selección explícita.
+    # ========================================================
 
     if not tarea_id_seleccionada:
-        # Si el admin responde con número, selecciona la tarea como antes.
+
         if mensaje_limpio.isdigit():
-            indice = int(mensaje_limpio)
 
-            if 1 <= indice <= len(tareas):
-                tarea = tareas[indice - 1]
-                ADMIN_SELECTED_TASKS[admin_key] = tarea.id
-
-                respuesta_admin = f"""Seleccionaste al prospecto {tarea.prospect_phone}.
-
-Último mensaje del prospecto:
-{tarea.trigger_message or ""}
-
-Ahora escribe la respuesta que deseas enviar.
-La IA la adaptará antes de mandarla.
-
-Para cancelar, escribe:
-cancelar"""
-
-                resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
-
-                print(f"✅ Admin seleccionó tarea {tarea.id}: {resultado}")
-                return {
-                    "status": "admin_task_selected",
-                    "task_id": tarea.id
-                }
-
-            respuesta_admin = f"""La opción {indice} no existe.
-
-{construir_menu_tareas_pendientes(tareas)}"""
-
-            resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
-            return {"status": "admin_invalid_option"}
-
-        # Si solamente existe una tarea pendiente, permitimos respuesta
-        # directa únicamente cuando el mensaje contiene una instrucción
-        # administrativa clara. Saludos o textos ambiguos no se envían
-        # al prospecto.
-
-        if len(tareas) == 1:
-            mensaje_admin_normalizado = normalizar_texto_para_deteccion(
+            indice = int(
                 mensaje_limpio
             )
 
-            mensajes_no_accionables = {
-                "",
-                "hola",
-                "holi",
-                "hello",
-                "buen dia",
-                "buenos dias",
-                "buena tarde",
-                "buenas tardes",
-                "buena noche",
-                "buenas noches",
-                "oye",
-                "ok",
-                "okay",
-                "gracias",
-                "si",
-                "no",
-            }
+            if (
+                1 <= indice <= len(tareas)
+            ):
+                tarea = tareas[
+                    indice - 1
+                ]
 
-            if mensaje_admin_normalizado in mensajes_no_accionables:
-                tarea = tareas[0]
+                seleccionar_tarea_admin_persistente(
+                    db=db,
+                    from_number=from_number,
+                    tarea_id=tarea.id,
+                )
 
-                respuesta_admin = f"""Tiene una conversación pendiente.
-
-Prospecto:
-{tarea.prospect_phone}
-
-Último mensaje:
-{tarea.trigger_message or ""}
-
-Escriba una instrucción clara para responderle.
-
-Ejemplos:
-- Confirmar lunes a las 10:30
-- Proponer martes a las 11:00
-- Indicar que seguimos revisando disponibilidad
-- Rechazar ese horario y ofrecer otra opción
-
-Para ver el menú, escriba:
-menu"""
+                respuesta_admin = (
+                    f"Seleccionaste al prospecto "
+                    f"{tarea.prospect_phone}.\n\n"
+                    "Último mensaje del prospecto:\n"
+                    f"{tarea.trigger_message or ''}\n\n"
+                    "Ahora escribe la instrucción que deseas "
+                    "que el sistema procese para esta conversación.\n\n"
+                    "Para cancelar, escribe:\n"
+                    "cancelar"
+                )
 
                 resultado = enviar_respuesta_twilio(
                     from_number,
@@ -32284,32 +32612,69 @@ menu"""
                 )
 
                 print(
-                    "🛡️ Mensaje administrativo no accionable; "
-                    f"no se respondió al prospecto: {resultado}"
+                    "✅ Admin seleccionó tarea "
+                    f"{tarea.id}: {resultado}"
                 )
 
                 return {
-                    "status": "admin_instruction_required",
+                    "status": (
+                        "admin_task_selected"
+                    ),
                     "task_id": tarea.id,
                 }
 
-            tarea = tareas[0]
-            ADMIN_SELECTED_TASKS[admin_key] = tarea.id
-            tarea_id_seleccionada = tarea.id
-
-            print(
-                "✅ Admin respondió con una instrucción directa; "
-                f"se usará la única tarea pendiente {tarea.id}"
+            respuesta_admin = (
+                f"La opción {indice} no existe.\n\n"
+                + construir_menu_tareas_pendientes(
+                    tareas
+                )
             )
 
+            resultado = enviar_respuesta_twilio(
+                from_number,
+                respuesta_admin,
+            )
 
-        else:
-            # Si hay varias conversaciones pendientes, por seguridad se exige selección.
-            menu = construir_menu_tareas_pendientes(tareas)
-            resultado = enviar_respuesta_twilio(from_number, menu)
+            return {
+                "status": (
+                    "admin_invalid_option"
+                )
+            }
 
-            print(f"📋 Admin escribió sin selección; se envió menú: {resultado}")
-            return {"status": "admin_menu_sent"}
+        # ----------------------------------------------------
+        # TEXTO LIBRE SIN SELECCIÓN
+        # ----------------------------------------------------
+        #
+        # No lo enviamos a ningún prospecto.
+        # No intentamos adivinar la intención.
+        # ----------------------------------------------------
+
+        menu = construir_menu_tareas_pendientes(
+            tareas
+        )
+
+        respuesta_admin = (
+            "Antes de enviar una instrucción necesito saber "
+            "qué conversación desea atender.\n\n"
+            + menu
+        )
+
+        resultado = enviar_respuesta_twilio(
+            from_number,
+            respuesta_admin,
+        )
+
+        print(
+            "🛡️ Instrucción admin sin selección; "
+            "no se envió nada al prospecto: "
+            f"{resultado}"
+        )
+
+        return {
+            "status": (
+                "admin_task_selection_required"
+            )
+        }
 
     # Si ya había tarea seleccionada, ahora sí procesamos el mensaje como respuesta.
     tarea = db.query(AdminPendingTask).filter(
@@ -32318,7 +32683,10 @@ menu"""
     ).first()
 
     if not tarea:
-        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+        limpiar_seleccion_admin_persistente(
+            db=db,
+            from_number=from_number,
+        )
 
         respuesta_admin = """La conversación que habías seleccionado ya no está pendiente.
 
@@ -32334,7 +32702,10 @@ Te muestro nuevamente el menú actualizado:
     contact = db.query(Contact).filter(Contact.id == tarea.contact_id).first()
 
     if not contact:
-        ADMIN_SELECTED_TASKS.pop(admin_key, None)
+        limpiar_seleccion_admin_persistente(
+            db=db,
+            from_number=from_number,
+        )
 
         respuesta_admin = "No encontré el contacto del prospecto pendiente."
         resultado = enviar_respuesta_twilio(from_number, respuesta_admin)
@@ -32350,9 +32721,9 @@ Te muestro nuevamente el menú actualizado:
         db,
         contact.id,
     ):
-        ADMIN_SELECTED_TASKS.pop(
-            admin_key,
-            None,
+        limpiar_seleccion_admin_persistente(
+            db=db,
+            from_number=from_number,
         )
 
         respuesta_admin = (
@@ -33031,7 +33402,10 @@ Te muestro nuevamente el menú actualizado:
 
     db.commit()
     
-    ADMIN_SELECTED_TASKS.pop(admin_key, None)
+    limpiar_seleccion_admin_persistente(
+        db=db,
+        from_number=from_number,
+    )
 
     confirmacion_admin = f"""✅ Mensaje enviado al prospecto {contact.phone_number}.
 
