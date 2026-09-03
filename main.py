@@ -1947,6 +1947,7 @@ class AnalisisMensajeProspecto(BaseModel):
     desistimiento_temporal: bool = False
     asume_cita_confirmada: bool = False
     pregunta_paralela: bool = False
+    cierre_social_sin_accion: bool = False
     reclamo_demora: bool = False
     contexto_cita_pendiente_reconocido: bool = False
     requiere_admin_contextual: bool = False
@@ -2439,6 +2440,11 @@ def normalizar_analisis_mensaje_ia(
         ),
         "pregunta_paralela": normalizar_booleano(
             datos_crudos.get("pregunta_paralela")
+        ),
+        "cierre_social_sin_accion": normalizar_booleano(
+            datos_crudos.get(
+                "cierre_social_sin_accion"
+            )
         ),
         "reclamo_demora": normalizar_booleano(
             datos_crudos.get("reclamo_demora")
@@ -4815,6 +4821,7 @@ def analisis_estructurado_contiene_informacion(
         "desistimiento_temporal",
         "asume_cita_confirmada",
         "pregunta_paralela",
+        "cierre_social_sin_accion",
         "reclamo_demora",
         "contexto_cita_pendiente_reconocido",
         "requiere_admin_contextual",
@@ -5735,8 +5742,38 @@ la visita, por ejemplo:
 - requisitos;
 - cualquier otra duda que pueda responderse sin modificar la cita.
 
-Una pregunta paralela NO significa que la familia haya abandonado
-la cita ni que deba reiniciarse el flujo comercial.
+"cierre_social_sin_accion": true
+cuando el mensaje actual cumple TODAS estas condiciones:
+- únicamente reconoce, agradece, acusa recibo, expresa conformidad
+  social o comunica que la persona queda esperando;
+- no formula una pregunta que deba responderse;
+- no aporta un dato nuevo necesario para el objetivo pendiente;
+- no modifica una fecha, hora, decisión o información previa;
+- no cancela ni pausa el proceso;
+- no solicita una acción nueva;
+- no expresa una objeción, reclamo o cambio de intención.
+
+Interpreta este campo de manera SEMÁNTICA, no por palabras exactas.
+Una expresión de agradecimiento puede formar parte de un mensaje
+sustantivo. En ese caso "cierre_social_sin_accion" debe ser false.
+
+Cuando la conversación esté en ESPERANDO_CONFIRMACION_ADMIN y la
+persona únicamente comunique que queda pendiente, agradezca o acuse
+recibo sin pedir ni modificar nada:
+- "cierre_social_sin_accion": true
+- "relacion_con_objetivo_pendiente": "NO_AFECTA_OBJETIVO"
+
+Si además hace una pregunta informativa, establece:
+- "pregunta_paralela": true
+- "cierre_social_sin_accion": false
+
+Si modifica o cancela la solicitud, utiliza la relación correspondiente
+con el objetivo pendiente y establece:
+- "cierre_social_sin_accion": false
+
+No clasifiques este campo mediante una lista cerrada de expresiones.
+Interpreta el significado integral del mensaje y su relación con el
+contexto anterior.
 
 "reclamo_demora": true
 cuando expresa molestia, preocupación o insistencia por el tiempo
@@ -20425,6 +20462,29 @@ OBJETIVOS_SIN_FOLLOWUP_AUTOMATICO = {
     "ESPERAR_CONFIRMACION_ADMIN",
 }
 
+def objetivo_requiere_accion_prospecto(
+    objetivo: str,
+) -> bool:
+    """
+    Determina quién tiene el siguiente movimiento.
+    Python no interpreta lenguaje natural aquí.
+    Únicamente aplica la autoridad persistida del objetivo.
+    """
+
+    objetivo_normalizado = str(
+        objetivo or ""
+    ).strip().upper()
+
+    if not objetivo_normalizado:
+        return False
+
+    if (
+        objetivo_normalizado
+        in OBJETIVOS_SIN_FOLLOWUP_AUTOMATICO
+    ):
+        return False
+
+    return True
 
 def finalizar_ciclo_followup_sin_respuesta(
     db: Session,
@@ -20432,6 +20492,7 @@ def finalizar_ciclo_followup_sin_respuesta(
 ):
     """
     Termina el ciclo corto después de F3.
+    Una cita ya confirmada conserva su verdad operativa.
     """
 
     ahora = datetime.now(
@@ -20440,6 +20501,32 @@ def finalizar_ciclo_followup_sin_respuesta(
 
     estado_crm.followup_step = 3
     estado_crm.next_followup_at = None
+
+    if (
+        estado_crm.journey_status
+        == "APPOINTMENT_CONFIRMED"
+    ):
+        estado_crm.active_goal_status = "ACTIVE"
+        estado_crm.next_nurturing_at = None
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado_crm,
+            event_type=(
+                "FOLLOWUP_CYCLE_COMPLETED"
+            ),
+            reason=(
+                "Se agotó el ciclo automático de "
+                "seguimiento, pero la cita continúa "
+                "confirmada y existe información "
+                "pendiente del prospecto."
+            ),
+            step_number=3,
+            scheduled_for=None,
+        )
+
+        return
+
     estado_crm.journey_status = "NURTURING"
     estado_crm.active_goal_status = "PAUSED"
 
@@ -20468,6 +20555,7 @@ def finalizar_ciclo_followup_sin_respuesta(
             estado_crm.next_nurturing_at
         ),
     )
+    
 
 
 def programar_siguiente_followup_crm(
@@ -20608,9 +20696,14 @@ def procesar_followup_estado_crm(
     if not estado_crm.automation_enabled:
         return False
 
+    journeys_con_followup_permitido = {
+        "ACTIVE_CONVERSION",
+        "APPOINTMENT_CONFIRMED",
+    }
+
     if (
         estado_crm.journey_status
-        != "ACTIVE_CONVERSION"
+        not in journeys_con_followup_permitido
     ):
         estado_crm.next_followup_at = None
         db.commit()
@@ -20755,8 +20848,15 @@ def procesar_followup_estado_crm(
         or ahora >= expiracion
     ):
         estado_crm.next_followup_at = None
-        estado_crm.journey_status = "NURTURING"
-        estado_crm.active_goal_status = "PAUSED"
+
+        if (
+            estado_crm.journey_status
+            == "APPOINTMENT_CONFIRMED"
+        ):
+            estado_crm.next_nurturing_at = None
+        else:
+            estado_crm.journey_status = "NURTURING"
+            estado_crm.active_goal_status = "PAUSED"
 
         registrar_evento_followup_crm(
             db=db,
@@ -20926,7 +21026,7 @@ def procesar_followup_estado_crm(
         )
         or not estado_crm.automation_enabled
         or estado_crm.journey_status
-        != "ACTIVE_CONVERSION"
+        not in journeys_con_followup_permitido
     ):
         return False
 
@@ -21030,7 +21130,7 @@ def procesar_followup_estado_crm(
             estado_guard is not None
             and estado_guard.automation_enabled
             and estado_guard.journey_status
-            == "ACTIVE_CONVERSION"
+            in journeys_con_followup_permitido
             and estado_guard.active_goal_status
             == "ACTIVE"
             and str(
@@ -21277,8 +21377,12 @@ def procesar_followups_vencidos():
                 ContactFollowUpState.next_followup_at
                 <= ahora,
 
-                ContactFollowUpState.journey_status
-                == "ACTIVE_CONVERSION",
+                ContactFollowUpState.journey_status.in_(
+                    [
+                        "ACTIVE_CONVERSION",
+                        "APPOINTMENT_CONFIRMED",
+                    ]
+                ),
             )
             .order_by(
                 ContactFollowUpState.next_followup_at
@@ -22092,21 +22196,49 @@ def sincronizar_crm_desde_transicion(
             "COMPLETAR_CITA"
         )
 
-        # La cita puede estar confirmada y, al mismo tiempo,
-        # quedar pendiente completar datos de registro.
-        #
-        # No debemos marcar COMPLETAR_CITA como terminado
-        # mientras Python siga esperando esos datos.
-        if objetivo == "OBTENER_DATOS_CITA":
+        if objetivo_requiere_accion_prospecto(
+            objetivo
+        ):
             estado.active_goal_status = "ACTIVE"
+            estado.followup_step = 0
+
+            candidato_f1 = (
+                ahora
+                + timedelta(
+                    minutes=(
+                        CRM_FOLLOWUP_INITIAL_MINUTES
+                    )
+                )
+            )
+
+            estado.next_followup_at = (
+                ajustar_followup_a_horario_activo(
+                    candidato_f1
+                )
+            )
+
+            estado.next_nurturing_at = None
+
+            registrar_evento_followup_crm(
+                db=db,
+                estado_crm=estado,
+                event_type="FOLLOWUP_WINDOW_OPENED",
+                reason=(
+                    "La cita ya está confirmada, pero "
+                    "el siguiente movimiento todavía "
+                    "depende del prospecto."
+                ),
+                step_number=0,
+                scheduled_for=(
+                    estado.next_followup_at
+                ),
+            )
+
         else:
             estado.active_goal_status = "COMPLETED"
-
-        # Una cita ya confirmada nunca genera seguimiento
-        # comercial automático mientras se completa el registro.
-        estado.next_followup_at = None
-        estado.next_nurturing_at = None
-
+            estado.next_followup_at = None
+            estado.next_nurturing_at = None
+            
     # --------------------------------------------------------
     # PAUSA / REGRESO A NURTURING
     # --------------------------------------------------------
@@ -22204,14 +22336,8 @@ def sincronizar_crm_desde_transicion(
         # del prospecto.
         # ----------------------------------------------------
 
-        objetivos_sin_followup_automatico = {
-            "",
-            "ESPERAR_CONFIRMACION_ADMIN",
-        }
-
-        if (
+        if objetivo_requiere_accion_prospecto(
             objetivo
-            not in objetivos_sin_followup_automatico
         ):
             estado.followup_step = 0
 
@@ -26087,12 +26213,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
         ] = contexto_comercial_enriquecido
 
         # ----------------------------------------------------
-        # GUARD: CORTESÍA MIENTRAS LA CITA ESPERA ADMIN
-        # ----------------------------------------------------
-        #
-        # Cuando una visita ya quedó pendiente de confirmación
-        # administrativa, una respuesta breve de cortesía no debe
-        # reactivar el embudo comercial ni generar otra respuesta.
+        # CONTEXTO AUTORITATIVO DE ESPERA ADMINISTRATIVA
         # ----------------------------------------------------
 
         objetivo_pendiente_actual = str(
@@ -26119,32 +26240,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
             or ""
         ).strip().upper()
 
-        mensaje_normalizado_espera = (
-            normalizar_texto_para_deteccion(
-                mensaje
-            )
-        )
-
-        mensajes_cortesia_espera_admin = {
-            "si",
-            "sí",
-            "ok",
-            "okay",
-            "claro",
-            "claro que si",
-            "claro que sí",
-            "gracias",
-            "muchas gracias",
-            "de acuerdo",
-            "esta bien",
-            "está bien",
-            "perfecto",
-            "vale",
-            "entendido",
-            "muy bien",
-            "sale",
-        }
-        cita_esperando_admin = (
+        cita_esperando_admin = bool(
             objetivo_pendiente_actual
             == "ESPERAR_CONFIRMACION_ADMIN"
             or etapa_actual
@@ -26152,46 +26248,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
             or estado_actual
             == "CITA_PENDIENTE_CONFIRMACION"
         )
-
-        if (
-            cita_esperando_admin
-            and mensaje_normalizado_espera
-            in mensajes_cortesia_espera_admin
-        ):
-            print(
-                "⏳ CORTESÍA SUPRIMIDA DURANTE ESPERA ADMIN: "
-                f"{mensaje!r}"
-            )
-
-            resultado_final[
-                "procesado"
-            ] = True
-
-            resultado_final[
-                "mensaje_enviado"
-            ] = False
-
-            resultado_final[
-                "respuesta"
-            ] = ""
-
-            resultado_final[
-                "cortesia_suprimida_espera_admin"
-            ] = True
-
-            resultado_final[
-                "error"
-            ] = ""
-
-            consumir_turno_sin_respuesta(
-                db=db,
-                contact=contact,
-                max_message_id=max_message_id,
-                motivo="CORTESIA_DURANTE_ESPERA_ADMIN",
-            )
-
-            return resultado_final
-
+        
         # ----------------------------------------------------
         # 4. ORQUESTADOR ESTRUCTURADO
         # ----------------------------------------------------
@@ -26218,6 +26275,60 @@ def procesar_mensaje_whatsapp_estructurado_real(
             resultado_final[
                 "error"
             ] = "RESULTADO_ORQUESTADOR_INVALIDO"
+
+            return resultado_final
+
+        # ====================================================
+        # ARBITRAJE SEMÁNTICO DURANTE ESPERA ADMINISTRATIVA
+        # ====================================================
+
+        analisis_turno_actual = (
+            resultado_orquestador.get(
+                "analisis",
+                {},
+            )
+        )
+
+        if not isinstance(
+            analisis_turno_actual,
+            dict,
+        ):
+            analisis_turno_actual = {}
+
+        cierre_social_sin_accion = bool(
+            analisis_turno_actual.get(
+                "cierre_social_sin_accion",
+                False,
+            )
+        )
+
+        if (
+            cita_esperando_admin
+            and cierre_social_sin_accion
+        ):
+            print(
+                "TURNO SOCIAL SIN ACCIÓN DURANTE "
+                "ESPERA ADMIN: "
+                f"contact_id={contact.id}, "
+                f"mensaje={mensaje!r}"
+            )
+
+            consumir_turno_sin_respuesta(
+                db=db,
+                contact=contact,
+                max_message_id=max_message_id,
+                motivo=(
+                    "TURNO_SOCIAL_SIN_ACCION_ESPERA_ADMIN"
+                ),
+            )
+
+            resultado_final.update({
+                "procesado": True,
+                "mensaje_enviado": False,
+                "respuesta": "",
+                "cierre_social_sin_accion": True,
+                "error": "",
+            })
 
             return resultado_final
 
@@ -32304,6 +32415,8 @@ Te muestro nuevamente el menú actualizado:
         != "CITA_PENDIENTE_CONFIRMACION"
     )
 
+    transicion_crm_cita_confirmada = None
+
     mensaje_para_prospecto = redactar_respuesta_admin_para_prospecto(mensaje_limpio, tarea)
 
     # Si el admin está confirmando definitivamente la cita,
@@ -32631,22 +32744,19 @@ Te muestro nuevamente el menú actualizado:
 
             db.commit()
 
-            sincronizar_crm_desde_transicion(
-                db,
-                contact,
-                {
-                    "transicion_aplicada": True,
-                    "etapa_conversacional": (
-                        "VISITA_CONFIRMADA"
-                    ),
-                    "estado_comercial": (
-                        "VISITA_CONFIRMADA"
-                    ),
-                    "objetivo_pendiente": (
-                        "OBTENER_DATOS_CITA"
-                    ),
-                },
-            )
+            transicion_crm_cita_confirmada = {
+                "transicion_aplicada": True,
+                "etapa_conversacional": (
+                    "VISITA_CONFIRMADA"
+                ),
+                "estado_comercial": (
+                    "VISITA_CONFIRMADA"
+                ),
+                "objetivo_pendiente": (
+                    "OBTENER_DATOS_CITA"
+                ),
+            }
+            
 
             mensaje_para_prospecto = (
                 f"{mensaje_para_prospecto.rstrip()}\n\n"
@@ -32670,20 +32780,16 @@ Te muestro nuevamente el menú actualizado:
 
             db.commit()
 
-            sincronizar_crm_desde_transicion(
-                db,
-                contact,
-                {
-                    "transicion_aplicada": True,
-                    "etapa_conversacional": (
-                        "VISITA_CONFIRMADA"
-                    ),
-                    "estado_comercial": (
-                        "VISITA_CONFIRMADA"
-                    ),
-                    "objetivo_pendiente": "",
-                },
-            )
+            transicion_crm_cita_confirmada = {
+                "transicion_aplicada": True,
+                "etapa_conversacional": (
+                    "VISITA_CONFIRMADA"
+                ),
+                "estado_comercial": (
+                    "VISITA_CONFIRMADA"
+                ),
+                "objetivo_pendiente": "",
+            }
 
     print(f"👑 Texto admin original: {repr(mensaje_limpio)}")
     print(f"👑 Mensaje final para prospecto: {repr(mensaje_para_prospecto)}")
@@ -32730,6 +32836,15 @@ Te muestro nuevamente el menú actualizado:
         mensaje_para_prospecto,
         twilio_sid,
     )
+
+    if transicion_crm_cita_confirmada is not None:
+        sincronizar_crm_desde_transicion(
+            db=db,
+            contact=contact,
+            transicion=(
+                transicion_crm_cita_confirmada
+            ),
+        )
 
     if revision_admin_no_cita:
 
