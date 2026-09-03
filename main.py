@@ -9426,6 +9426,37 @@ def aplicar_reglas_negocio_estructuradas(
         clasificacion_edad.get("clasificacion")
         == "PRE_KINDER"
     ):
+        intencion_principal_pre_kinder = str(
+            analisis_seguro.get(
+                "intencion_principal",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        intenciones_secundarias_pre_kinder = {
+            str(item or "").strip().upper()
+            for item in (
+                analisis_seguro.get(
+                    "intenciones_secundarias",
+                    [],
+                )
+                or []
+            )
+            if str(item or "").strip()
+        }
+
+        solicitud_costos_pre_kinder = bool(
+            analisis_seguro.get(
+                "pide_costos",
+                False,
+            )
+            or intencion_principal_pre_kinder
+            == "PEDIR_COSTOS"
+            or "PEDIR_COSTOS"
+            in intenciones_secundarias_pre_kinder
+        )
+
         decision.update({
             "accion": "ORIENTAR_PRE_KINDER",
             "motivo": (
@@ -9435,7 +9466,23 @@ def aplicar_reglas_negocio_estructuradas(
             ),
             "requiere_admin": False,
             "puede_compartir_costos": False,
+            "debe_finalizar_conversacion": False,
         })
+
+        decision["datos_detectados"].update({
+            "nivel": "Kínder",
+            "grado": "Pre-Kínder",
+            "pre_kinder_confirmado": True,
+        })
+
+        if solicitud_costos_pre_kinder:
+            decision["datos_detectados"].update({
+                "objetivo_pendiente_sugerido": (
+                    "OBTENER_ZONA_PARA_COSTOS"
+                ),
+                "registrar_solicitud_costos_inicial": True,
+                "intencion_costos_pendiente": True,
+            })
 
         return decision
 
@@ -9734,9 +9781,19 @@ def aplicar_reglas_negocio_estructuradas(
         return decision
         
     if (
-        analisis_seguro.get("desistimiento_temporal")
-        or analisis_seguro.get("pausa_conversacion")
-        or analisis_seguro.get("intencion_principal")
+        analisis_seguro.get(
+            "cierre_social_sin_accion",
+            False,
+        )
+        or analisis_seguro.get(
+            "desistimiento_temporal"
+        )
+        or analisis_seguro.get(
+            "pausa_conversacion"
+        )
+        or analisis_seguro.get(
+            "intencion_principal"
+        )
         == "PAUSAR_CONVERSACION"
         or detectar_pausa_conversacion_simple(
             mensaje_usuario
@@ -11898,6 +11955,30 @@ def construir_plan_respuesta_estructurada(
             "Distancias, coordenadas, límites internos o cálculos.",
             "Explicaciones sobre reglas internas del sistema.",
             (
+                "Proponer llamadas telefónicas, videollamadas, "
+                "reuniones virtuales, sesiones informativas remotas "
+                "o cualquier modalidad de atención a distancia "
+                "como alternativa a la visita presencial."
+            ),
+            (
+                "Ofrecer enviar videos, infografías, presentaciones, "
+                "folletos, recorridos virtuales, material audiovisual "
+                "o recursos similares como sustituto de una visita "
+                "presencial al campus."
+            ),
+            (
+                "Proponer que la familia conozca primero el colegio "
+                "mediante una llamada, video, videollamada, folleto, "
+                "infografía, presentación, enlace o material remoto."
+            ),
+            (
+                "Presentar varias alternativas de conversión. "
+                "Cuando corresponda avanzar comercialmente, la única "
+                "acción autorizada es invitar a una visita presencial "
+                "al Campus Santa Cruz."
+            ),            
+            
+            (
                 "Repetir innecesariamente el nombre completo "
                 "'Colegio Valle de Filadelfia Campus Santa Cruz "
                 "Atizapán' o 'Campus Santa Cruz Atizapán'. "
@@ -11911,7 +11992,9 @@ def construir_plan_respuesta_estructurada(
             ),
         ],
         "tono": (
-            "Cordial, natural, breve y orientado a admisiones."
+            "Cordial, natural, breve y orientado a admisiones. "
+            "Cuando corresponda avanzar comercialmente, conducir "
+            "exclusivamente hacia una visita presencial al campus."
         ),
         "requiere_admin": bool(
             decision_segura.get(
@@ -12199,8 +12282,10 @@ def construir_plan_respuesta_estructurada(
     if accion == "INVITAR_CITA":
         plan.update({
             "objetivo": (
-                "Invitar a la familia a conocer presencialmente "
-                "el Campus Santa Cruz Atizapán."
+                "Invitar exclusivamente a la familia a realizar "
+                "una visita presencial al Campus Santa Cruz Atizapán. "
+                "No ofrecer ninguna alternativa remota ni material "
+                "sustitutivo de la visita."
             ),
             "debe_incluir": [
                 (
@@ -12220,6 +12305,13 @@ def construir_plan_respuesta_estructurada(
                     "Inventar folletos o enlaces.",
                     "Pedir fecha y hora antes de que la familia acepte.",
                     "Formular más de una pregunta.",
+                    "Ofrecer videos o material audiovisual.",
+                    "Ofrecer infografías o presentaciones.",
+                    "Ofrecer recorridos virtuales.",
+                    (
+                        "Presentar cualquier alternativa distinta "
+                        "de la visita presencial."
+                    ),    
                 ]
             ),
         })
@@ -12692,33 +12784,37 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
-    if accion == "PEDIR_FECHA_NACIMIENTO":
-        plan.update({
-            "objetivo": (
-                "Solicitar la fecha de nacimiento completa del alumno."
-            ),
-            "debe_incluir": [
-                (
-                    "Una pregunta para conocer día, mes y año "
-                    "de nacimiento."
-                ),
-            ],
-        })
-
-        return plan
-
     if accion == "ORIENTAR_PRE_KINDER":
         plan.update({
             "objetivo": (
-                "Explicar con sensibilidad que, por la edad del "
-                "alumno, todavía no corresponde a Kínder."
+                "Explicar brevemente que, por la edad del alumno, "
+                "la opción correspondiente es Pre-Kínder y continuar "
+                "la calificación solicitando la localidad o municipio "
+                "desde donde se comunica la familia."
             ),
             "debe_incluir": [
                 (
-                    "Una explicación amable basada en la edad "
-                    "al inicio del ciclo escolar."
+                    "Una explicación amable y breve de que, por "
+                    "la edad, la opción correspondiente es Pre-Kínder."
+                ),
+                (
+                    "Una sola pregunta para conocer la localidad "
+                    "o municipio desde donde se comunica la familia."
                 ),
             ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Invitar todavía a una visita.",
+                    "Pedir nombre del tutor o del alumno.",
+                    "Pedir nuevamente la fecha de nacimiento.",
+                    "Formular más de una pregunta.",
+                    (
+                        "Inventar un siguiente paso diferente "
+                        "al definido por Python."
+                    ),
+                ]
+            ),
         })
 
         return plan
@@ -13872,9 +13968,10 @@ def generar_respuesta_final_estructurada(
 
         if accion == "ORIENTAR_PRE_KINDER":
             return (
-                "Por la edad del alumno, necesitamos revisar el "
-                "nivel que le correspondería para el próximo ciclo "
-                "escolar."
+                "Por la edad del alumno, la opción correspondiente "
+                "sería nuestra sección de Pre-Kínder. "
+                "Para continuar con la información, ¿de qué localidad "
+                "o municipio se comunica?"
             )
 
         if accion == "RESPONDER_COSTOS":
@@ -14015,6 +14112,54 @@ def generar_respuesta_final_estructurada(
                 respuesta_limpia
             )
         )
+
+        # ====================================================
+        # POLÍTICA COMERCIAL GLOBAL:
+        # CONVERSIÓN EXCLUSIVAMENTE PRESENCIAL
+        # ====================================================
+        #
+        # El bot puede informar y resolver dudas por WhatsApp.
+        #
+        # Sin embargo, cuando propone un siguiente paso
+        # comercial, la única conversión autorizada es una
+        # visita presencial al Campus Santa Cruz.
+        #
+        # No se ofrecen canales remotos ni materiales como
+        # sustitutos de la visita.
+        # ====================================================
+
+        patrones_conversion_no_presencial = [
+            r"\b(?:agendar|programar|coordinar|hacer|realizar)\b"
+            r".{0,50}\b(?:llamada|videollamada|reunion virtual|"
+            r"sesion virtual|sesion informativa remota)\b",
+
+            r"\b(?:podemos|puedo|podria|podriamos)\b"
+            r".{0,40}\b(?:llamarle|llamarte|llamar|marcarle|"
+            r"marcar|videollamada)\b",
+
+            r"\b(?:enviar|compartir|mandar)\b"
+            r".{0,45}\b(?:video|videos|infografia|infografias|"
+            r"folleto|folletos|presentacion|presentaciones|"
+            r"recorrido virtual|material audiovisual)\b",
+
+            r"\b(?:llamada|videollamada|video|infografia|"
+            r"folleto|sesion virtual)\b"
+            r".{0,50}\b(?:o|alternativa|opcion)\b"
+            r".{0,50}\b(?:visita|campus)\b",
+        ]
+
+        if any(
+            re.search(
+                patron,
+                texto_normalizado,
+                flags=re.IGNORECASE,
+            )
+            for patron
+            in patrones_conversion_no_presencial
+        ):
+            errores.append(
+                "CONVERSION_NO_PRESENCIAL_NO_AUTORIZADA"
+            )
 
         # ====================================================
         # VALIDACIÓN GLOBAL DE REFERENCIAS ECONÓMICAS
@@ -14534,6 +14679,27 @@ def generar_respuesta_final_estructurada(
             ):
                 errores.append(
                     "NO_ORIENTA_POR_EDAD"
+                )
+
+            palabras_zona_pre_kinder = [
+                "localidad",
+                "municipio",
+                "zona",
+                "donde",
+            ]
+
+            if not any(
+                palabra in texto_normalizado
+                for palabra
+                in palabras_zona_pre_kinder
+            ):
+                errores.append(
+                    "PRE_KINDER_NO_SOLICITA_ZONA"
+                )
+
+            if "?" not in respuesta_limpia:
+                errores.append(
+                    "PRE_KINDER_NO_CIERRA_CON_PREGUNTA"
                 )
 
         if accion == "RESPONDER_COSTOS":
@@ -16339,6 +16505,7 @@ def calcular_transicion_comercial_post_envio(
         "PEDIR_ZONA",
         "PEDIR_NIVEL_COSTOS",
         "PEDIR_REFERENCIA",
+        "ORIENTAR_PRE_KINDER",
         "PRESENTAR_PROPUESTA_VALOR",
         "EXPLICAR_METODO_FILADELFIA",
         "PREGUNTAR_AREA_INTERES",
@@ -16455,6 +16622,39 @@ def calcular_transicion_comercial_post_envio(
             agregar_hito(
                 "INSISTIO_COSTOS"
             )
+
+    elif accion == "ORIENTAR_PRE_KINDER":
+        transicion.update({
+            "etapa_conversacional": (
+                "VALIDACION_ZONA"
+            ),
+            "estado_comercial": (
+                "EN_CALIFICACION"
+            ),
+            "transicion_aplicable": True,
+            "motivo": (
+                "Se orientó a la familia hacia Pre-Kínder "
+                "y quedó pendiente validar su localidad."
+            ),
+        })
+
+        datos_decision_pre_kinder = (
+            decision.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if isinstance(
+            datos_decision_pre_kinder,
+            dict,
+        ):
+            if datos_decision_pre_kinder.get(
+                "registrar_solicitud_costos_inicial"
+            ):
+                agregar_hito(
+                    "SOLICITO_COSTOS_INICIAL"
+                )
 
     elif accion == "PEDIR_NIVEL_COSTOS":
         transicion.update({
@@ -16813,7 +17013,11 @@ def calcular_transicion_comercial_post_envio(
             "PEDIR_ZONA": (
                 "OBTENER_ZONA"
             ),
-        
+
+            "ORIENTAR_PRE_KINDER": (
+                "OBTENER_ZONA"
+            ),
+
             "PEDIR_REFERENCIA": (
                 "OBTENER_REFERENCIA_COLEGIO"
             ),
