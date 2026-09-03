@@ -1091,6 +1091,7 @@ OBJETIVOS_PENDIENTES_VALIDOS = {
     "CONFIRMAR_FECHA_CITA_CALENDARIO",
     "ESPERAR_CONFIRMACION_ADMIN",
     "OBTENER_DATOS_CITA",
+    "OBTENER_RANGO_PRESUPUESTO",
     "ESPERAR_REACTIVACION_PROSPECTO",
 }
 
@@ -4807,6 +4808,16 @@ def analisis_estructurado_contiene_informacion(
         "requiere_validar_pre_kinder",
         "pide_costos",
         "pide_cita",
+        "seguimiento_cita",
+        "solicitud_confirmacion_cita",
+        "cambio_fecha_cita",
+        "cancelacion_cita",
+        "desistimiento_temporal",
+        "asume_cita_confirmada",
+        "pregunta_paralela",
+        "reclamo_demora",
+        "contexto_cita_pendiente_reconocido",
+        "requiere_admin_contextual",
         "dia_no_laboral",
         "pausa_conversacion",
     ]
@@ -5017,6 +5028,23 @@ determinar el significado del mensaje actual.
                     analisis
                 )
             ):
+
+                print(
+                    "🧪 CONTRATO NORMALIZADO SIN INFORMACIÓN: "
+                    + json.dumps(
+                        analisis,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+
+                print(
+                    "🧪 RESPUESTA CRUDA CONTRATO_VACIO: "
+                    + repr(
+                        texto_respuesta[:1500]
+                    )
+                )
+                
                 error = (
                     f"{modelo_usado}: "
                     f"intento semántico "
@@ -5618,6 +5646,36 @@ anterior relevante para ese objetivo.
 "CANCELA_OBJETIVO"
 cuando el prospecto manifiesta claramente que ya no desea continuar
 con aquello que estaba pendiente.
+
+CASO ESPECIAL DE DIAGNÓSTICO DE PRESUPUESTO:
+
+Si el objetivo pendiente es "OBTENER_RANGO_PRESUPUESTO", significa
+que el asistente acaba de preguntar aproximadamente qué presupuesto
+mensual tenía contemplado la familia.
+
+En ese contexto:
+
+- una cantidad económica;
+- un rango aproximado;
+- una referencia como "alrededor de 3500";
+- una expresión como "entre 3 y 4 mil";
+- una cantidad máxima;
+- o cualquier respuesta que indique cuánto esperaba pagar la familia
+
+debe interpretarse como:
+
+"relacion_con_objetivo_pendiente": "RESPONDE_OBJETIVO"
+
+No lo interpretes automáticamente como una nueva solicitud de costos.
+
+Si la familia modifica una cantidad que ya había indicado, utiliza
+"MODIFICA_OBJETIVO".
+
+Si expresa que ya no quiere continuar con esta revisión, utiliza
+"CANCELA_OBJETIVO".
+
+No inventes una cantidad ni conviertas una respuesta ambigua en un
+presupuesto que la familia no haya expresado.
 
 REGLAS IMPORTANTES:
 
@@ -9516,7 +9574,128 @@ def aplicar_reglas_negocio_estructuradas(
     # 5. PAUSA O CIERRE TEMPORAL
     # ========================================================
 
+    # ========================================================
+    # OBJECIÓN DE PRESUPUESTO:
+    # UN INTENTO DE DIAGNÓSTICO ANTES DE NURTURING
+    # ========================================================
 
+    objetivo_presupuesto_actual = str(
+        contexto_comercial.get(
+            "objetivo_pendiente",
+            "",
+        )
+        if isinstance(
+            contexto_comercial,
+            dict,
+        )
+        else ""
+    ).strip().upper()
+
+    relacion_objetivo_presupuesto = str(
+        analisis_seguro.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
+
+    # --------------------------------------------------------
+    # RESPUESTA AL DIAGNÓSTICO DE PRESUPUESTO
+    # --------------------------------------------------------
+    #
+    # Si previamente preguntamos qué rango mensual contemplaba
+    # la familia, la respuesta actual debe enviarse a revisión
+    # humana. Python no promete becas, descuentos ni beneficios.
+    # --------------------------------------------------------
+
+    if (
+        objetivo_presupuesto_actual
+        == "OBTENER_RANGO_PRESUPUESTO"
+        and relacion_objetivo_presupuesto
+        in {
+            "RESPONDE_OBJETIVO",
+            "MODIFICA_OBJETIVO",
+        }
+    ):
+        decision.update({
+            "accion": "RESPONDER_TEMA",
+            "motivo": (
+                "La familia respondió al diagnóstico de "
+                "presupuesto. Corresponde revisar internamente "
+                "si existe alguna alternativa o beneficio "
+                "realmente aplicable antes de ofrecer algo."
+            ),
+            "requiere_admin": True,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "respuesta_rango_presupuesto": True,
+            "rango_presupuesto_texto": (
+                str(
+                    mensaje_usuario
+                    or ""
+                ).strip()
+            ),
+            "objetivo_pendiente_sugerido": (
+                "ESPERAR_CONFIRMACION_ADMIN"
+            ),
+            "objetivo_retorno_post_admin": (
+                "OBTENER_DECISION_VISITA"
+            ),
+            "tipo_revision_admin": (
+                "PRESUPUESTO"
+            ),
+        })
+
+        return decision
+
+    hitos_actuales = {
+        str(hito or "").strip().upper()
+        for hito in (
+            contexto_comercial.get(
+                "hitos_comerciales",
+                [],
+            )
+            or []
+        )
+    }
+
+    objecion_presupuesto = bool(
+        detectar_objecion_presupuesto(
+            mensaje_usuario
+        )
+        and "RECIBIO_COSTOS" in hitos_actuales
+    )
+
+    if objecion_presupuesto:
+        decision.update({
+            "accion": "RESPONDER_TEMA",
+            "motivo": (
+                "La familia manifestó una objeción explícita "
+                "de presupuesto después de recibir los costos. "
+                "Antes de cerrar la conversación corresponde "
+                "realizar un único diagnóstico del rango "
+                "mensual contemplado."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "objecion_presupuesto": True,
+            "objetivo_retorno": (
+                "OBTENER_DECISION_VISITA"
+            ),
+            "objetivo_pendiente_sugerido": (
+                "OBTENER_RANGO_PRESUPUESTO"
+            ),
+        })
+
+        return decision
+        
     if (
         analisis_seguro.get("desistimiento_temporal")
         or analisis_seguro.get("pausa_conversacion")
@@ -13442,11 +13621,110 @@ def generar_respuesta_final_estructurada(
 
             return resultado
 
+    # ========================================================
+    # RESPUESTAS DETERMINISTAS DE PRESUPUESTO
+    # ========================================================
+
+    datos_decision_presupuesto = (
+        decision_segura.get(
+            "datos_detectados",
+            {},
+        )
+    )
+
+    if not isinstance(
+        datos_decision_presupuesto,
+        dict,
+    ):
+        datos_decision_presupuesto = {}
+
+    # --------------------------------------------------------
+    # 1. LA FAMILIA ACABA DE MANIFESTAR OBJECIÓN DE PRECIO
+    # --------------------------------------------------------
+
+    if (
+        accion == "RESPONDER_TEMA"
+        and bool(
+            datos_decision_presupuesto.get(
+                "objecion_presupuesto",
+                False,
+            )
+        )
+    ):
+        respuesta_objecion = (
+            "Entiendo. Para saber si existe alguna alternativa "
+            "que realmente pueda hacer sentido para su familia, "
+            "¿qué rango mensual tenía contemplado aproximadamente?"
+        )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": respuesta_objecion,
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "DIAGNOSTICO_PRESUPUESTO_DETERMINISTA"
+            ),
+            "error": "",
+        })
+
+        print(
+            "💰 Objeción de presupuesto atendida "
+            "determinísticamente sin Gemini."
+        )
+
+        return resultado
+
+    # --------------------------------------------------------
+    # 2. LA FAMILIA YA RESPONDIÓ SU RANGO DE PRESUPUESTO
+    # --------------------------------------------------------
+
+    if (
+        accion == "RESPONDER_TEMA"
+        and bool(
+            datos_decision_presupuesto.get(
+                "respuesta_rango_presupuesto",
+                False,
+            )
+        )
+    ):
+        respuesta_revision_presupuesto = (
+            "Gracias por compartirme ese rango. "
+            "Permítame revisar si existe alguna alternativa "
+            "o beneficio que realmente pueda ser aplicable "
+            "a su familia. En cuanto lo confirme, le "
+            "respondemos por este mismo medio."
+        )
+
+        resultado.update({
+            "generada": True,
+            "respuesta": (
+                respuesta_revision_presupuesto
+            ),
+            "modelo_usado": "",
+            "intentos": 0,
+            "uso_fallback_seguro": False,
+            "errores_validacion": [],
+            "tipo_respuesta": (
+                "REVISION_PRESUPUESTO_ADMIN_DETERMINISTA"
+            ),
+            "error": "",
+        })
+
+        print(
+            "💰 Rango de presupuesto recibido. "
+            "Se enviará a revisión administrativa."
+        )
+
+        return resultado
+
     api_key = (
         os.getenv("GOOGLE_AI_API_KEY")
         or os.getenv("GEMINI_API_KEY")
     )
-
+    
     if not api_key:
         resultado["error"] = (
             "GOOGLE_AI_API_KEY_NO_CONFIGURADA"
@@ -21181,6 +21459,7 @@ def sincronizar_habilitacion_followup_cohorte():
 def activar_crm_admisiones_si_elegible(
     db: Session,
     contact,
+    mensaje_usuario: str = "",
 ):
     """
     Enrola comercialmente únicamente a contactos que YA poseen
@@ -21286,6 +21565,41 @@ def activar_crm_admisiones_si_elegible(
     # --------------------------------------------------------
 
     if estado.journey_status == "NURTURING":
+
+        # ----------------------------------------------------
+        # UNA CORTESÍA NO REACTIVA EL EMBUDO
+        # ----------------------------------------------------
+        #
+        # "Gracias", "muchas gracias", etc. no representan una
+        # nueva manifestación comercial y no deben:
+        #
+        # - restaurar la posición pre-seguimiento;
+        # - abrir un nuevo conversation_cycle_id;
+        # - cancelar next_nurturing_at.
+        # ----------------------------------------------------
+
+        evaluacion_cortesia_nurturing = (
+            evaluar_cortesia_estructurada(
+                mensaje_usuario=mensaje_usuario,
+                contact=contact,
+            )
+        )
+
+        if bool(
+            evaluacion_cortesia_nurturing.get(
+                "es_cortesia",
+                False,
+            )
+        ):
+            print(
+                "🤫 NURTURING CONSERVADO POR CORTESÍA: "
+                f"contact_id={contact.id}, "
+                f"mensaje={mensaje_usuario!r}, "
+                f"next_nurturing="
+                f"{estado.next_nurturing_at}"
+            )
+
+            return estado
 
         # ====================================================
         # RESTAURAR POSICIÓN PREVIA A UNA PAUSA EXPLÍCITA
@@ -24008,6 +24322,46 @@ def evaluar_cortesia_estructurada(
         )
 
     return resultado
+
+def detectar_objecion_presupuesto(
+    mensaje_usuario: str,
+) -> bool:
+    """
+    Detecta una objeción económica explícita después de que
+    la familia recibió información de colegiatura.
+
+    No decide descuentos, becas ni viabilidad económica.
+    Únicamente identifica que antes de cerrar conviene realizar
+    un diagnóstico comercial de presupuesto.
+    """
+
+    texto = normalizar_texto_para_deteccion(
+        mensaje_usuario
+    )
+
+    if not texto:
+        return False
+
+    expresiones_objecion = [
+        "fuera de mi presupuesto",
+        "fuera de nuestro presupuesto",
+        "se sale de mi presupuesto",
+        "se sale de nuestro presupuesto",
+        "no esta en mi presupuesto",
+        "no esta en nuestro presupuesto",
+        "no me alcanza",
+        "no nos alcanza",
+        "es muy caro",
+        "esta muy caro",
+        "esta muy cara",
+        "no puedo pagarlo",
+        "no podemos pagarlo",
+    ]
+
+    return any(
+        expresion in texto
+        for expresion in expresiones_objecion
+    )
     
 # ============================================================
 # PUENTE PRODUCTIVO DEL NUEVO FLUJO ESTRUCTURADO
@@ -24440,6 +24794,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
             activar_crm_admisiones_si_elegible(
                 db=db,
                 contact=contact,
+                mensaje_usuario=mensaje,
             )
         )
 
@@ -24809,6 +25164,113 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
         if categoria_alcance == "SIN_RUTA_CONFIGURADA":
 
+            # ------------------------------------------------
+            # CORTESÍA POSTERIOR A INTERVENCIÓN ADMIN RESUELTA
+            # ------------------------------------------------
+            #
+            # Si administración ya atendió esta conversación y
+            # posteriormente el prospecto únicamente agradece o
+            # cierra socialmente, NO debemos abrir otra tarea.
+            #
+            # Una nueva solicitud sustantiva sí continuará hacia
+            # la clasificación normal y podrá generar otra tarea.
+            # ------------------------------------------------
+
+            ultima_tarea_admin_resuelta = (
+                db.query(AdminPendingTask)
+                .filter(
+                    AdminPendingTask.contact_id
+                    == contact.id,
+                    AdminPendingTask.status
+                    == "RESUELTA",
+                    AdminPendingTask.resolved_at.isnot(None),
+                    AdminPendingTask.final_response.isnot(None),
+                )
+                .order_by(
+                    AdminPendingTask.resolved_at.desc()
+                )
+                .first()
+            )
+
+            tarea_admin_resuelta_reciente = False
+
+            if (
+                ultima_tarea_admin_resuelta is not None
+                and ultima_tarea_admin_resuelta.resolved_at
+                is not None
+            ):
+                resolved_at = (
+                    ultima_tarea_admin_resuelta.resolved_at
+                )
+
+                if resolved_at.tzinfo is None:
+                    resolved_at = resolved_at.replace(
+                        tzinfo=timezone.utc
+                    )
+
+                tarea_admin_resuelta_reciente = (
+                    datetime.now(timezone.utc)
+                    - resolved_at
+                    <= timedelta(hours=24)
+                )
+
+            if tarea_admin_resuelta_reciente:
+
+                evaluacion_cortesia_post_admin = (
+                    evaluar_cortesia_estructurada(
+                        mensaje_usuario=mensaje,
+                        contact=contact,
+                    )
+                )
+
+                es_cortesia_post_admin = bool(
+                    evaluacion_cortesia_post_admin.get(
+                        "es_cortesia",
+                        False,
+                    )
+                )
+
+                if es_cortesia_post_admin:
+                    print(
+                        "🤫 CORTESÍA POST-ADMIN SUPRIMIDA: "
+                        f"contact_id={contact.id}, "
+                        f"tarea_resuelta="
+                        f"{ultima_tarea_admin_resuelta.id}, "
+                        f"mensaje={mensaje!r}"
+                    )
+
+                    consumir_turno_sin_respuesta(
+                        db=db,
+                        contact=contact,
+                        max_message_id=max_message_id,
+                        motivo=(
+                            "CORTESIA_POST_ADMIN_RESUELTA"
+                        ),
+                    )
+
+                    resultado_final.update({
+                        "procesado": True,
+                        "mensaje_enviado": False,
+                        "respuesta": "",
+                        "twilio_resultado": "",
+                        "twilio_sid": None,
+                        "resultado_orquestador": {
+                            "version": "1.0",
+                            "flujo": "clasificacion_alcance",
+                            "procesado": True,
+                            "ruta": (
+                                "CORTESIA_POST_ADMIN_RESUELTA"
+                            ),
+                            "respuesta_generada": "",
+                            "requiere_admin": False,
+                            "error": "",
+                        },
+                        "cortesia_post_admin_suprimida": True,
+                        "error": "",
+                    })
+
+                    return resultado_final
+                    
             tarea_admin_pendiente_actual = (
                 db.query(AdminPendingTask)
                 .filter(
@@ -26245,7 +26707,52 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # ----------------------------------------------------
         # 8. ESCALACIÓN ADMINISTRATIVA
         # ----------------------------------------------------
-        
+
+        datos_decision_admin = (
+            resultado_orquestador
+            .get(
+                "decision",
+                {},
+            )
+            .get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_decision_admin,
+            dict,
+        ):
+            datos_decision_admin = {}
+
+        if (
+            datos_decision_admin.get(
+                "tipo_revision_admin"
+            )
+            == "PRESUPUESTO"
+        ):
+            set_note_value(
+                contact,
+                "TIPO_REVISION_ADMIN",
+                "PRESUPUESTO",
+            )
+
+            set_note_value(
+                contact,
+                "OBJETIVO_RETORNO_POST_ADMIN",
+                str(
+                    datos_decision_admin.get(
+                        "objetivo_retorno_post_admin",
+                        "OBTENER_DECISION_VISITA",
+                    )
+                    or "OBTENER_DECISION_VISITA"
+                ).strip().upper(),
+            )
+
+            db.commit()
+            
+
         if (
             accion_actual == "CONSULTAR_ADMIN"
             and escalacion_critica_pre_outbound
@@ -32286,30 +32793,116 @@ Te muestro nuevamente el menú actualizado:
                 f"{get_note_value(contact, 'ZONA_INTERES')!r}"
             )
 
-        # La decisión humana ya fue comunicada.
-        # La espera administrativa termina aquí.
+        # ----------------------------------------------------
+        # RESTAURAR OBJETIVO COMERCIAL DESPUÉS DE ADMIN
+        # ----------------------------------------------------
+
+        tipo_revision_admin = str(
+            get_note_value(
+                contact,
+                "TIPO_REVISION_ADMIN",
+            )
+            or ""
+        ).strip().upper()
+
+        objetivo_retorno_post_admin = str(
+            get_note_value(
+                contact,
+                "OBJETIVO_RETORNO_POST_ADMIN",
+            )
+            or ""
+        ).strip().upper()
+
+        if (
+            tipo_revision_admin == "PRESUPUESTO"
+            and objetivo_retorno_post_admin
+            in OBJETIVOS_PENDIENTES_VALIDOS
+        ):
+            objetivo_post_admin = (
+                objetivo_retorno_post_admin
+            )
+        else:
+            objetivo_post_admin = ""
+
         set_note_value(
             contact,
             "OBJETIVO_PENDIENTE",
+            objetivo_post_admin,
+        )
+
+        set_note_value(
+            contact,
+            "TIPO_REVISION_ADMIN",
             "",
         )
 
-        estado_crm_admin = (
-            obtener_estado_followup_crm(
-                db,
-                contact.id,
-            )
+        set_note_value(
+            contact,
+            "OBJETIVO_RETORNO_POST_ADMIN",
+            "",
         )
 
-        if estado_crm_admin is not None:
-            estado_crm_admin.current_objective = ""
-            estado_crm_admin.next_followup_at = None
-            estado_crm_admin.updated_at = (
-                datetime.now(
-                    timezone.utc
+        if objetivo_post_admin:
+
+            etapa_post_admin = str(
+                get_note_value(
+                    contact,
+                    "ETAPA_CONVERSACIONAL",
+                )
+                or ""
+            ).strip().upper()
+
+            estado_comercial_post_admin = str(
+                get_note_value(
+                    contact,
+                    "ESTADO_COMERCIAL",
+                )
+                or ""
+            ).strip().upper()
+
+            transicion_post_admin = {
+                "transicion_aplicada": True,
+                "etapa_conversacional": (
+                    etapa_post_admin
+                ),
+                "estado_comercial": (
+                    estado_comercial_post_admin
+                ),
+                "objetivo_pendiente": (
+                    objetivo_post_admin
+                ),
+            }
+
+            sincronizar_crm_desde_transicion(
+                db=db,
+                contact=contact,
+                transicion=transicion_post_admin,
+            )
+
+            print(
+                "♻️ CRM RESTAURADO POST-ADMIN: "
+                f"contact_id={contact.id}, "
+                f"objetivo={objetivo_post_admin}"
+            )
+
+        else:
+
+            estado_crm_admin = (
+                obtener_estado_followup_crm(
+                    db,
+                    contact.id,
                 )
             )
 
+            if estado_crm_admin is not None:
+                estado_crm_admin.current_objective = ""
+                estado_crm_admin.next_followup_at = None
+                estado_crm_admin.updated_at = (
+                    datetime.now(
+                        timezone.utc
+                    )
+                )
+                
         print(
             "🔓 AUTORIDAD ADMIN RESUELTA: "
             f"contact_id={contact.id}, "
