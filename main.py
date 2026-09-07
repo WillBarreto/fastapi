@@ -784,6 +784,7 @@ ACCIONES_RECOMENDADAS_VALIDAS = {
     "REGISTRAR_DATOS_CITA",
     "CITA_DIA_NO_LABORAL",
     "CITA_FUERA_HORARIO",
+    "CIERRE_COMERCIAL",    
     "SEGUIMIENTO",
     "FALLBACK_CONVERSACIONAL",
     "CONTINUAR_CONVERSACION",
@@ -1601,6 +1602,7 @@ def aplicar_candado_progreso_comercial(
         "REGISTRAR_DATOS_CITA",
         "CITA_DIA_NO_LABORAL",
         "CITA_FUERA_HORARIO",
+        "CIERRE_COMERCIAL",
         "SEGUIMIENTO",
         "RECHAZAR_CAMPUS",
         "ORIENTAR_PRE_KINDER",
@@ -1945,6 +1947,7 @@ class AnalisisMensajeProspecto(BaseModel):
     cambio_fecha_cita: bool = False
     cancelacion_cita: bool = False
     desistimiento_temporal: bool = False
+    cierre_comercial_sin_seguimiento: bool = False
     asume_cita_confirmada: bool = False
     pregunta_paralela: bool = False
     cierre_social_sin_accion: bool = False
@@ -2089,29 +2092,78 @@ def normalizar_analisis_mensaje_ia(
         )
         return base
 
+    # ========================================================
+    # NORMALIZACIÓN CANÓNICA DE INTENCIONES IA
+    # ========================================================
+    #
+    # Gemini puede utilizar ocasionalmente una etiqueta
+    # semánticamente correcta pero distinta del vocabulario
+    # contractual interno.
+    #
+    # Python traduce únicamente aliases conocidos del protocolo.
+    # Esto NO interpreta lenguaje natural ni depende de frases
+    # escritas por el prospecto.
+    # ========================================================
+
+    equivalencias_intenciones_ia = {
+        "PEDIR_INFORMACION": "PEDIR_INFORMES",
+    }
+
     intencion_principal = str(
-        datos_crudos.get("intencion_principal", "OTRO") or "OTRO"
+        datos_crudos.get(
+            "intencion_principal",
+            "OTRO",
+        )
+        or "OTRO"
     ).strip().upper()
 
-    if intencion_principal not in INTENCIONES_PRINCIPALES_VALIDAS:
+    intencion_principal = (
+        equivalencias_intenciones_ia.get(
+            intencion_principal,
+            intencion_principal,
+        )
+    )
+
+    if (
+        intencion_principal
+        not in INTENCIONES_PRINCIPALES_VALIDAS
+    ):
         intencion_principal = "OTRO"
 
-    intenciones_secundarias_crudas = normalizar_lista_textos(
-        datos_crudos.get("intenciones_secundarias")
+    intenciones_secundarias_crudas = (
+        normalizar_lista_textos(
+            datos_crudos.get(
+                "intenciones_secundarias"
+            )
+        )
     )
 
     intenciones_secundarias = []
 
     for intencion in intenciones_secundarias_crudas:
-        intencion_normalizada = intencion.strip().upper()
+
+        intencion_normalizada = str(
+            intencion or ""
+        ).strip().upper()
+
+        intencion_normalizada = (
+            equivalencias_intenciones_ia.get(
+                intencion_normalizada,
+                intencion_normalizada,
+            )
+        )
 
         if (
-            intencion_normalizada in INTENCIONES_PRINCIPALES_VALIDAS
-            and intencion_normalizada != intencion_principal
-            and intencion_normalizada not in intenciones_secundarias
+            intencion_normalizada
+            in INTENCIONES_PRINCIPALES_VALIDAS
+            and intencion_normalizada
+            != intencion_principal
+            and intencion_normalizada
+            not in intenciones_secundarias
         ):
-            intenciones_secundarias.append(intencion_normalizada)
-
+            intenciones_secundarias.append(
+                intencion_normalizada
+            )
     clasificacion_zona = str(
         datos_crudos.get(
             "clasificacion_zona",
@@ -2434,6 +2486,13 @@ def normalizar_analisis_mensaje_ia(
         ),
         "desistimiento_temporal": normalizar_booleano(
             datos_crudos.get("desistimiento_temporal")
+        ),
+        "cierre_comercial_sin_seguimiento": (
+            normalizar_booleano(
+                datos_crudos.get(
+                    "cierre_comercial_sin_seguimiento"
+                )
+            )
         ),
         "asume_cita_confirmada": normalizar_booleano(
             datos_crudos.get("asume_cita_confirmada")
@@ -4819,6 +4878,7 @@ def analisis_estructurado_contiene_informacion(
         "cambio_fecha_cita",
         "cancelacion_cita",
         "desistimiento_temporal",
+        "cierre_comercial_sin_seguimiento",        
         "asume_cita_confirmada",
         "pregunta_paralela",
         "cierre_social_sin_accion",
@@ -4842,6 +4902,43 @@ def analisis_estructurado_contiene_informacion(
         return True
 
     if analisis.get("datos_detectados"):
+        return True
+
+    # ========================================================
+    # RELACIÓN CONTEXTUAL CON EL OBJETIVO PENDIENTE
+    # ========================================================
+    #
+    # Una respuesta breve puede ser semánticamente completa
+    # aunque no contenga por sí misma nombres, fechas, niveles
+    # u otra información explícita.
+    #
+    # Ejemplos:
+    #
+    # Asistente: "¿Conoce el Método Filadelfia?"
+    # Prospecto: "No"
+    #
+    # Asistente: "¿Le gustaría visitar el colegio?"
+    # Prospecto: "Sí"
+    #
+    # Si Gemini determinó de forma estructurada que el mensaje
+    # responde, modifica, cancela o no afecta un objetivo real,
+    # el contrato contiene información contextual útil.
+    # ========================================================
+
+    relacion_objetivo = str(
+        analisis.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
+
+    if relacion_objetivo in {
+        "RESPONDE_OBJETIVO",
+        "NO_AFECTA_OBJETIVO",
+        "MODIFICA_OBJETIVO",
+        "CANCELA_OBJETIVO",
+    }:
         return True
 
     return False
@@ -5600,6 +5697,23 @@ Usa conjuntamente:
 - la fecha y hora de cita recuperadas del contexto;
 - el mensaje actual.
 
+VOCABULARIO CONTRACTUAL OBLIGATORIO:
+
+Utiliza exclusivamente las etiquetas de intención permitidas por el
+contrato proporcionado.
+
+En particular:
+
+- Para una solicitud general de informes o información de nuevo ingreso,
+  utiliza "PEDIR_INFORMES".
+- No utilices "PEDIR_INFORMACION".
+- No inventes variantes, sinónimos ni nuevas etiquetas para
+  "intencion_principal" o "intenciones_secundarias".
+
+Aunque una expresión alternativa pudiera parecer semánticamente
+equivalente, debes utilizar siempre la etiqueta contractual canónica.
+
+
 REGLA CONTEXTUAL ABSOLUTA:
 
 Cuando el mensaje actual sea breve, ambiguo o no tenga significado
@@ -5718,6 +5832,49 @@ cuando manifiesta claramente que quiere cancelar la visita.
 cuando indica que por ahora no asistirá, que retomará después o que
 ya no desea continuar en este momento, sin tratarse necesariamente
 de una cancelación definitiva.
+
+"cierre_comercial_sin_seguimiento": true
+cuando el significado integral del mensaje indica de manera clara que la
+persona NO desea continuar con el proceso comercial y no existe intención
+de retomarlo posteriormente.
+
+Utiliza este campo para cierres comerciales inequívocos, por ejemplo cuando
+semánticamente la persona:
+
+- manifiesta que no está interesada;
+- indica que ya no desea recibir información o continuar;
+- aclara que el contacto fue accidental y que ya no requiere atención;
+- expresa que ya cuenta con la información necesaria y da por terminada
+  la conversación;
+- solicita que no se le dé seguimiento;
+- rechaza continuar con el proceso sin plantearlo como una pausa temporal.
+
+IMPORTANTE:
+
+No clasifiques este campo por palabras exactas.
+
+Distingue estrictamente:
+
+PAUSA TEMPORAL:
+"desistimiento_temporal": true
+"cierre_comercial_sin_seguimiento": false
+
+CIERRE DEFINITIVO:
+"desistimiento_temporal": false
+"cierre_comercial_sin_seguimiento": true
+
+Una expresión como "lo revisaré", "más adelante", "después le aviso",
+"por ahora no" o equivalente debe mantenerse como pausa temporal cuando
+el contexto indique intención razonable de retomarlo.
+
+Una expresión de rechazo definitivo o de ausencia de interés debe marcar
+"cierre_comercial_sin_seguimiento": true.
+
+Cuando "cierre_comercial_sin_seguimiento" sea true:
+- "pausa_conversacion" debe ser false;
+- "desistimiento_temporal" debe ser false;
+- si existe un objetivo pendiente,
+  "relacion_con_objetivo_pendiente" debe ser "CANCELA_OBJETIVO".
 
 "asume_cita_confirmada": true
 cuando la familia habla como si la visita ya estuviera confirmada,
@@ -9779,6 +9936,37 @@ def aplicar_reglas_negocio_estructuradas(
         })
 
         return decision
+
+    # ========================================================
+    # CIERRE COMERCIAL DEFINITIVO
+    # ========================================================
+    #
+    # Una ausencia explícita de interés no es nurturing.
+    # La IA interpreta el significado; Python impone el cierre.
+    # ========================================================
+
+    if analisis_seguro.get(
+        "cierre_comercial_sin_seguimiento",
+        False,
+    ):
+        decision.update({
+            "accion": "CIERRE_COMERCIAL",
+            "motivo": (
+                "El prospecto manifestó de forma inequívoca "
+                "que no desea continuar con el proceso comercial."
+            ),
+            "requiere_admin": False,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": True,
+        })
+
+        decision["datos_detectados"].update({
+            "cierre_comercial_definitivo": True,
+            "cancelar_followup": True,
+            "cancelar_nurturing": True,
+        })
+
+        return decision    
         
     if (
         analisis_seguro.get(
@@ -12819,6 +13007,33 @@ def construir_plan_respuesta_estructurada(
 
         return plan
 
+    if accion == "CIERRE_COMERCIAL":
+        plan.update({
+            "objetivo": (
+                "Cerrar la conversación de manera cordial y definitiva, "
+                "sin intentar reactivar el interés del prospecto."
+            ),
+            "debe_incluir": [
+                (
+                    "Una despedida breve, respetuosa y sin presión "
+                    "comercial."
+                ),
+            ],
+            "no_debe_incluir": (
+                plan["no_debe_incluir"]
+                + [
+                    "Invitar a una visita.",
+                    "Hacer otra pregunta comercial.",
+                    "Decir que se le dará seguimiento.",
+                    "Indicar que volveremos a contactarle.",
+                    "Intentar vencer la objeción o recuperar el interés.",
+                    "Ofrecer promociones, becas o descuentos.",
+                ]
+            ),
+        })
+
+        return plan    
+
     if accion == "SEGUIMIENTO":
         plan.update({
             "objetivo": (
@@ -13959,6 +14174,13 @@ def generar_respuesta_final_estructurada(
                 "Las visitas se realizan de lunes a viernes. "
                 "¿Qué otro día le resultaría conveniente?"
             )
+
+        if accion == "CIERRE_COMERCIAL":
+            return (
+                "Entendido. Muchas gracias por habernos considerado. "
+                "Le deseamos mucho éxito en la decisión que tome "
+                "para la educación de su familia."
+            )        
 
         if accion == "SEGUIMIENTO":
             return (
@@ -16517,6 +16739,7 @@ def calcular_transicion_comercial_post_envio(
         "PEDIR_HORA_CITA",
         "CONFIRMAR_FECHA_CITA",
         "CONSULTAR_ADMIN",
+        "CIERRE_COMERCIAL",        
         "SEGUIMIENTO",
     }
 
@@ -16988,6 +17211,22 @@ def calcular_transicion_comercial_post_envio(
                     "continuar el flujo comercial."
                 ),
             })
+
+    elif accion == "CIERRE_COMERCIAL":
+        transicion.update({
+            "etapa_conversacional": (
+                "SEGUIMIENTO"
+            ),
+            "estado_comercial": (
+                "DESCARTADO"
+            ),
+            "objetivo_pendiente": "",
+            "transicion_aplicable": True,
+            "motivo": (
+                "El prospecto cerró de forma definitiva "
+                "el proceso comercial."
+            ),
+        })
 
     elif accion == "SEGUIMIENTO":
         transicion.update({
@@ -21922,350 +22161,39 @@ def activar_crm_admisiones_si_elegible(
         return estado
 
     # --------------------------------------------------------
-    # REACTIVACIÓN FUTURA DESDE NURTURING
+    # NURTURING:
+    # NO REACTIVAR ANTES DEL ANÁLISIS SEMÁNTICO
+    # --------------------------------------------------------
+    #
+    # Esta función se ejecuta después de la clasificación de
+    # alcance, pero antes de que el análisis estructurado haya
+    # determinado si el inbound representa:
+    #
+    # - interés comercial real;
+    # - una cortesía;
+    # - una pausa;
+    # - o un cierre definitivo.
+    #
+    # Por lo tanto, NUNCA restauramos aquí el embudo.
+    #
+    # Si posteriormente una transición comercial real resulta
+    # aplicable, sincronizar_crm_desde_transicion() reactivará
+    # el journey como ACTIVE_CONVERSION.
     # --------------------------------------------------------
 
     if estado.journey_status == "NURTURING":
 
-        # ----------------------------------------------------
-        # UNA CORTESÍA NO REACTIVA EL EMBUDO
-        # ----------------------------------------------------
-        #
-        # "Gracias", "muchas gracias", etc. no representan una
-        # nueva manifestación comercial y no deben:
-        #
-        # - restaurar la posición pre-seguimiento;
-        # - abrir un nuevo conversation_cycle_id;
-        # - cancelar next_nurturing_at.
-        # ----------------------------------------------------
-
-        evaluacion_cortesia_nurturing = (
-            evaluar_cortesia_estructurada(
-                mensaje_usuario=mensaje_usuario,
-                contact=contact,
-            )
-        )
-
-        if bool(
-            evaluacion_cortesia_nurturing.get(
-                "es_cortesia",
-                False,
-            )
-        ):
-            print(
-                "🤫 NURTURING CONSERVADO POR CORTESÍA: "
-                f"contact_id={contact.id}, "
-                f"mensaje={mensaje_usuario!r}, "
-                f"next_nurturing="
-                f"{estado.next_nurturing_at}"
-            )
-
-            return estado
-
-        # ====================================================
-        # RESTAURAR POSICIÓN PREVIA A UNA PAUSA EXPLÍCITA
-        # ====================================================
-
-        etapa_contacto_actual = str(
-            get_note_value(
-                contact,
-                "ETAPA_CONVERSACIONAL",
-            )
-            or ""
-        ).strip().upper()
-
-        etapa_retorno = str(
-            get_note_value(
-                contact,
-                "ETAPA_ANTES_SEGUIMIENTO",
-            )
-            or ""
-        ).strip().upper()
-
-        estado_retorno = str(
-            get_note_value(
-                contact,
-                "ESTADO_ANTES_SEGUIMIENTO",
-            )
-            or ""
-        ).strip().upper()
-
-        objetivo_retorno = str(
-            get_note_value(
-                contact,
-                "OBJETIVO_ANTES_SEGUIMIENTO",
-            )
-            or ""
-        ).strip().upper()
-
-        restauracion_aplicable = bool(
-            etapa_contacto_actual
-            == "SEGUIMIENTO"
-            and etapa_retorno
-            in ETAPAS_CONVERSACIONALES_VALIDAS
-            and estado_retorno
-            in ESTADOS_COMERCIALES_VALIDOS
-        )
-
-        # ----------------------------------------------------
-        # COMPATIBILIDAD CON PAUSAS ANTERIORES AL SNAPSHOT
-        # ----------------------------------------------------
-        #
-        # Algunos contactos pudieron entrar a SEGUIMIENTO antes
-        # de que existieran ETAPA_ANTES_SEGUIMIENTO,
-        # ESTADO_ANTES_SEGUIMIENTO y
-        # OBJETIVO_ANTES_SEGUIMIENTO.
-        #
-        # En ese caso recuperamos el último punto comercial
-        # autoritativo mediante los hitos ya persistidos.
-        # ----------------------------------------------------
-
-        if (
-            etapa_contacto_actual == "SEGUIMIENTO"
-            and not restauracion_aplicable
-        ):
-            contexto_recuperacion = (
-                construir_contexto_comercial_desde_contacto(
-                    contact
-                )
-            )
-
-            piso_recuperacion = (
-                obtener_piso_progreso_comercial(
-                    contexto_recuperacion
-                )
-            )
-
-            nivel_recuperacion = int(
-                piso_recuperacion.get(
-                    "nivel",
-                    0,
-                )
-                or 0
-            )
-
-            etapa_recuperada = str(
-                piso_recuperacion.get(
-                    "etapa",
-                    "",
-                )
-                or ""
-            ).strip().upper()
-
-            estado_recuperado = str(
-                piso_recuperacion.get(
-                    "estado",
-                    "",
-                )
-                or ""
-            ).strip().upper()
-
-            objetivo_recuperado = str(
-                piso_recuperacion.get(
-                    "objetivo",
-                    "",
-                )
-                or ""
-            ).strip().upper()
-
-            if (
-                nivel_recuperacion > 0
-                and etapa_recuperada
-                in ETAPAS_CONVERSACIONALES_VALIDAS
-                and etapa_recuperada != "SEGUIMIENTO"
-                and estado_recuperado
-                in ESTADOS_COMERCIALES_VALIDOS
-            ):
-                etapa_retorno = etapa_recuperada
-                estado_retorno = estado_recuperado
-                objetivo_retorno = objetivo_recuperado
-
-                restauracion_aplicable = True
-
-                print(
-                    "🧭 POSICIÓN PRE-SEGUIMIENTO "
-                    "RECUPERADA POR HITOS: "
-                    f"contact_id={contact.id}, "
-                    f"piso={piso_recuperacion.get('piso')}, "
-                    f"etapa={etapa_retorno}, "
-                    f"estado={estado_retorno}, "
-                    f"objetivo={objetivo_retorno}"
-                )
-
-        if restauracion_aplicable:
-
-            set_note_value(
-                contact,
-                "ETAPA_CONVERSACIONAL",
-                etapa_retorno,
-            )
-
-            contact.status = estado_retorno
-
-            if (
-                objetivo_retorno
-                in OBJETIVOS_PENDIENTES_VALIDOS
-            ):
-                set_note_value(
-                    contact,
-                    "OBJETIVO_PENDIENTE",
-                    objetivo_retorno,
-                )
-
-            equivalencias_reactivacion_flow = {
-                "CONTACTO_INICIAL": (
-                    "SALUDO_INICIAL"
-                ),
-                "REFERENCIA_COLEGIO": (
-                    "ESPERANDO_REFERENCIA"
-                ),
-                "VALIDACION_ZONA": (
-                    "VALIDACION_ZONA"
-                ),
-                "PRESENTACION_VALOR": (
-                    "PRESENTACION_VALOR"
-                ),
-                "EXPLICACION_METODO": (
-                    "EXPLICACION_METODO"
-                ),
-                "IDENTIFICACION_INTERES": (
-                    "ESPERANDO_AREA_INTERES"
-                ),
-                "PROFUNDIZACION_INTERES": (
-                    "PROFUNDIZACION_INTERES"
-                ),
-                "INVITACION_VISITA": (
-                    "INVITACION_CITA"
-                ),
-                "NEGOCIACION_CITA": (
-                    "ESPERANDO_FECHA_CITA"
-                ),
-                "ESPERANDO_CONFIRMACION_ADMIN": (
-                    "ESPERANDO_CONFIRMACION_ADMIN"
-                ),
-                "ESPERANDO_DATOS_CITA": (
-                    "ESPERANDO_DATOS_CITA"
-                ),
-                "VISITA_CONFIRMADA": (
-                    "CITA_DATOS_COMPLETOS"
-                ),
-            }
-
-            flow_retorno = (
-                equivalencias_reactivacion_flow.get(
-                    etapa_retorno,
-                    get_flow_state(
-                        contact
-                    ),
-                )
-            )
-
-            if (
-                etapa_retorno
-                == "NEGOCIACION_CITA"
-                and objetivo_retorno
-                == "OBTENER_HORA_CITA"
-            ):
-                flow_retorno = (
-                    "ESPERANDO_HORA_CITA"
-                )
-
-            set_flow_state(
-                contact,
-                flow_retorno,
-            )
-
-            estado.current_stage = (
-                etapa_retorno
-            )
-
-            estado.current_commercial_status = (
-                estado_retorno
-            )
-
-            if (
-                objetivo_retorno
-                in OBJETIVOS_PENDIENTES_VALIDOS
-            ):
-                estado.current_objective = (
-                    objetivo_retorno
-                )
-
-            print(
-                "♻️ POSICIÓN PRE-SEGUIMIENTO RESTAURADA: "
-                f"contact_id={contact.id}, "
-                f"etapa={etapa_retorno}, "
-                f"estado={estado_retorno}, "
-                f"objetivo={objetivo_retorno}"
-            )
-
-        estado.journey_status = (
-            "ACTIVE_CONVERSION"
-        )
-
-        estado.conversation_cycle_id = (
-            str(uuid.uuid4())
-        )
-
-        estado.conversation_mode = (
-            "REACTIVACION"
-        )
-
-        objetivo_reactivado = str(
-            estado.current_objective
-            or ""
-        ).strip().upper()
-
-        if objetivo_reactivado in {
-            "OBTENER_FECHA_CITA",
-            "OBTENER_HORA_CITA",
-            "CONFIRMAR_FECHA_CITA_CALENDARIO",
-            "ESPERAR_CONFIRMACION_ADMIN",
-        }:
-            estado.active_goal = (
-                "CONCRETAR_CITA"
-            )
-
-        elif objetivo_reactivado == (
-            "OBTENER_DECISION_VISITA"
-        ):
-            estado.active_goal = (
-                "LOGRAR_DECISION_VISITA"
-            )
-
-        else:
-            estado.active_goal = (
-                "CONDUCIR_A_CITA"
-            )
-
-        estado.active_goal_status = "ACTIVE"
-
-        estado.followup_step = 0
-        estado.next_followup_at = None
-        estado.next_nurturing_at = None
-
-        registrar_evento_followup_crm(
-            db=db,
-            estado_crm=estado,
-            event_type=(
-                "CONVERSATION_CYCLE_REACTIVATED"
-            ),
-            reason=(
-                "Nueva manifestación del prospecto "
-                "durante nurturing."
-            ),
-        )
-
-        db.commit()
-        db.refresh(estado)
-
         print(
-            "♻️ CRM REACTIVADO: "
+            "⏸️ CRM NURTURING CONSERVADO HASTA "
+            "ANÁLISIS SEMÁNTICO: "
             f"contact_id={contact.id}, "
-            f"cycle={estado.conversation_cycle_id}"
+            f"mensaje={mensaje_usuario!r}"
         )
+
+        return estado
 
     return estado
+
 
 
 def actualizar_crm_por_mensaje(
@@ -22434,10 +22362,42 @@ def sincronizar_crm_desde_transicion(
     )
 
     # --------------------------------------------------------
+    # CIERRE COMERCIAL DEFINITIVO
+    # --------------------------------------------------------
+    #
+    # DESCARTADO no es nurturing.
+    # No existe follow-up ni contacto automático futuro.
+    # --------------------------------------------------------
+
+    if estado_comercial == "DESCARTADO":
+
+        estado.journey_status = "CLOSED"
+
+        estado.active_goal = ""
+        estado.active_goal_status = "CLOSED"
+
+        estado.followup_step = 0
+        estado.next_followup_at = None
+
+        estado.nurturing_started_at = None
+        estado.next_nurturing_at = None
+
+        registrar_evento_followup_crm(
+            db=db,
+            estado_crm=estado,
+            event_type="COMMERCIAL_CLOSED",
+            reason=(
+                "El prospecto manifestó que no desea "
+                "continuar con el proceso comercial."
+            ),
+        )
+    
+
+    # --------------------------------------------------------
     # CITA YA CONFIRMADA
     # --------------------------------------------------------
 
-    if (
+    elif (
         etapa == "VISITA_CONFIRMADA"
         or estado_comercial
         in {
