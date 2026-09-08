@@ -1589,6 +1589,44 @@ def aplicar_candado_progreso_comercial(
         }
     )
 
+    # ========================================================
+    # AUTORIDAD PARA DEGRADAR EL ESTADO COMERCIAL
+    # ========================================================
+    #
+    # REGLA MÁXIMA DE CONSERVACIÓN DEL PROGRESO:
+    #
+    # Una decisión que lleve la conversación a SEGUIMIENTO /
+    # NURTURING necesita autoridad explícita de pausa.
+    #
+    # Un turno ambiguo, social, cortés, positivo o que simplemente
+    # NO_AFECTA_OBJETIVO nunca tiene autoridad suficiente para
+    # degradar una conversación activa.
+    # ========================================================
+
+    pausa_comercial_autorizada = bool(
+        datos_decision.get(
+            "pausa_comercial_autorizada",
+            False,
+        )
+        or analisis_seguro.get(
+            "desistimiento_temporal",
+            False,
+        )
+        or analisis_seguro.get(
+            "pausa_conversacion",
+            False,
+        )
+        or intencion_principal
+        == "PAUSAR_CONVERSACION"
+    )
+
+    cierre_social_sin_accion = bool(
+        analisis_seguro.get(
+            "cierre_social_sin_accion",
+            False,
+        )
+    )    
+
     acciones_explicitas_protegidas = {
         "RESPONDER_COSTOS",
         "PEDIR_NIVEL_COSTOS",
@@ -1603,7 +1641,6 @@ def aplicar_candado_progreso_comercial(
         "CITA_DIA_NO_LABORAL",
         "CITA_FUERA_HORARIO",
         "CIERRE_COMERCIAL",
-        "SEGUIMIENTO",
         "RECHAZAR_CAMPUS",
         "ORIENTAR_PRE_KINDER",
         "PEDIR_FECHA_NACIMIENTO",
@@ -1621,6 +1658,94 @@ def aplicar_candado_progreso_comercial(
         "RESPONDER_TEMA",
         "CONTINUAR_CONVERSACION",
     }
+
+    # ========================================================
+    # FUSIBLE DE NO DEGRADACIÓN
+    # ========================================================
+    #
+    # Incluso si una regla anterior o una futura modificación
+    # llegara a proponer SEGUIMIENTO por error, el candado
+    # exige una autorización explícita de pausa antes de
+    # permitir degradar ACTIVE_CONVERSION hacia NURTURING.
+    # ========================================================
+
+    if (
+        accion_original == "SEGUIMIENTO"
+        and not pausa_comercial_autorizada
+    ):
+
+        objetivo_contexto = str(
+            contexto.get(
+                "objetivo_pendiente",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        objetivo_piso = str(
+            piso.get(
+                "objetivo",
+                "",
+            )
+            or ""
+        ).strip().upper()
+
+        objetivo_retorno = (
+            objetivo_contexto
+            if objetivo_contexto
+            and objetivo_contexto
+            != "ESPERAR_REACTIVACION_PROSPECTO"
+            else objetivo_piso
+        )
+
+        decision_segura[
+            "accion"
+        ] = "RESPONDER_TEMA"
+
+        decision_segura[
+            "debe_finalizar_conversacion"
+        ] = False
+
+        decision_segura[
+            "motivo"
+        ] = (
+            "Se bloqueó una degradación comercial hacia "
+            "SEGUIMIENTO porque el turno actual no contiene "
+            "evidencia suficiente de una pausa real."
+        )
+
+        datos_decision.update({
+            "preservar_progreso_comercial": True,
+            "degradacion_comercial_bloqueada": True,
+            "accion_original_bloqueada": (
+                "SEGUIMIENTO"
+            ),
+            "objetivo_retorno": (
+                objetivo_retorno
+            ),
+            "cierre_social_sin_accion": (
+                cierre_social_sin_accion
+            ),
+            "piso_comercial": piso.get(
+                "piso",
+                "",
+            ),
+        })
+
+        print(
+            "🛡️ DEGRADACIÓN COMERCIAL BLOQUEADA: "
+            "propuesta=SEGUIMIENTO, "
+            f"piso={piso.get('piso')}, "
+            f"objetivo={objetivo_retorno or 'SIN_OBJETIVO'}"
+        )
+
+        return decision_segura
+
+    if (
+        accion_original == "SEGUIMIENTO"
+        and pausa_comercial_autorizada
+    ):
+        return decision_segura    
 
     # --------------------------------------------------------
     # PREGUNTA PARALELA:
@@ -9968,33 +10093,59 @@ def aplicar_reglas_negocio_estructuradas(
 
         return decision    
         
-    if (
+    # ========================================================
+    # PAUSA COMERCIAL EXPLÍCITA
+    # ========================================================
+    #
+    # REGLA MÁXIMA DE CONSERVACIÓN:
+    #
+    # Una cortesía, reconocimiento, conformidad social o
+    # comentario que NO modifica el objetivo nunca constituye
+    # por sí mismo una autorización para pausar el embudo.
+    #
+    # SEGUIMIENTO sólo puede activarse cuando existe evidencia
+    # semántica o determinista suficiente de una pausa real.
+    # ========================================================
+
+    pausa_comercial_explicita = bool(
         analisis_seguro.get(
-            "cierre_social_sin_accion",
+            "desistimiento_temporal",
             False,
         )
         or analisis_seguro.get(
-            "desistimiento_temporal"
+            "pausa_conversacion",
+            False,
         )
-        or analisis_seguro.get(
-            "pausa_conversacion"
+        or (
+            str(
+                analisis_seguro.get(
+                    "intencion_principal",
+                    "",
+                )
+                or ""
+            ).strip().upper()
+            == "PAUSAR_CONVERSACION"
         )
-        or analisis_seguro.get(
-            "intencion_principal"
-        )
-        == "PAUSAR_CONVERSACION"
         or detectar_pausa_conversacion_simple(
             mensaje_usuario
         )
-    ):
+    )
+
+    if pausa_comercial_explicita:
+
         decision.update({
             "accion": "SEGUIMIENTO",
             "motivo": (
-                "El prospecto indicó que revisará la "
-                "información o retomará posteriormente."
+                "Existe evidencia explícita de que el prospecto "
+                "desea pausar temporalmente la conversación."
             ),
             "requiere_admin": False,
             "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+
+        decision["datos_detectados"].update({
+            "pausa_comercial_autorizada": True,
         })
 
         return decision
@@ -13253,17 +13404,38 @@ def construir_plan_respuesta_estructurada(
         ):
             debe_incluir_tema.append(
                 (
-                    "Después de responder la duda, retomar "
-                    "de forma breve y natural la posibilidad "
-                    "de visitar el colegio, sin repetir "
-                    "información comercial anterior."
+                    "Después de responder la duda o comentario, "
+                    "retomar de forma breve y natural la posibilidad "
+                    "de visitar presencialmente el colegio, sin "
+                    "repetir información comercial anterior."
                 )
             )
 
+        elif (
+            objetivo_retorno
+            and objetivo_retorno
+            not in {
+                "ESPERAR_CONFIRMACION_ADMIN",
+                "ESPERAR_REACTIVACION_PROSPECTO",
+            }
+        ):
+            debe_incluir_tema.append(
+                (
+                    "Después de responder el comentario actual, "
+                    "continuar naturalmente desde el objetivo "
+                    "pendiente indicado en 'objetivo_retorno'. "
+                    "Formular únicamente la siguiente pregunta "
+                    "necesaria para avanzar ese mismo objetivo, "
+                    "sin reiniciar ni repetir etapas anteriores."
+                )
+            )
         plan.update({
             "objetivo": (
-                "Resolver la consulta actual sin reiniciar "
-                "ni hacer retroceder el embudo comercial."
+                "Resolver la consulta o comentario actual "
+                "preservando el progreso comercial ya alcanzado."
+            ),
+            "objetivo_retorno": (
+                objetivo_retorno
             ),
             "debe_incluir": (
                 debe_incluir_tema
