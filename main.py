@@ -10971,6 +10971,31 @@ def aplicar_reglas_negocio_estructuradas(
         intenciones_secundarias = []
 
     # ========================================================
+    # SOLICITUDES INSTITUCIONALES EXPLÍCITAS DEL TURNO
+    # ========================================================
+    #
+    # Se calculan juntas para no perder consultas combinadas
+    # como: "quiero horarios y costos".
+    # ========================================================
+
+    solicitud_costos_explicita = bool(
+        analisis_seguro.get(
+            "pide_costos",
+            False,
+        )
+        or intencion_principal
+        == "PEDIR_COSTOS"
+        or "PEDIR_COSTOS"
+        in intenciones_secundarias
+    )
+
+    solicitud_horarios_explicita = bool(
+        detectar_solicitud_horarios(
+            mensaje_usuario
+        )
+    )    
+
+    # ========================================================
     # PRIORIDAD: PREGUNTA EXPLÍCITA SOBRE HORARIOS
     # ========================================================
     #
@@ -10979,8 +11004,9 @@ def aplicar_reglas_negocio_estructuradas(
     # referencia, propuesta de valor o área de interés.
     # ========================================================
 
-    if detectar_solicitud_horarios(
-        mensaje_usuario
+    if (
+        solicitud_horarios_explicita
+        and not solicitud_costos_explicita
     ):
 
         niveles_horarios = []
@@ -11180,6 +11206,9 @@ def aplicar_reglas_negocio_estructuradas(
 
                 decision["datos_detectados"].update({
                     "registrar_solicitud_costos_inicial": True,
+                    "horarios_pendientes_por_responder": (
+                        solicitud_horarios_explicita
+                    ),
                     "etapa_secuencial": (
                         "PRESENTACION_VALOR"
                     ),
@@ -11209,6 +11238,9 @@ def aplicar_reglas_negocio_estructuradas(
                     "etapa_secuencial": (
                         "EXPLICACION_METODO"
                     ),
+                    "etapa_secuencial": (
+                        "PRESENTACION_VALOR"
+                    ),                    
                 })
 
                 return decision
@@ -11265,6 +11297,9 @@ def aplicar_reglas_negocio_estructuradas(
                     else ""
                 ),
                 "registrar_solicitud_costos_inicial": True,
+                "incluir_horarios": (
+                    solicitud_horarios_explicita
+                ),                
             })
 
             return decision
@@ -11352,6 +11387,9 @@ def aplicar_reglas_negocio_estructuradas(
                 niveles_costos[0]
                 if len(niveles_costos) == 1
                 else ""
+            ),
+            "incluir_horarios": (
+                solicitud_horarios_explicita
             ),
         })
 
@@ -13759,6 +13797,34 @@ def generar_respuesta_final_estructurada(
             )
         )
 
+        datos_decision_costos = (
+            decision_segura.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_decision_costos,
+            dict,
+        ):
+            datos_decision_costos = {}
+
+        if datos_decision_costos.get(
+            "incluir_horarios",
+            False,
+        ):
+            respuesta_horarios = (
+                construir_respuesta_horarios(
+                    niveles_costos
+                )
+            )
+
+            if respuesta_horarios:
+                partes_respuesta.append(
+                    respuesta_horarios
+                )        
+
         # ----------------------------------------------------
         # ENCUADRE FINAL
         # ----------------------------------------------------
@@ -13778,10 +13844,23 @@ def generar_respuesta_final_estructurada(
             "su familia."
         )
 
-        partes_respuesta.append(
-            "¿Le gustaría agendar una visita y conocer "
-            "más sobre becas y descuentos?"
+        acepto_visita_en_turno = bool(
+            datos_decision_costos.get(
+                "acepto_visita_en_turno",
+                False,
+            )
         )
+
+        if acepto_visita_en_turno:
+            partes_respuesta.append(
+                "Perfecto. Ya que desea conocer el colegio, "
+                "¿qué día le gustaría visitarnos?"
+            )
+        else:
+            partes_respuesta.append(
+                "¿Le gustaría agendar una visita y conocer "
+                "más sobre becas y descuentos?"
+            )
 
         respuesta_costos = "\n\n".join(
             partes_respuesta
