@@ -10995,6 +10995,29 @@ def aplicar_reglas_negocio_estructuradas(
         )
     )    
 
+    objetivo_pendiente_actual = str(
+        contexto_secuencial.get(
+            "objetivo_pendiente",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    acepto_visita_en_turno = bool(
+        objetivo_pendiente_actual
+        == "OBTENER_DECISION_VISITA"
+        and (
+            analisis_seguro.get(
+                "pide_cita",
+                False,
+            )
+            or intencion_principal
+            == "PEDIR_CITA"
+            or "PEDIR_CITA"
+            in intenciones_secundarias
+        )
+    )    
+
     # ========================================================
     # PRIORIDAD: PREGUNTA EXPLÍCITA SOBRE HORARIOS
     # ========================================================
@@ -11083,6 +11106,14 @@ def aplicar_reglas_negocio_estructuradas(
             "niveles_horarios": (
                 niveles_horarios
             ),
+            "acepto_visita_en_turno": (
+                acepto_visita_en_turno
+            ),
+            "objetivo_pendiente_sugerido": (
+                "OBTENER_FECHA_CITA"
+                if acepto_visita_en_turno
+                else ""
+            ),
         })
 
         return decision
@@ -11090,21 +11121,6 @@ def aplicar_reglas_negocio_estructuradas(
     # ========================================================
     # ESTRATEGIA DE SOLICITUD DE COSTOS
     # ========================================================
-
-    objetivo_pendiente_actual = str(
-        contexto_secuencial.get(
-            "objetivo_pendiente",
-            "",
-        )
-        or ""
-    ).strip().upper()
-
-    solicitud_costos_explicita = bool(
-        analisis_seguro.get("pide_costos")
-        or intencion_principal == "PEDIR_COSTOS"
-        or "PEDIR_COSTOS"
-        in intenciones_secundarias
-    )
 
     continuacion_zona_costos = (
         objetivo_pendiente_actual
@@ -11206,7 +11222,7 @@ def aplicar_reglas_negocio_estructuradas(
 
                 decision["datos_detectados"].update({
                     "registrar_solicitud_costos_inicial": True,
-                    "horarios_pendientes_por_responder": (
+                    "incluir_horarios": (
                         solicitud_horarios_explicita
                     ),
                     "etapa_secuencial": (
@@ -11235,14 +11251,14 @@ def aplicar_reglas_negocio_estructuradas(
 
                 decision["datos_detectados"].update({
                     "registrar_solicitud_costos_inicial": True,
+                    "incluir_horarios": (
+                        solicitud_horarios_explicita
+                    ),
                     "etapa_secuencial": (
                         "EXPLICACION_METODO"
                     ),
-                    "etapa_secuencial": (
-                        "PRESENTACION_VALOR"
-                    ),                    
                 })
-
+                
                 return decision
 
             # Si la familia ya recibió valor Y Método,
@@ -11299,7 +11315,15 @@ def aplicar_reglas_negocio_estructuradas(
                 "registrar_solicitud_costos_inicial": True,
                 "incluir_horarios": (
                     solicitud_horarios_explicita
-                ),                
+                ),
+                "acepto_visita_en_turno": (
+                    acepto_visita_en_turno
+                ),
+                "objetivo_pendiente_sugerido": (
+                    "OBTENER_FECHA_CITA"
+                    if acepto_visita_en_turno
+                    else ""
+                ),
             })
 
             return decision
@@ -11390,6 +11414,14 @@ def aplicar_reglas_negocio_estructuradas(
             ),
             "incluir_horarios": (
                 solicitud_horarios_explicita
+            ),
+            "acepto_visita_en_turno": (
+                acepto_visita_en_turno
+            ),
+            "objetivo_pendiente_sugerido": (
+                "OBTENER_FECHA_CITA"
+                if acepto_visita_en_turno
+                else ""
             ),
         })
 
@@ -12378,6 +12410,51 @@ def construir_plan_respuesta_estructurada(
             ),
         })
 
+        datos_decision = (
+            decision_segura.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_decision,
+            dict,
+        ):
+            datos_decision = {}
+
+        if datos_decision.get(
+            "incluir_horarios",
+            False,
+        ):
+            niveles_horarios_plan = (
+                [nivel]
+                if nivel
+                else []
+            )
+
+            horarios_autorizados_texto = (
+                construir_respuesta_horarios(
+                    niveles_horarios_plan
+                )
+            )
+
+            if horarios_autorizados_texto:
+                plan[
+                    "horarios_autorizados_texto"
+                ] = horarios_autorizados_texto
+
+                plan["debe_incluir"].append(
+                    (
+                        "Responder también los horarios solicitados "
+                        "por la familia utilizando exclusivamente el "
+                        "texto contenido en "
+                        "'horarios_autorizados_texto'. "
+                        "No modificar horas, no completar datos y "
+                        "no inventar horarios."
+                    )
+                )     
+
         return plan
 
     if accion == "EXPLICAR_METODO_FILADELFIA":
@@ -12445,6 +12522,51 @@ def construir_plan_respuesta_estructurada(
                 ]
             ),
         })
+
+        datos_decision = (
+            decision_segura.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_decision,
+            dict,
+        ):
+            datos_decision = {}
+
+        if datos_decision.get(
+            "incluir_horarios",
+            False,
+        ):
+            niveles_horarios_plan = (
+                [nivel]
+                if nivel
+                else []
+            )
+
+            horarios_autorizados_texto = (
+                construir_respuesta_horarios(
+                    niveles_horarios_plan
+                )
+            )
+
+            if horarios_autorizados_texto:
+                plan[
+                    "horarios_autorizados_texto"
+                ] = horarios_autorizados_texto
+
+                plan["debe_incluir"].append(
+                    (
+                        "Responder también los horarios solicitados "
+                        "por la familia utilizando exclusivamente el "
+                        "texto contenido en "
+                        "'horarios_autorizados_texto'. "
+                        "No modificar horas, no completar datos y "
+                        "no inventar horarios."
+                    )
+                )       
 
         return plan
         
@@ -13450,6 +13572,21 @@ def generar_respuesta_final_estructurada(
             })
 
             return resultado
+
+        acepto_visita_en_turno = bool(
+            datos_decision.get(
+                "acepto_visita_en_turno",
+                False,
+            )
+        )
+
+        if acepto_visita_en_turno:
+            respuesta_horarios = (
+                respuesta_horarios
+                + "\n\n"
+                + "Perfecto. Ya que desea conocer el colegio, "
+                "¿qué día le gustaría visitarnos?"
+            )        
 
         resultado.update({
             "generada": True,
@@ -17074,15 +17211,59 @@ def calcular_transicion_comercial_post_envio(
         })
 
     elif accion == "RESPONDER_HORARIOS":
-        transicion.update({
-            "transicion_aplicable": False,
-            "motivo": (
-                "Se respondió una pregunta institucional "
-                "sobre horarios sin alterar la etapa "
-                "comercial pendiente."
-            ),
-        })
 
+        datos_decision_horarios = decision.get(
+            "datos_detectados",
+            {},
+        )
+
+        if not isinstance(
+            datos_decision_horarios,
+            dict,
+        ):
+            datos_decision_horarios = {}
+
+        acepto_visita_en_turno = bool(
+            datos_decision_horarios.get(
+                "acepto_visita_en_turno",
+                False,
+            )
+        )
+
+        if acepto_visita_en_turno:
+
+            agregar_hito(
+                "ACEPTO_VISITA"
+            )
+
+            transicion.update({
+                "etapa_conversacional": (
+                    "NEGOCIACION_CITA"
+                ),
+                "estado_comercial": (
+                    "PENDIENTE_DE_AGENDAR"
+                ),
+                "objetivo_pendiente": (
+                    "OBTENER_FECHA_CITA"
+                ),
+                "transicion_aplicable": True,
+                "motivo": (
+                    "Se respondieron los horarios y se conservó "
+                    "la aceptación explícita de la visita."
+                ),
+            })
+
+        else:
+
+            transicion.update({
+                "transicion_aplicable": False,
+                "motivo": (
+                    "Se respondió una pregunta institucional "
+                    "sobre horarios sin alterar la etapa "
+                    "comercial pendiente."
+                ),
+            })
+            
     elif accion == "PROFUNDIZAR_AREA_INTERES":
         transicion.update({
             "etapa_conversacional": (
@@ -17129,32 +17310,94 @@ def calcular_transicion_comercial_post_envio(
         })
 
     elif accion == "RESPONDER_COSTOS":
-        transicion.update({
-            "etapa_conversacional": (
-                "INVITACION_VISITA"
-            ),
-            "estado_comercial": (
-                "COSTOS_PRESENTADOS"
-            ),
-            "transicion_aplicable": True,
-            "motivo": (
-                "Se compartieron los costos solicitados "
-                "y quedó pendiente la decisión de visita "
-                "de la familia."
-            ),
-        })
-        
+
         datos_decision_costos = decision.get(
             "datos_detectados",
             {},
         )
 
-        solicitud_inicial = bool(
-            isinstance(
-                datos_decision_costos,
-                dict,
+        if not isinstance(
+            datos_decision_costos,
+            dict,
+        ):
+            datos_decision_costos = {}
+
+        acepto_visita_en_turno = bool(
+            datos_decision_costos.get(
+                "acepto_visita_en_turno",
+                False,
             )
-            and datos_decision_costos.get(
+        )
+
+        visita_ya_en_proceso = bool(
+            "ACEPTO_VISITA"
+            in transicion["hitos_comerciales"]
+            or objetivo_actual
+            in {
+                "OBTENER_FECHA_CITA",
+                "OBTENER_HORA_CITA",
+                "CONFIRMAR_FECHA_CITA_CALENDARIO",
+                "ESPERAR_CONFIRMACION_ADMIN",
+            }
+        )
+
+        if acepto_visita_en_turno:
+
+            agregar_hito(
+                "ACEPTO_VISITA"
+            )
+
+            transicion.update({
+                "etapa_conversacional": (
+                    "NEGOCIACION_CITA"
+                ),
+                "estado_comercial": (
+                    "PENDIENTE_DE_AGENDAR"
+                ),
+                "objetivo_pendiente": (
+                    "OBTENER_FECHA_CITA"
+                ),
+                "transicion_aplicable": True,
+                "motivo": (
+                    "Se compartieron los costos solicitados "
+                    "y se preservó la aceptación explícita "
+                    "de la visita presencial."
+                ),
+            })
+
+        elif visita_ya_en_proceso:
+
+            transicion.update({
+                "etapa_conversacional": etapa_actual,
+                "estado_comercial": estado_actual,
+                "objetivo_pendiente": objetivo_actual,
+                "transicion_aplicable": True,
+                "motivo": (
+                    "Se compartieron los costos solicitados "
+                    "sin alterar una visita ya aceptada o "
+                    "una cita que se encuentra en proceso."
+                ),
+            })
+
+        else:
+
+            transicion.update({
+                "etapa_conversacional": (
+                    "INVITACION_VISITA"
+                ),
+                "estado_comercial": (
+                    "COSTOS_PRESENTADOS"
+                ),
+                "transicion_aplicable": True,
+                "motivo": (
+                    "Se compartieron los costos solicitados "
+                    "y quedó pendiente la decisión de visita "
+                    "de la familia."
+                ),
+            })
+
+        solicitud_inicial = bool(
+            datos_decision_costos.get(
                 "registrar_solicitud_costos_inicial"
             )
         )
@@ -17174,8 +17417,7 @@ def calcular_transicion_comercial_post_envio(
 
         agregar_hito(
             "RECIBIO_OPCIONES_PAGO"
-        )
-        
+        )        
     elif accion == "INVITAR_CITA":
         transicion.update({
             "etapa_conversacional": (
@@ -17417,20 +17659,31 @@ def calcular_transicion_comercial_post_envio(
                 "objetivo_pendiente"
             ] = objetivo_pendiente_sugerido
 
+        elif (
+            accion == "RESPONDER_TEMA"
+            or (
+                accion == "RESPONDER_COSTOS"
+                and objetivo_actual
+                in {
+                    "OBTENER_FECHA_CITA",
+                    "OBTENER_HORA_CITA",
+                    "CONFIRMAR_FECHA_CITA_CALENDARIO",
+                    "ESPERAR_CONFIRMACION_ADMIN",
+                }
+            )
+        ):
+            transicion[
+                "objetivo_pendiente"
+            ] = objetivo_actual
+
         else:
-            if accion == "RESPONDER_TEMA":
-                transicion[
-                    "objetivo_pendiente"
-                ] = objetivo_actual
-
-            else:
-                transicion[
-                    "objetivo_pendiente"
-                ] = objetivos_por_accion.get(
-                    accion,
-                    "",
-                )
-
+            transicion[
+                "objetivo_pendiente"
+            ] = objetivos_por_accion.get(
+                accion,
+                "",
+            )
+            
     # ========================================================
     # VALIDACIÓN FINAL
     # ========================================================
