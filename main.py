@@ -1745,6 +1745,28 @@ def aplicar_candado_progreso_comercial(
         accion_original == "SEGUIMIENTO"
         and pausa_comercial_autorizada
     ):
+        return decision_segura
+
+    # ========================================================
+    # RESPUESTA QUE CONSUME EL OBJETIVO DE ÁREA DE INTERÉS
+    # ========================================================
+    #
+    # La protección de consultas paralelas no debe impedir un
+    # avance legítimo cuando el prospecto acaba de responder
+    # exactamente OBTENER_AREA_INTERES.
+    #
+    # No se modifica la arquitectura general de paralelos.
+    # Sólo se concede prioridad a una relación semántica
+    # RESPONDE_OBJETIVO cuando la acción resultante es la
+    # profundización ya prevista por el embudo.
+    # ========================================================
+
+    if (
+        accion_original
+        == "PROFUNDIZAR_AREA_INTERES"
+        and relacion_objetivo
+        == "RESPONDE_OBJETIVO"
+    ):
         return decision_segura    
 
     # --------------------------------------------------------
@@ -10606,13 +10628,44 @@ def aplicar_reglas_negocio_estructuradas(
         )
     )
 
+    relacion_objetivo_cita = str(
+        analisis_seguro.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
 
-    tiene_intencion_cita = bool(
-        correccion_cita_pendiente
-        or objetivo_confirmacion_cita
-        == "OBTENER_ZONA_PARA_CITA"
-        or respuesta_afirmativa_decision_visita
-        or analisis_seguro.get(
+    fecha_cita_explicita = bool(
+        str(
+            analisis_seguro.get(
+                "fecha_cita_iso",
+                "",
+            )
+            or analisis_seguro.get(
+                "fecha_cita_texto",
+                "",
+            )
+            or ""
+        ).strip()
+    )
+
+    hora_cita_explicita = bool(
+        str(
+            analisis_seguro.get(
+                "hora_cita_24h",
+                "",
+            )
+            or analisis_seguro.get(
+                "hora_cita_texto",
+                "",
+            )
+            or ""
+        ).strip()
+    )
+
+    senal_cita_semantica = bool(
+        analisis_seguro.get(
             "pide_cita"
         )
         or analisis_seguro.get(
@@ -10627,9 +10680,36 @@ def aplicar_reglas_negocio_estructuradas(
         )
     )
 
+    cita_ambigua_no_consumidora = bool(
+        objetivo_confirmacion_cita
+        == "OBTENER_DECISION_VISITA"
+        and relacion_objetivo_cita
+        == "NO_AFECTA_OBJETIVO"
+        and not respuesta_afirmativa_decision_visita
+        and not fecha_cita_explicita
+        and not hora_cita_explicita
+        and not correccion_cita_pendiente
+    )
+
+    tiene_intencion_cita = bool(
+        correccion_cita_pendiente
+        or objetivo_confirmacion_cita
+        == "OBTENER_ZONA_PARA_CITA"
+        or respuesta_afirmativa_decision_visita
+        or (
+            senal_cita_semantica
+            and not cita_ambigua_no_consumidora
+        )
+    )
+
+    if cita_ambigua_no_consumidora:
+        print(
+            "🛡️ AVANCE A CITA BLOQUEADO POR AMBIGÜEDAD: "
+            "objetivo=OBTENER_DECISION_VISITA, "
+            f"relacion={relacion_objetivo_cita}"
+        )
 
     if tiene_intencion_cita:
-
         # ----------------------------------------------------
         # LA ZONA SIGUE SIENDO VALIDACIÓN CRÍTICA
         # ----------------------------------------------------
@@ -11154,20 +11234,81 @@ def aplicar_reglas_negocio_estructuradas(
         or ""
     ).strip().upper()
 
+    # ========================================================
+    # CONSUMO DEL OBJETIVO DE ÁREA DE INTERÉS EN EL MISMO TURNO
+    # ========================================================
+    #
+    # Una respuesta temática puede ser precisamente la respuesta
+    # al objetivo pendiente. No debe tratarse automáticamente como
+    # una consulta lateral sólo porque exista tema_interes.
+    #
+    # Ejemplo:
+    # objetivo = OBTENER_AREA_INTERES
+    # prospecto = "los idiomas"
+    #
+    # Gemini determina la relación semántica; Python conserva
+    # esa respuesta como hecho del turno para que el embudo pueda
+    # continuar sin obligar al prospecto a repetirla.
+    # ========================================================
+
+    relacion_objetivo_actual = str(
+        analisis_seguro.get(
+            "relacion_con_objetivo_pendiente",
+            "SIN_OBJETIVO",
+        )
+        or "SIN_OBJETIVO"
+    ).strip().upper()
+
+    tema_interes_turno = str(
+        analisis_seguro.get(
+            "tema_interes",
+            "",
+        )
+        or ""
+    ).strip()
+
+    area_interes_respondida_en_turno = bool(
+        objetivo_pendiente_actual
+        == "OBTENER_AREA_INTERES"
+        and relacion_objetivo_actual
+        == "RESPONDE_OBJETIVO"
+        and tema_interes_turno
+    )
+
+    if area_interes_respondida_en_turno:
+
+        if (
+            tema_interes_turno
+            not in areas_interes_previas
+        ):
+            areas_interes_previas.append(
+                tema_interes_turno
+            )
+
+        decision["datos_detectados"].update({
+            "area_interes_confirmada_en_turno": (
+                tema_interes_turno
+            ),
+        })    
+
     acepto_visita_en_turno = bool(
         objetivo_pendiente_actual
         == "OBTENER_DECISION_VISITA"
+        and not cita_ambigua_no_consumidora
         and (
-            analisis_seguro.get(
-                "pide_cita",
-                False,
+            respuesta_afirmativa_decision_visita
+            or fecha_cita_explicita
+            or hora_cita_explicita
+            or (
+                senal_cita_semantica
+                and relacion_objetivo_cita
+                in {
+                    "RESPONDE_OBJETIVO",
+                    "MODIFICA_OBJETIVO",
+                }
             )
-            or intencion_principal
-            == "PEDIR_CITA"
-            or "PEDIR_CITA"
-            in intenciones_secundarias
         )
-    )    
+    )  
 
     # ========================================================
     # PRIORIDAD: PREGUNTA EXPLÍCITA SOBRE HORARIOS
@@ -18559,6 +18700,42 @@ def persistir_resultado_estructurado(
             "GRADO_SOLICITADO",
             analisis.get("grado_solicitado"),
         )
+
+        datos_decision_persistencia = (
+            decision.get(
+                "datos_detectados",
+                {},
+            )
+        )
+
+        if not isinstance(
+            datos_decision_persistencia,
+            dict,
+        ):
+            datos_decision_persistencia = {}
+
+        area_interes_turno = str(
+            datos_decision_persistencia.get(
+                "area_interes_confirmada_en_turno",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if (
+            area_interes_turno
+            and not str(
+                get_note_value(
+                    contact,
+                    "AREA_INTERES",
+                )
+                or ""
+            ).strip()
+        ):
+            guardar_valor(
+                "AREA_INTERES",
+                area_interes_turno,
+            )
 
         clasificacion_edad = (
             decision.get("datos_detectados", {})
