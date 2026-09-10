@@ -26493,9 +26493,8 @@ def procesar_mensaje_whatsapp_estructurado_real(
                 "la ruta correspondiente."
             ),
             "SIN_RUTA_CONFIGURADA": (
-                "Gracias por escribirnos. Su solicitud requiere "
-                "una revisión particular para poder brindarle "
-                "información correcta. Continuaremos la atención "
+                "Gracias por escribirnos. Permítanos revisar la "
+                "información y en un momento continuamos con usted "
                 "por este medio."
             ),
         }
@@ -26504,10 +26503,9 @@ def procesar_mensaje_whatsapp_estructurado_real(
             respuestas_por_alcance.get(
                 categoria_alcance,
                 (
-                    "Gracias por escribirnos. Para atender "
-                    "correctamente su solicitud, necesitamos "
-                    "revisar el motivo de su consulta. "
-                    "Continuaremos la atención por este medio."
+                    "Gracias por escribirnos. Permítanos revisar "
+                    "su mensaje y en un momento continuamos con usted "
+                    "por este medio."
                 ),
             )
         )
@@ -31664,6 +31662,21 @@ def extraer_datos_registro_cita(
     # ========================================================
 
     patrones_tutor = [
+        # ----------------------------------------------------
+        # PRESENTACIÓN PERSONAL + SEPARADOR INEQUÍVOCO
+        # ----------------------------------------------------
+        #
+        # Deliberadamente NO usamos "$" como alternativa.
+        #
+        # Si el mensaje contiene únicamente:
+        # "soy María Esther"
+        #
+        # Gemini puede resolverlo perfectamente después.
+        #
+        # Aquí sólo tomamos una decisión determinista cuando
+        # existe una separación estructural suficientemente
+        # clara entre el nombre del tutor y los datos del alumno.
+        # ----------------------------------------------------
         (
             r"(?:yo\s+)?"
             r"(?:me\s+llamo|mi\s+nombre\s+es|soy)"
@@ -31671,8 +31684,17 @@ def extraer_datos_registro_cita(
             r"(?=\s+(?:y|,)\s+"
             r"(?:el\s+de\s+mi|los\s+de\s+mis|mi|mis)\s+"
             r"(?:hijo|hija|hijos|hijas|alumno|alumna|"
-            r"alumnos|alumnas)\b|$)"
+            r"alumnos|alumnas)\b)"
         ),
+
+        # ----------------------------------------------------
+        # ETIQUETA EXPLÍCITA DE TUTOR / PADRE / MADRE
+        # ----------------------------------------------------
+        #
+        # En esta forma sí es razonable permitir final de texto,
+        # porque el propio usuario identificó explícitamente
+        # qué dato está proporcionando.
+        # ----------------------------------------------------
         (
             r"(?:nombre\s+del\s+padre|"
             r"nombre\s+de\s+la\s+madre|"
@@ -31680,6 +31702,10 @@ def extraer_datos_registro_cita(
             r"\s*(?:es|:)\s*(.+?)"
             r"(?=\s+(?:y|,)\s+|$)"
         ),
+
+        # ----------------------------------------------------
+        # FORMA EXPLÍCITA "EL MÍO ES..."
+        # ----------------------------------------------------
         (
             r"(?:el\s+m[ií]o\s+es)\s+(.+?)"
             r"(?=\s+y\s+el\s+de\s+mi\s+"
@@ -31863,8 +31889,24 @@ REGLAS OBLIGATORIAS:
 - La información ya persistida tiene prioridad. Completa lo
   faltante; no reinicies ni reconstruyas el registro desde cero.
 
-- "padres" debe contener el nombre completo de la mamá,
-  papá o tutor que agenda.
+- "padres" debe contener exclusivamente el nombre completo
+  de la mamá, papá o tutor que agenda.
+
+- Nunca incluyas dentro de "padres" palabras o fragmentos
+  que describan al alumno, parentescos, nivel, grado u otros
+  datos posteriores al nombre del tutor.
+
+- Separa semánticamente a cada persona mencionada según su rol:
+  tutor por un lado y alumno o alumnos por otro.
+
+- Interpreta errores ortográficos, abreviaciones o redacción
+  informal de WhatsApp utilizando el contexto completo, pero
+  no copies al campo "padres" una oración completa sólo porque
+  comienza con una presentación como "soy" o "me llamo".
+
+- Si puedes identificar claramente el nombre del tutor pero
+  existen otros datos después, conserva únicamente el nombre
+  de la persona en "padres".
 
 - "alumnos" debe contener TODOS los niños o jóvenes
   mencionados en el mensaje.
@@ -32280,10 +32322,25 @@ def construir_resumen_cita_admin(contact) -> str:
         or "Pendiente"
     )
 
-    hora_cita_mostrable = (
-        hora_cita
-        or "Pendiente"
-    )
+    hora_cita_mostrable = "Pendiente"
+
+    if hora_cita:
+        try:
+            hora_objeto = datetime.strptime(
+                hora_cita,
+                "%H:%M",
+            )
+
+            hora_cita_mostrable = (
+                hora_objeto.strftime(
+                    "%I:%M%p"
+                )
+                .lstrip("0")
+                .lower()
+            )
+
+        except Exception:
+            hora_cita_mostrable = hora_cita
 
     alumnos_cita = (
         obtener_alumnos_cita_persistidos(
