@@ -2087,6 +2087,7 @@ class AnalisisMensajeProspecto(BaseModel):
     tema_interes: str = ""
 
     pide_costos: bool = False
+    alcance_consulta_costos: str = "COLEGIATURA"
     pide_cita: bool = False
 
     seguimiento_cita: bool = False
@@ -2612,6 +2613,12 @@ def normalizar_analisis_mensaje_ia(
 
         "pide_costos": normalizar_booleano(
             datos_crudos.get("pide_costos")
+        ),
+        "alcance_consulta_costos": (
+            str(datos_crudos.get("alcance_consulta_costos") or "").strip().upper()
+            if str(datos_crudos.get("alcance_consulta_costos") or "").strip().upper()
+            in {"COLEGIATURA", "DETALLE", "AMBOS"}
+            else "COLEGIATURA"
         ),
         "pide_cita": normalizar_booleano(
             datos_crudos.get("pide_cita")
@@ -6091,6 +6098,17 @@ esperando confirmación administrativa.
 cuando, considerando el historial y el mensaje actual, la respuesta
 depende de una confirmación, disponibilidad, cancelación o cambio
 que debe revisar una persona administradora.
+También cuando solicita expresamente atención de una persona, aunque
+indique que esperará. Esperar esa atención no elimina la solicitud.
+Una pausa para revisar su propia agenda no requiere atención humana
+por sí sola.
+
+"alcance_consulta_costos": "COLEGIATURA", "DETALLE" o "AMBOS".
+Si pide costos, distingue semánticamente la referencia de mensualidad
+de preguntas sobre inscripción, materiales, extras, inclusiones o desglose.
+Usa DETALLE cuando pide solamente esos detalles; AMBOS cuando también
+pide la colegiatura. No clasifiques por palabras aisladas. Este campo
+no autoriza divulgar importes ni condiciones adicionales.
 
 Estos campos no dependen de palabras exactas. Interpreta expresiones
 directas, indirectas, breves, coloquiales y con errores ortográficos.
@@ -9688,6 +9706,41 @@ def aplicar_reglas_negocio_estructuradas(
         ) or ""
     ).strip()
 
+    # Recuperar la fecha sólo cuando existe un único alumno inequívoco.
+    # No trasladar datos de un hermano a otro ni sustituir una corrección
+    # nueva (incluso si su fecha todavía es ambigua) por el dato anterior.
+    alumnos_turno = analisis_seguro.get("alumnos", [])
+    alumnos_identificados = [a for a in alumnos_previos if isinstance(a, dict)]
+    if (
+        not fecha_nacimiento_iso
+        and not analisis_seguro.get("fecha_nacimiento_texto")
+        and not menciona_otro_alumno
+        and not nivel_nuevo_distinto
+        and len(alumnos_identificados) == 1
+        and len(alumnos_turno) <= 1
+    ):
+        alumno_previo = alumnos_identificados[0]
+        nombre_previo = normalizar_texto_para_deteccion(alumno_previo.get("nombre", ""))
+        nombre_turno = nombre_alumno_normalizado or (
+            normalizar_texto_para_deteccion(alumnos_turno[0].get("nombre", ""))
+            if alumnos_turno else ""
+        )
+        fecha_turno_alumno = (
+            alumnos_turno[0].get("fecha_nacimiento", "") if alumnos_turno else ""
+        )
+        nivel_turno_alumno = alumnos_turno[0].get("nivel", "") if alumnos_turno else ""
+        nivel_previo_alumno = alumno_previo.get("nivel_interes", "")
+        nivel_compatible = not nivel_turno_alumno or nivel_turno_alumno == nivel_previo_alumno
+        if (
+            not fecha_turno_alumno
+            and nivel_compatible
+            and (not nombre_turno or nombre_turno == nombre_previo)
+        ):
+            fecha_previa = str(alumno_previo.get("fecha_nacimiento", "") or "").strip()
+            if clasificar_nivel_por_fecha_nacimiento(fecha_previa).get("fecha_nacimiento_valida"):
+                fecha_nacimiento_iso = fecha_previa
+                decision["datos_detectados"]["fecha_nacimiento_reutilizada"] = True
+
     edad_alumno = analisis_seguro.get(
         "edad_alumno"
     )
@@ -9730,6 +9783,19 @@ def aplicar_reglas_negocio_estructuradas(
         clasificacion_edad.get("clasificacion")
         == "PRE_KINDER"
     ):
+        decision["datos_detectados"].update({
+            "nivel": "Kínder",
+            "grado": "Pre-Kínder",
+            "pre_kinder_confirmado": True,
+            "nivel_costos": "Kínder",
+        })
+
+    # ORIENTAR_PRE_KINDER solicita zona. Si ya está validada, continuar
+    # las reglas de intención, costos y cita; nunca volver a ese objetivo.
+    if (
+        clasificacion_edad.get("clasificacion") == "PRE_KINDER"
+        and not zona_validada
+    ):
         intencion_principal_pre_kinder = str(
             analisis_seguro.get(
                 "intencion_principal",
@@ -9771,12 +9837,6 @@ def aplicar_reglas_negocio_estructuradas(
             "requiere_admin": False,
             "puede_compartir_costos": False,
             "debe_finalizar_conversacion": False,
-        })
-
-        decision["datos_detectados"].update({
-            "nivel": "Kínder",
-            "grado": "Pre-Kínder",
-            "pre_kinder_confirmado": True,
         })
 
         if solicitud_costos_pre_kinder:
@@ -10152,6 +10212,23 @@ def aplicar_reglas_negocio_estructuradas(
             mensaje_usuario
         )
     )
+
+    # La solicitud semántica de atención humana sigue pendiente aunque
+    # la familia diga que esperará. Reutilizar la escalación existente.
+    # El cierre comercial explícito ya se atendió antes de llegar aquí.
+    if requiere_admin_contextual:
+        decision.update({
+            "accion": "CONSULTAR_ADMIN",
+            "motivo": (
+                "El mensaje requiere atención administrativa contextual; "
+                "la espera del prospecto no sustituye esa atención."
+            ),
+            "requiere_admin": True,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+        decision["datos_detectados"]["requiere_admin_contextual"] = True
+        return decision
 
     if pausa_comercial_explicita:
 
@@ -11219,6 +11296,26 @@ def aplicar_reglas_negocio_estructuradas(
         or "PEDIR_COSTOS"
         in intenciones_secundarias
     )
+
+    # Una pregunta de desglose posterior al precio no es una nueva
+    # solicitud de colegiatura. Conservar la etapa y el hito existentes.
+    if (
+        solicitud_costos_explicita
+        and analisis_seguro.get("alcance_consulta_costos") == "DETALLE"
+        and "RECIBIO_COSTOS" in hitos_comerciales
+        and "VISITA_REALIZADA" not in hitos_comerciales
+        and estado_comercial_actual != "VISITA_REALIZADA"
+        and etapa_comercial_actual != "VISITA_REALIZADA"
+    ):
+        decision.update({
+            "accion": "RESPONDER_TEMA",
+            "motivo": "Se solicita detalle de costos después de la referencia general.",
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+            "debe_finalizar_conversacion": False,
+        })
+        decision["datos_detectados"]["detalle_costos_reservado_visita"] = True
+        return decision
 
     solicitud_horarios_explicita = bool(
         detectar_solicitud_horarios(
@@ -13737,6 +13834,24 @@ def generar_respuesta_final_estructurada(
     # SALUDO SIMPLE DETERMINISTA
     # ========================================================
 
+    datos_respuesta = decision_segura.get("datos_detectados") or {}
+    if (
+        accion == "RESPONDER_TEMA"
+        and isinstance(datos_respuesta, dict)
+        and datos_respuesta.get("detalle_costos_reservado_visita")
+    ):
+        resultado.update({
+            "generada": True,
+            "respuesta": (
+                "Comprendo que desea conocer el detalle de los conceptos "
+                "y sus costos. Esa información la revisamos personalmente "
+                "durante la visita al colegio, para explicarle qué corresponde "
+                "en su caso."
+            ),
+            "tipo_respuesta": "DETALLE_COSTOS_RESERVADO_VISITA",
+        })
+        return resultado
+
     if accion == "RESPONDER_SALUDO":
         respuesta_saludo = (
             crear_respuesta_saludo_simple_estructurado(
@@ -14035,156 +14150,9 @@ def generar_respuesta_final_estructurada(
                 precio
             )
 
-        configuracion = (
-            cargar_configuracion_precios()
-        )
-
-        opciones_comerciales = (
-            configuracion.get(
-                "opciones_comerciales",
-                {},
-            )
-            if isinstance(
-                configuracion,
-                dict,
-            )
-            else {}
-        )
-
-        if not isinstance(
-            opciones_comerciales,
-            dict,
-        ):
-            opciones_comerciales = {}
-
-        # ----------------------------------------------------
-        # INTRODUCCIÓN COMERCIAL
-        # ----------------------------------------------------
-
-        partes_respuesta = [
-            (
-                "Entendemos que al elegir una escuela no "
-                "solamente importa encontrar el mejor programa "
-                "para sus hijos, sino también una opción que "
-                "sea viable para la familia."
-            ),
-            (
-                "Por eso, en Colegio Valle de Filadelfia "
-                "contamos con diferentes alternativas que "
-                "pueden hacer la colegiatura mucho más "
-                "accesible de lo que inicialmente podría imaginar:"
-            ),
-        ]
-
-        # ----------------------------------------------------
-        # OPCIONES COMERCIALES AUTORIZADAS
-        # ----------------------------------------------------
-
-        opciones_texto = []
-
-        if opciones_comerciales.get(
-            "beca_alto_desempeno"
-        ):
-            opciones_texto.append(
-                "- Opciones de beca de acuerdo con el perfil "
-                "y desempeño del alumno."
-            )
-
-        if opciones_comerciales.get(
-            "beca_hermanos"
-        ):
-            opciones_texto.append(
-                "- Beneficios especiales para hermanos."
-            )
-
-        planes_pago = (
-            opciones_comerciales.get(
-                "planes_pago",
-                [],
-            )
-        )
-
-        if isinstance(
-            planes_pago,
-            list,
-        ) and planes_pago:
-
-            planes_limpios = [
-                str(plan).strip()
-                for plan in planes_pago
-                if str(plan).strip()
-            ]
-
-            if planes_limpios:
-                if len(planes_limpios) == 1:
-                    planes_texto = (
-                        planes_limpios[0]
-                    )
-                else:
-                    planes_texto = (
-                        ", ".join(
-                            planes_limpios[:-1]
-                        )
-                        + " o "
-                        + planes_limpios[-1]
-                    )
-
-                opciones_texto.append(
-                    "- Planes de pago flexibles: "
-                    f"{planes_texto}."
-                )
-
-        if opciones_comerciales.get(
-            "descuento_pago_anticipado"
-        ):
-            opciones_texto.append(
-                "- Descuentos por pago anticipado "
-                "de anualidad."
-            )
-
-        medios_pago = (
-            opciones_comerciales.get(
-                "medios_pago",
-                [],
-            )
-        )
-
-        if isinstance(
-            medios_pago,
-            list,
-        ) and medios_pago:
-
-            medios_limpios = [
-                str(medio).strip()
-                for medio in medios_pago
-                if str(medio).strip()
-            ]
-
-            if medios_limpios:
-                if len(medios_limpios) == 1:
-                    medios_texto = (
-                        medios_limpios[0]
-                    )
-                else:
-                    medios_texto = (
-                        ", ".join(
-                            medios_limpios[:-1]
-                        )
-                        + " y "
-                        + medios_limpios[-1]
-                    )
-
-                opciones_texto.append(
-                    "- Diferentes formas de pago: "
-                    f"{medios_texto}."
-                )
-
-        if opciones_texto:
-            partes_respuesta.append(
-                "\n".join(
-                    opciones_texto
-                )
-            )
+        # Referencia breve para calificar interés, sin abrir un catálogo
+        # de becas, descuentos o condiciones antes de la visita.
+        partes_respuesta = []
 
         # ----------------------------------------------------
         # PRECIOS: ÚNICAMENTE NIVELES SOLICITADOS
@@ -14280,18 +14248,8 @@ def generar_respuesta_final_estructurada(
         # ----------------------------------------------------
 
         partes_respuesta.append(
-            "Y algo importante: antes de pensar que el "
-            "colegio puede estar fuera de su presupuesto, "
-            "vale la pena conocer qué beneficios podrían "
-            "aplicar en su caso."
-        )
-
-        partes_respuesta.append(
-            "En una visita podemos explicarle personalmente "
-            "nuestro modelo educativo, todo lo que incluye "
-            "la colegiatura y revisar las opciones de beca, "
-            "descuentos y forma de pago disponibles para "
-            "su familia."
+            "Durante la visita al colegio podemos explicarle los demás "
+            "conceptos y resolver sus dudas."
         )
 
         acepto_visita_en_turno = bool(
@@ -14308,8 +14266,7 @@ def generar_respuesta_final_estructurada(
             )
         else:
             partes_respuesta.append(
-                "¿Le gustaría agendar una visita y conocer "
-                "más sobre becas y descuentos?"
+                "¿Le gustaría agendar una visita?"
             )
 
         respuesta_costos = "\n\n".join(
