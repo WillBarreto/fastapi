@@ -5765,6 +5765,15 @@ REGLAS INSTITUCIONALES PARA INTERPRETACIÓN:
 - Atlacomulco
 - cualquier otro campus del colegio
 
+El campo campus_mencionado debe indicar el campus que la persona solicita,
+no cualquier sede nombrada como referencia histórica o comparación.
+Distingue el domicilio (zona_mencionada) del campus deseado.
+Ejemplo: "Vi Metepec en internet, pero quiero informes de Santa Cruz
+Atizapán" => campus_mencionado="Santa Cruz Atizapán", campus_externo=false.
+Ejemplo: "Vivo en Santa Cruz, pero busco el campus Metepec" =>
+campus_mencionado="Metepec", campus_externo=true.
+Si no se entiende cuál solicita, no adivines: deja campus_mencionado vacío.
+
 4. Niveles oficiales:
 - Kínder
 - Primaria
