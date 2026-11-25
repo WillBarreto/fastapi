@@ -95,3 +95,38 @@ resuelto. La detección semántica de preguntas sobre extras puede fallar si
 Gemini no proporciona el campo; el valor por defecto mantiene compatibilidad.
 
 Estado: candidato para revisión e integración de pruebas, sin despliegue.
+
+## Ampliación del 25 de noviembre: hallazgos del log
+
+Se añaden 17 pruebas (40 en total) y correcciones sobre el candidato previo:
+
+- Cuando el intérprete aporta campus, la clasificación utiliza campus y
+  localidad extraídos para evitar rechazar una referencia histórica a otra
+  sede. Si no aporta campus se conserva la detección textual. Una localidad
+  previamente validada deja de quedar marcada simultáneamente como externa;
+  se conserva el rechazo de campus externo explícito. La calidad de extracción
+  semántica continúa siendo una dependencia que requiere validación real.
+- En objetivos OBTENER_FECHA_CITA/OBTENER_HORA_CITA se recupera el dato
+  complementario persistido. Una corrección nueva, dato ambiguo, cancelación
+  o negociación inactiva no hereda el horario. Las validaciones de fecha
+  futura y autorización administrativa siguen aplicándose.
+- La referencia ya contestada se pasa a redacción y al validador; se acepta
+  también la respuesta explícita de no tener referencias. Se rechazan
+  preguntas reconocibles que vuelven a pedirlas. No es una garantía de
+  detección de todas las paráfrasis ni sustituye la persistencia de memoria.
+- Se elimina “correspondiente” de la lista de terminaciones incompletas;
+  las frases realmente incompletas siguen siendo rechazadas.
+- PostgreSQL utiliza pool_pre_ping. Se comprueba una conexión del pool antes
+  de usarla; no hay reintentos de transacciones ni envíos. Una conexión que
+  cae durante una transacción aún puede fallar y requiere nueva ejecución
+  del ciclo existente. No se certifica que desaparezcan todos los errores EOF.
+
+Validación: 40 pruebas pasan con Pydantic 2.5.0 y SQLAlchemy 2.0.23,
+compilación sintáctica y git diff --check correctos. Las respuestas del modelo
+se sustituyen por dobles en las pruebas de redacción. La prueba de conexión
+usa la construcción real del engine y simula una conexión cerrada en SQLite
+local; no conecta a PostgreSQL productivo ni inicia el worker.
+
+El log aportado es un fragmento de operación, no una nueva auditoría de todas
+las conversaciones. No se incorporan teléfonos, nombres ni transcripciones
+reales al repositorio. No se cambian reglas de precios ni se despliega.

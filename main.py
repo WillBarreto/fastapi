@@ -7455,12 +7455,15 @@ def clasificar_zona_determinista(
     5. Zona desconocida pendiente de validación geográfica.
     6. Sin zona mencionada.
     """
-    texto_completo = " ".join(
-        [
-            str(mensaje_usuario or ""),
-            str(zona_mencionada or ""),
-            str(campus_mencionado or ""),
-        ]
+    # Los campos extraídos expresan destino/localidad; el texto puede
+    # mencionar otra sede como referencia histórica, no como destino.
+    campos_geograficos = " ".join([
+        str(zona_mencionada or "").strip(),
+        str(campus_mencionado or "").strip(),
+    ]).strip()
+    texto_completo = (
+        campos_geograficos if str(campus_mencionado or "").strip()
+        else " ".join([str(mensaje_usuario or ""), campos_geograficos])
     )
 
     texto_normalizado = (
@@ -7490,6 +7493,13 @@ def clasificar_zona_determinista(
         "es_zona_externa": False,
         "es_campus_externo": False,
     }
+
+    if campus_normalizado and (
+        texto_contiene_alias_geografico(campus_normalizado, REFERENCIAS_CAMPUS_EXTERNOS)
+        or texto_contiene_alias_geografico(campus_normalizado, ZONAS_EXTERNAS_CONOCIDAS)
+    ):
+        resultado.update({"clasificacion": "CAMPUS_EXTERNO", "es_campus_externo": True})
+        return resultado
 
     if texto_contiene_alias_geografico(
         texto_normalizado,
@@ -9311,6 +9321,16 @@ def aplicar_reglas_negocio_estructuradas(
         else {}
     )
 
+    referencia_respondida = bool(
+        contexto_zona.get("referencia_colegio")
+        or "RESPONDIO_REFERENCIA" in (contexto_zona.get("hitos_comerciales") or [])
+        or "referencia_colegio" in analisis_seguro.get("datos_detectados", [])
+        or re.search(r"\bno (?:tengo|tenemos) (?:ninguna |mas )?referencias?\b",
+                     normalizar_texto_geografico(mensaje_usuario))
+    )
+    if referencia_respondida:
+        decision["datos_detectados"]["referencia_ya_respondida"] = True
+
     zona_contexto = str(
         contexto_zona.get(
             "zona_interes",
@@ -9373,6 +9393,10 @@ def aplicar_reglas_negocio_estructuradas(
         clasificacion_zona_determinista[
             "es_zona_validada"
         ] = True
+        # La autorización sólo aplica a la misma localidad. No borra
+        # una solicitud explícita de otro campus.
+        if not analisis_seguro.get("campus_externo"):
+            clasificacion_zona_determinista["es_zona_externa"] = False
 
         clasificacion_zona_determinista[
             "requiere_validacion_geografica"
@@ -10827,6 +10851,26 @@ def aplicar_reglas_negocio_estructuradas(
             or ""
         ).strip()
 
+        # Conservar el dato complementario de la negociación activa.
+        # No heredar citas antiguas, canceladas ni correcciones ambiguas.
+        if (contact is not None
+                and objetivo_confirmacion_cita in {
+                    "OBTENER_FECHA_CITA", "OBTENER_HORA_CITA"}
+                and not analisis_seguro.get("cancelacion_cita")
+                and not analisis_seguro.get("cambio_fecha_cita")):
+            if not hora_cita and not analisis_seguro.get("hora_cita_texto"):
+                hora_anterior = (get_note_value(contact, "HORA_CITA")
+                                 or get_note_value(contact, "HORA_CITA_24H"))
+                if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", hora_anterior):
+                    hora_cita = hora_anterior
+                    decision["datos_detectados"]["hora_cita_24h"] = hora_cita
+            if not fecha_cita and not analisis_seguro.get("fecha_cita_texto"):
+                fecha_anterior = (get_note_value(contact, "FECHA_CITA")
+                                  or get_note_value(contact, "FECHA_CITA_ISO"))
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha_anterior):
+                    fecha_cita = fecha_anterior
+                    decision["datos_detectados"]["fecha_cita_iso"] = fecha_cita
+
         # ----------------------------------------------------
         # FALTA FECHA
         # ----------------------------------------------------
@@ -11891,7 +11935,8 @@ def aplicar_reglas_negocio_estructuradas(
         )
 
         referencia_confirmada = bool(
-            referencia_previa
+            referencia_respondida
+            or referencia_previa
             or "RESPONDIO_REFERENCIA"
             in hitos_comerciales
             or respondio_referencia_en_turno
@@ -14710,6 +14755,12 @@ def generar_respuesta_final_estructurada(
         ).strip()
 
         errores = []
+        if decision_segura.get("datos_detectados", {}).get("referencia_ya_respondida"):
+            for pregunta in re.findall(r"¿([^?]+)\?", respuesta_limpia):
+                if re.search(r"referencias?|como (?:se entero|nos conocio|supo)|donde nos",
+                             normalizar_texto_geografico(pregunta)):
+                    errores.append("REPITE_REFERENCIA_YA_RESPONDIDA")
+                    break
 
         # ====================================================
         # INTEGRIDAD DE ENLACES GOOGLE MAPS
@@ -15091,7 +15142,6 @@ def generar_respuesta_final_estructurada(
             "claro",
             "nuestra",
             "nuestro",
-            "correspondiente",
             "informacion sobre",
         }
 
@@ -15593,6 +15643,9 @@ la mañana.
 INSTRUCCIONES:
 
 - Respeta la decisión de Python.
+- Si referencia_ya_respondida es true, no vuelvas a preguntar cómo nos
+  conoció ni qué referencias tiene. No conocer familias del colegio es
+  una respuesta válida; no se requieren recomendaciones para continuar.
 - Cumple el objetivo y las restricciones del plan.
 - Escribe una sola respuesta breve, cordial y natural.
 - Usa trato institucional de usted, salvo que el historial
@@ -19895,7 +19948,9 @@ if DATABASE_URL.startswith("postgresql://"):
     
     # Modificar la URL para usar psycopg2
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-    engine = create_engine(DATABASE_URL)
+    # Comprobar conexiones del pool antes de utilizarlas; no reejecutar
+    # transacciones ni envíos cuando una conexión falla a mitad del ciclo.
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 else:
     # Para SQLite, usar tipos String normales
     contact_status_enum = String(50)
