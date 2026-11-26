@@ -130,3 +130,18 @@ local; no conecta a PostgreSQL productivo ni inicia el worker.
 El log aportado es un fragmento de operación, no una nueva auditoría de todas
 las conversaciones. No se incorporan teléfonos, nombres ni transcripciones
 reales al repositorio. No se cambian reglas de precios ni se despliega.
+
+## 2026-11-26 — Administrative notification event claims
+
+The structured flow now reserves an admin notification by contact + persisted incoming message ID before contacting Twilio. A unique database constraint arbitrates concurrent sessions. Replaying that event cannot send again; a new inbound message can notify even if its text and pending task are unchanged. The non-admissions escalation path shares this code. Legacy direct sends remain unchanged and are not covered by this guarantee.
+
+New additive table: `admin_alert_attempts`, created by existing metadata setup. States: INTENTANDO (durable claim, possibly unknown outcome), ACEPTADO_PROVEEDOR (valid SID returned), NO_CONFIRMADO (sender returned no acceptance). Acceptance is not delivery. Uncertain/error attempts require operator reconciliation; there is deliberately no automatic resend. No UI or retry worker has been added. The real escalation debug endpoint now requires `source_message_id` for a persisted incoming message belonging to the contact; dry runs remain side-effect free.
+
+Validation: 52 local tests (SQLite plus offline rule tests); 12 persistence/integration tests also pass on isolated PostgreSQL 17.12 with native enum configuration. Includes concurrent sessions, restart/session reuse, failed sends, unknown outcomes and distinct events sharing a task. Network senders mocked; no WhatsApp sent. Reproduce PostgreSQL suite against a disposable UTF-8 database named whaps_test* on 127.0.0.1:55439:
+
+```
+P1_TEST_DATABASE_URL=postgresql://USER@127.0.0.1:55439/whaps_test_native python -m unittest discover -s tests -p test_p1_persistence.py
+```
+
+
+Release gates still open: verify production backup/restoration before additive schema change; controlled end-to-end administrative delivery and prospect-facing promises on failed notification; assess legacy direct alert path. No production deployment or data migration performed. Reverting code does not undo accepted messages or persisted claims; do not drop this table as a rollback shortcut.

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, B
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.exc import IntegrityError
 from fastapi.responses import HTMLResponse
 import requests
 import json
@@ -20677,6 +20678,21 @@ class AdminPendingTask(Base):
     created_at = Column(DateTime, default=func.now())
     resolved_at = Column(DateTime, nullable=True)
 
+class AdminAlertAttempt(Base):
+    """Durable claim per inbound event; uncertain sends are never retried blindly."""
+    __tablename__ = "admin_alert_attempts"
+
+    id = Column(Integer, primary_key=True)
+    event_key = Column(String(100), unique=True, nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+    task_id = Column(Integer, ForeignKey("admin_pending_tasks.id"), nullable=True)
+    status = Column(String(30), nullable=False, default="INTENTANDO")
+    provider_sid = Column(String(50), nullable=True)
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+
 class AdminWhatsappState(Base):
     """
     Estado persistente del canal WhatsApp administrador.
@@ -24737,6 +24753,7 @@ async def debug_structured_admin_escalation(
     }
 
 class DebugStructuredAdminEscalationLiveRequest(BaseModel):
+    source_message_id: int
     phone_number: str
     message: str
     confirmation: str
@@ -24865,6 +24882,7 @@ async def debug_structured_admin_escalation_live(
                 resultado_memoria_historica
             ),
             ejecutar_envio=True,
+            source_message_id=payload.source_message_id,
         )
     )
 
@@ -26643,81 +26661,15 @@ def procesar_mensaje_whatsapp_estructurado_real(
             == "SIN_RUTA_CONFIGURADA"
         ):
 
-            try:
-                tarea_admin = (
-                    crear_tarea_admin_pendiente(
-                        db=db,
-                        contact=contact,
-                        mensaje_usuario=mensaje,
-                        respuesta_bot=respuesta_alcance,
-                    )
-                )
-
-                resultado_alerta_admin = (
-                    enviar_alerta_admin_whatsapp(
-                        db=db,
-                        contact=contact,
-                        mensaje_usuario=mensaje,
-                        respuesta_bot=respuesta_alcance,
-                        tarea_id=getattr(
-                            tarea_admin,
-                            "id",
-                            None,
-                        ),
-                    )
-                )
-
-                resultado_escalacion_alcance = {
-                    "requiere_escalacion": True,
-                    "ejecutada": True,
-                    "tarea_id": getattr(
-                        tarea_admin,
-                        "id",
-                        None,
-                    ),
-                    "alerta_admin": (
-                        resultado_alerta_admin
-                    ),
-                    "motivo": str(
-                        alcance_detectado.get(
-                            "motivo_escalacion",
-                            "",
-                        )
-                        or ""
-                    ).strip(),
-                    "error": "",
-                }
-
-                print(
-                    "📣 ESCALACIÓN DE ALCANCE EJECUTADA: "
-                    f"contact_id={contact.id}, "
-                    f"tarea_id="
-                    f"{getattr(tarea_admin, 'id', None)}"
-                )
-
-            except Exception as e:
-                db.rollback()
-
-                resultado_escalacion_alcance = {
-                    "requiere_escalacion": True,
-                    "ejecutada": False,
-                    "tarea_id": None,
-                    "alerta_admin": "",
-                    "motivo": str(
-                        alcance_detectado.get(
-                            "motivo_escalacion",
-                            "",
-                        )
-                        or ""
-                    ).strip(),
-                    "error": str(e),
-                }
-
-                print(
-                    "⚠️ ERROR ESCALANDO ALCANCE "
-                    "SIN_RUTA_CONFIGURADA: "
-                    f"{e}"
-                )
+            resultado_escalacion_alcance = procesar_escalacion_admin_estructurada(
+                db=db, contact=contact, mensaje_usuario=mensaje,
+                respuesta_bot=respuesta_alcance,
+                resultado_orquestador={"decision": {
+                    "requiere_admin": True, "accion": "CONSULTAR_ADMIN",
+                    "motivo": alcance_detectado.get("motivo_escalacion", ""),
+                }},
+                ejecutar_envio=True, source_message_id=max_message_id,
+            )
 
         resultado_final.update({
             "procesado": envio_exitoso,
@@ -27393,6 +27345,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
                         resultado_memoria_historica
                     ),
                     ejecutar_envio=True,
+                    source_message_id=max_message_id,
                 )
             )
 
@@ -27809,6 +27762,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
                         resultado_memoria_historica
                     ),
                     ejecutar_envio=True,
+                    source_message_id=max_message_id,
                 )
             )
             
@@ -30189,6 +30143,7 @@ def procesar_escalacion_admin_estructurada(
     resultado_orquestador: Dict[str, Any],
     memoria_historica: Optional[Dict[str, Any]] = None,
     ejecutar_envio: bool = False,
+    source_message_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Prepara o ejecuta una escalación administrativa originada
@@ -30211,6 +30166,8 @@ def procesar_escalacion_admin_estructurada(
     resultado = {
         "requiere_escalacion": False,
         "ejecutada": False,
+        "estado_envio": "NO_INTENTADO",
+        "duplicada": False,
         "tarea_id": None,
         "alerta_admin": "",
         "motivo": "",
@@ -30391,6 +30348,29 @@ def procesar_escalacion_admin_estructurada(
     if not ejecutar_envio:
         return resultado
 
+    # Never derive identity from message text or the latest row: both can
+    # conflate a new request with a retry, especially with concurrent buffers.
+    source = db.get(Message, source_message_id) if source_message_id else None
+    if source is None or source.contact_id != contact.id or source.direction != "incoming":
+        resultado["error"] = "EVENTO_ENTRANTE_REQUERIDO"
+        return resultado
+
+    event_key = f"admin:{contact.id}:{source.id}"
+    attempt = AdminAlertAttempt(event_key=event_key, contact_id=contact.id,
+                                source_message_id=source.id, status="INTENTANDO")
+    try:
+        db.add(attempt)
+        db.commit()  # Claim before any external side effect, across workers.
+    except IntegrityError:
+        db.rollback()
+        previous = db.query(AdminAlertAttempt).filter_by(event_key=event_key).one()
+        resultado.update(duplicada=True, estado_envio=previous.status,
+                         ejecutada=previous.status == "ACEPTADO_PROVEEDOR",
+                         tarea_id=previous.task_id, alerta_admin=previous.result or "")
+        if not resultado["ejecutada"]:
+            resultado["error"] = "INTENTO_PREVIO_REQUIERE_REVISION"
+        return resultado
+
     try:
         tarea_admin = crear_tarea_admin_pendiente(
             db=db,
@@ -30405,6 +30385,9 @@ def procesar_escalacion_admin_estructurada(
             None,
         )
 
+        attempt.task_id = resultado["tarea_id"]
+        db.commit()
+
         resultado_alerta = enviar_alerta_admin_whatsapp(
             db=db,
             contact=contact,
@@ -30413,10 +30396,21 @@ def procesar_escalacion_admin_estructurada(
             tarea_id=resultado["tarea_id"],
         )
 
+        # Existing sender contract returns a SID only after provider acceptance.
+        # This is NOT proof of WhatsApp delivery (which requires a status callback).
+        accepted = re.fullmatch(
+            r"✅ (?:Mensaje enviado|Template admin enviado)\. SID: (SM[0-9a-fA-F]{32})",
+            str(resultado_alerta).strip(),
+        )
+        attempt.status = "ACEPTADO_PROVEEDOR" if accepted else "NO_CONFIRMADO"
+        attempt.provider_sid = accepted.group(1) if accepted else None
+        attempt.result = str(resultado_alerta)
+        db.commit()
         resultado.update({
-            "ejecutada": True,
+            "ejecutada": bool(accepted),
+            "estado_envio": attempt.status,
             "alerta_admin": resultado_alerta,
-            "error": "",
+            "error": "" if accepted else "ENVIO_ADMIN_NO_CONFIRMADO",
         })
 
         return resultado
@@ -30429,6 +30423,7 @@ def procesar_escalacion_admin_estructurada(
             f"administrativa estructurada: {e}"
         )
 
+        resultado["estado_envio"] = "NO_CONFIRMADO"
         resultado["error"] = str(e)
         return resultado
         
@@ -30610,7 +30605,7 @@ def enviar_alerta_admin_whatsapp(
     )
 
     print(
-        f"📣 Alerta interna enviada a: "
+        f"📣 Intento de alerta interna a: "
         f"{admin_number}"
     )
     print(
