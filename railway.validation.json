@@ -1,0 +1,1 @@
+{"build":{"builder":"RAILPACK","buildCommand":"pip install -r requirements.txt"},"deploy":{"startCommand":"python -u tools/p1_validation_runner.py","restartPolicyType":"NEVER"}}

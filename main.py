@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, B
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.exc import IntegrityError
 from fastapi.responses import HTMLResponse
 import requests
 import json
@@ -2087,6 +2088,7 @@ class AnalisisMensajeProspecto(BaseModel):
     tema_interes: str = ""
 
     pide_costos: bool = False
+    alcance_consulta_costos: str = "COLEGIATURA"
     pide_cita: bool = False
 
     seguimiento_cita: bool = False
@@ -2612,6 +2614,12 @@ def normalizar_analisis_mensaje_ia(
 
         "pide_costos": normalizar_booleano(
             datos_crudos.get("pide_costos")
+        ),
+        "alcance_consulta_costos": (
+            str(datos_crudos.get("alcance_consulta_costos") or "").strip().upper()
+            if str(datos_crudos.get("alcance_consulta_costos") or "").strip().upper()
+            in {"COLEGIATURA", "DETALLE", "AMBOS"}
+            else "COLEGIATURA"
         ),
         "pide_cita": normalizar_booleano(
             datos_crudos.get("pide_cita")
@@ -5758,6 +5766,15 @@ REGLAS INSTITUCIONALES PARA INTERPRETACIÓN:
 - Atlacomulco
 - cualquier otro campus del colegio
 
+El campo campus_mencionado debe indicar el campus que la persona solicita,
+no cualquier sede nombrada como referencia histórica o comparación.
+Distingue el domicilio (zona_mencionada) del campus deseado.
+Ejemplo: "Vi Metepec en internet, pero quiero informes de Santa Cruz
+Atizapán" => campus_mencionado="Santa Cruz Atizapán", campus_externo=false.
+Ejemplo: "Vivo en Santa Cruz, pero busco el campus Metepec" =>
+campus_mencionado="Metepec", campus_externo=true.
+Si no se entiende cuál solicita, no adivines: deja campus_mencionado vacío.
+
 4. Niveles oficiales:
 - Kínder
 - Primaria
@@ -6091,6 +6108,17 @@ esperando confirmación administrativa.
 cuando, considerando el historial y el mensaje actual, la respuesta
 depende de una confirmación, disponibilidad, cancelación o cambio
 que debe revisar una persona administradora.
+También cuando solicita expresamente atención de una persona, aunque
+indique que esperará. Esperar esa atención no elimina la solicitud.
+Una pausa para revisar su propia agenda no requiere atención humana
+por sí sola.
+
+"alcance_consulta_costos": "COLEGIATURA", "DETALLE" o "AMBOS".
+Si pide costos, distingue semánticamente la referencia de mensualidad
+de preguntas sobre inscripción, materiales, extras, inclusiones o desglose.
+Usa DETALLE cuando pide solamente esos detalles; AMBOS cuando también
+pide la colegiatura. No clasifiques por palabras aisladas. Este campo
+no autoriza divulgar importes ni condiciones adicionales.
 
 Estos campos no dependen de palabras exactas. Interpreta expresiones
 directas, indirectas, breves, coloquiales y con errores ortográficos.
@@ -7437,12 +7465,15 @@ def clasificar_zona_determinista(
     5. Zona desconocida pendiente de validación geográfica.
     6. Sin zona mencionada.
     """
-    texto_completo = " ".join(
-        [
-            str(mensaje_usuario or ""),
-            str(zona_mencionada or ""),
-            str(campus_mencionado or ""),
-        ]
+    # Los campos extraídos expresan destino/localidad; el texto puede
+    # mencionar otra sede como referencia histórica, no como destino.
+    campos_geograficos = " ".join([
+        str(zona_mencionada or "").strip(),
+        str(campus_mencionado or "").strip(),
+    ]).strip()
+    texto_completo = (
+        campos_geograficos if str(campus_mencionado or "").strip()
+        else " ".join([str(mensaje_usuario or ""), campos_geograficos])
     )
 
     texto_normalizado = (
@@ -7472,6 +7503,13 @@ def clasificar_zona_determinista(
         "es_zona_externa": False,
         "es_campus_externo": False,
     }
+
+    if campus_normalizado and (
+        texto_contiene_alias_geografico(campus_normalizado, REFERENCIAS_CAMPUS_EXTERNOS)
+        or texto_contiene_alias_geografico(campus_normalizado, ZONAS_EXTERNAS_CONOCIDAS)
+    ):
+        resultado.update({"clasificacion": "CAMPUS_EXTERNO", "es_campus_externo": True})
+        return resultado
 
     if texto_contiene_alias_geografico(
         texto_normalizado,
@@ -9293,6 +9331,16 @@ def aplicar_reglas_negocio_estructuradas(
         else {}
     )
 
+    referencia_respondida = bool(
+        contexto_zona.get("referencia_colegio")
+        or "RESPONDIO_REFERENCIA" in (contexto_zona.get("hitos_comerciales") or [])
+        or "referencia_colegio" in analisis_seguro.get("datos_detectados", [])
+        or re.search(r"\bno (?:tengo|tenemos) (?:ninguna |mas )?referencias?\b",
+                     normalizar_texto_geografico(mensaje_usuario))
+    )
+    if referencia_respondida:
+        decision["datos_detectados"]["referencia_ya_respondida"] = True
+
     zona_contexto = str(
         contexto_zona.get(
             "zona_interes",
@@ -9355,6 +9403,10 @@ def aplicar_reglas_negocio_estructuradas(
         clasificacion_zona_determinista[
             "es_zona_validada"
         ] = True
+        # La autorización sólo aplica a la misma localidad. No borra
+        # una solicitud explícita de otro campus.
+        if not analisis_seguro.get("campus_externo"):
+            clasificacion_zona_determinista["es_zona_externa"] = False
 
         clasificacion_zona_determinista[
             "requiere_validacion_geografica"
@@ -9688,6 +9740,41 @@ def aplicar_reglas_negocio_estructuradas(
         ) or ""
     ).strip()
 
+    # Recuperar la fecha sólo cuando existe un único alumno inequívoco.
+    # No trasladar datos de un hermano a otro ni sustituir una corrección
+    # nueva (incluso si su fecha todavía es ambigua) por el dato anterior.
+    alumnos_turno = analisis_seguro.get("alumnos", [])
+    alumnos_identificados = [a for a in alumnos_previos if isinstance(a, dict)]
+    if (
+        not fecha_nacimiento_iso
+        and not analisis_seguro.get("fecha_nacimiento_texto")
+        and not menciona_otro_alumno
+        and not nivel_nuevo_distinto
+        and len(alumnos_identificados) == 1
+        and len(alumnos_turno) <= 1
+    ):
+        alumno_previo = alumnos_identificados[0]
+        nombre_previo = normalizar_texto_para_deteccion(alumno_previo.get("nombre", ""))
+        nombre_turno = nombre_alumno_normalizado or (
+            normalizar_texto_para_deteccion(alumnos_turno[0].get("nombre", ""))
+            if alumnos_turno else ""
+        )
+        fecha_turno_alumno = (
+            alumnos_turno[0].get("fecha_nacimiento", "") if alumnos_turno else ""
+        )
+        nivel_turno_alumno = alumnos_turno[0].get("nivel", "") if alumnos_turno else ""
+        nivel_previo_alumno = alumno_previo.get("nivel_interes", "")
+        nivel_compatible = not nivel_turno_alumno or nivel_turno_alumno == nivel_previo_alumno
+        if (
+            not fecha_turno_alumno
+            and nivel_compatible
+            and (not nombre_turno or nombre_turno == nombre_previo)
+        ):
+            fecha_previa = str(alumno_previo.get("fecha_nacimiento", "") or "").strip()
+            if clasificar_nivel_por_fecha_nacimiento(fecha_previa).get("fecha_nacimiento_valida"):
+                fecha_nacimiento_iso = fecha_previa
+                decision["datos_detectados"]["fecha_nacimiento_reutilizada"] = True
+
     edad_alumno = analisis_seguro.get(
         "edad_alumno"
     )
@@ -9730,6 +9817,19 @@ def aplicar_reglas_negocio_estructuradas(
         clasificacion_edad.get("clasificacion")
         == "PRE_KINDER"
     ):
+        decision["datos_detectados"].update({
+            "nivel": "Kínder",
+            "grado": "Pre-Kínder",
+            "pre_kinder_confirmado": True,
+            "nivel_costos": "Kínder",
+        })
+
+    # ORIENTAR_PRE_KINDER solicita zona. Si ya está validada, continuar
+    # las reglas de intención, costos y cita; nunca volver a ese objetivo.
+    if (
+        clasificacion_edad.get("clasificacion") == "PRE_KINDER"
+        and not zona_validada
+    ):
         intencion_principal_pre_kinder = str(
             analisis_seguro.get(
                 "intencion_principal",
@@ -9771,12 +9871,6 @@ def aplicar_reglas_negocio_estructuradas(
             "requiere_admin": False,
             "puede_compartir_costos": False,
             "debe_finalizar_conversacion": False,
-        })
-
-        decision["datos_detectados"].update({
-            "nivel": "Kínder",
-            "grado": "Pre-Kínder",
-            "pre_kinder_confirmado": True,
         })
 
         if solicitud_costos_pre_kinder:
@@ -10152,6 +10246,23 @@ def aplicar_reglas_negocio_estructuradas(
             mensaje_usuario
         )
     )
+
+    # La solicitud semántica de atención humana sigue pendiente aunque
+    # la familia diga que esperará. Reutilizar la escalación existente.
+    # El cierre comercial explícito ya se atendió antes de llegar aquí.
+    if requiere_admin_contextual:
+        decision.update({
+            "accion": "CONSULTAR_ADMIN",
+            "motivo": (
+                "El mensaje requiere atención administrativa contextual; "
+                "la espera del prospecto no sustituye esa atención."
+            ),
+            "requiere_admin": True,
+            "puede_compartir_costos": zona_validada,
+            "debe_finalizar_conversacion": False,
+        })
+        decision["datos_detectados"]["requiere_admin_contextual"] = True
+        return decision
 
     if pausa_comercial_explicita:
 
@@ -10750,6 +10861,26 @@ def aplicar_reglas_negocio_estructuradas(
             or ""
         ).strip()
 
+        # Conservar el dato complementario de la negociación activa.
+        # No heredar citas antiguas, canceladas ni correcciones ambiguas.
+        if (contact is not None
+                and objetivo_confirmacion_cita in {
+                    "OBTENER_FECHA_CITA", "OBTENER_HORA_CITA"}
+                and not analisis_seguro.get("cancelacion_cita")
+                and not analisis_seguro.get("cambio_fecha_cita")):
+            if not hora_cita and not analisis_seguro.get("hora_cita_texto"):
+                hora_anterior = (get_note_value(contact, "HORA_CITA")
+                                 or get_note_value(contact, "HORA_CITA_24H"))
+                if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", hora_anterior):
+                    hora_cita = hora_anterior
+                    decision["datos_detectados"]["hora_cita_24h"] = hora_cita
+            if not fecha_cita and not analisis_seguro.get("fecha_cita_texto"):
+                fecha_anterior = (get_note_value(contact, "FECHA_CITA")
+                                  or get_note_value(contact, "FECHA_CITA_ISO"))
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha_anterior):
+                    fecha_cita = fecha_anterior
+                    decision["datos_detectados"]["fecha_cita_iso"] = fecha_cita
+
         # ----------------------------------------------------
         # FALTA FECHA
         # ----------------------------------------------------
@@ -11219,6 +11350,26 @@ def aplicar_reglas_negocio_estructuradas(
         or "PEDIR_COSTOS"
         in intenciones_secundarias
     )
+
+    # Una pregunta de desglose posterior al precio no es una nueva
+    # solicitud de colegiatura. Conservar la etapa y el hito existentes.
+    if (
+        solicitud_costos_explicita
+        and analisis_seguro.get("alcance_consulta_costos") == "DETALLE"
+        and "RECIBIO_COSTOS" in hitos_comerciales
+        and "VISITA_REALIZADA" not in hitos_comerciales
+        and estado_comercial_actual != "VISITA_REALIZADA"
+        and etapa_comercial_actual != "VISITA_REALIZADA"
+    ):
+        decision.update({
+            "accion": "RESPONDER_TEMA",
+            "motivo": "Se solicita detalle de costos después de la referencia general.",
+            "requiere_admin": False,
+            "puede_compartir_costos": False,
+            "debe_finalizar_conversacion": False,
+        })
+        decision["datos_detectados"]["detalle_costos_reservado_visita"] = True
+        return decision
 
     solicitud_horarios_explicita = bool(
         detectar_solicitud_horarios(
@@ -11794,7 +11945,8 @@ def aplicar_reglas_negocio_estructuradas(
         )
 
         referencia_confirmada = bool(
-            referencia_previa
+            referencia_respondida
+            or referencia_previa
             or "RESPONDIO_REFERENCIA"
             in hitos_comerciales
             or respondio_referencia_en_turno
@@ -13737,6 +13889,24 @@ def generar_respuesta_final_estructurada(
     # SALUDO SIMPLE DETERMINISTA
     # ========================================================
 
+    datos_respuesta = decision_segura.get("datos_detectados") or {}
+    if (
+        accion == "RESPONDER_TEMA"
+        and isinstance(datos_respuesta, dict)
+        and datos_respuesta.get("detalle_costos_reservado_visita")
+    ):
+        resultado.update({
+            "generada": True,
+            "respuesta": (
+                "Comprendo que desea conocer el detalle de los conceptos "
+                "y sus costos. Esa información la revisamos personalmente "
+                "durante la visita al colegio, para explicarle qué corresponde "
+                "en su caso."
+            ),
+            "tipo_respuesta": "DETALLE_COSTOS_RESERVADO_VISITA",
+        })
+        return resultado
+
     if accion == "RESPONDER_SALUDO":
         respuesta_saludo = (
             crear_respuesta_saludo_simple_estructurado(
@@ -14035,156 +14205,9 @@ def generar_respuesta_final_estructurada(
                 precio
             )
 
-        configuracion = (
-            cargar_configuracion_precios()
-        )
-
-        opciones_comerciales = (
-            configuracion.get(
-                "opciones_comerciales",
-                {},
-            )
-            if isinstance(
-                configuracion,
-                dict,
-            )
-            else {}
-        )
-
-        if not isinstance(
-            opciones_comerciales,
-            dict,
-        ):
-            opciones_comerciales = {}
-
-        # ----------------------------------------------------
-        # INTRODUCCIÓN COMERCIAL
-        # ----------------------------------------------------
-
-        partes_respuesta = [
-            (
-                "Entendemos que al elegir una escuela no "
-                "solamente importa encontrar el mejor programa "
-                "para sus hijos, sino también una opción que "
-                "sea viable para la familia."
-            ),
-            (
-                "Por eso, en Colegio Valle de Filadelfia "
-                "contamos con diferentes alternativas que "
-                "pueden hacer la colegiatura mucho más "
-                "accesible de lo que inicialmente podría imaginar:"
-            ),
-        ]
-
-        # ----------------------------------------------------
-        # OPCIONES COMERCIALES AUTORIZADAS
-        # ----------------------------------------------------
-
-        opciones_texto = []
-
-        if opciones_comerciales.get(
-            "beca_alto_desempeno"
-        ):
-            opciones_texto.append(
-                "- Opciones de beca de acuerdo con el perfil "
-                "y desempeño del alumno."
-            )
-
-        if opciones_comerciales.get(
-            "beca_hermanos"
-        ):
-            opciones_texto.append(
-                "- Beneficios especiales para hermanos."
-            )
-
-        planes_pago = (
-            opciones_comerciales.get(
-                "planes_pago",
-                [],
-            )
-        )
-
-        if isinstance(
-            planes_pago,
-            list,
-        ) and planes_pago:
-
-            planes_limpios = [
-                str(plan).strip()
-                for plan in planes_pago
-                if str(plan).strip()
-            ]
-
-            if planes_limpios:
-                if len(planes_limpios) == 1:
-                    planes_texto = (
-                        planes_limpios[0]
-                    )
-                else:
-                    planes_texto = (
-                        ", ".join(
-                            planes_limpios[:-1]
-                        )
-                        + " o "
-                        + planes_limpios[-1]
-                    )
-
-                opciones_texto.append(
-                    "- Planes de pago flexibles: "
-                    f"{planes_texto}."
-                )
-
-        if opciones_comerciales.get(
-            "descuento_pago_anticipado"
-        ):
-            opciones_texto.append(
-                "- Descuentos por pago anticipado "
-                "de anualidad."
-            )
-
-        medios_pago = (
-            opciones_comerciales.get(
-                "medios_pago",
-                [],
-            )
-        )
-
-        if isinstance(
-            medios_pago,
-            list,
-        ) and medios_pago:
-
-            medios_limpios = [
-                str(medio).strip()
-                for medio in medios_pago
-                if str(medio).strip()
-            ]
-
-            if medios_limpios:
-                if len(medios_limpios) == 1:
-                    medios_texto = (
-                        medios_limpios[0]
-                    )
-                else:
-                    medios_texto = (
-                        ", ".join(
-                            medios_limpios[:-1]
-                        )
-                        + " y "
-                        + medios_limpios[-1]
-                    )
-
-                opciones_texto.append(
-                    "- Diferentes formas de pago: "
-                    f"{medios_texto}."
-                )
-
-        if opciones_texto:
-            partes_respuesta.append(
-                "\n".join(
-                    opciones_texto
-                )
-            )
+        # Referencia breve para calificar interés, sin abrir un catálogo
+        # de becas, descuentos o condiciones antes de la visita.
+        partes_respuesta = []
 
         # ----------------------------------------------------
         # PRECIOS: ÚNICAMENTE NIVELES SOLICITADOS
@@ -14280,18 +14303,8 @@ def generar_respuesta_final_estructurada(
         # ----------------------------------------------------
 
         partes_respuesta.append(
-            "Y algo importante: antes de pensar que el "
-            "colegio puede estar fuera de su presupuesto, "
-            "vale la pena conocer qué beneficios podrían "
-            "aplicar en su caso."
-        )
-
-        partes_respuesta.append(
-            "En una visita podemos explicarle personalmente "
-            "nuestro modelo educativo, todo lo que incluye "
-            "la colegiatura y revisar las opciones de beca, "
-            "descuentos y forma de pago disponibles para "
-            "su familia."
+            "Durante la visita al colegio podemos explicarle los demás "
+            "conceptos y resolver sus dudas."
         )
 
         acepto_visita_en_turno = bool(
@@ -14308,8 +14321,7 @@ def generar_respuesta_final_estructurada(
             )
         else:
             partes_respuesta.append(
-                "¿Le gustaría agendar una visita y conocer "
-                "más sobre becas y descuentos?"
+                "¿Le gustaría agendar una visita?"
             )
 
         respuesta_costos = "\n\n".join(
@@ -14753,6 +14765,12 @@ def generar_respuesta_final_estructurada(
         ).strip()
 
         errores = []
+        if decision_segura.get("datos_detectados", {}).get("referencia_ya_respondida"):
+            for pregunta in re.findall(r"¿([^?]+)\?", respuesta_limpia):
+                if re.search(r"referencias?|como (?:se entero|nos conocio|supo)|donde nos",
+                             normalizar_texto_geografico(pregunta)):
+                    errores.append("REPITE_REFERENCIA_YA_RESPONDIDA")
+                    break
 
         # ====================================================
         # INTEGRIDAD DE ENLACES GOOGLE MAPS
@@ -15134,7 +15152,6 @@ def generar_respuesta_final_estructurada(
             "claro",
             "nuestra",
             "nuestro",
-            "correspondiente",
             "informacion sobre",
         }
 
@@ -15636,6 +15653,9 @@ la mañana.
 INSTRUCCIONES:
 
 - Respeta la decisión de Python.
+- Si referencia_ya_respondida es true, no vuelvas a preguntar cómo nos
+  conoció ni qué referencias tiene. No conocer familias del colegio es
+  una respuesta válida; no se requieren recomendaciones para continuar.
 - Cumple el objetivo y las restricciones del plan.
 - Escribe una sola respuesta breve, cordial y natural.
 - Usa trato institucional de usted, salvo que el historial
@@ -19938,7 +19958,9 @@ if DATABASE_URL.startswith("postgresql://"):
     
     # Modificar la URL para usar psycopg2
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-    engine = create_engine(DATABASE_URL)
+    # Comprobar conexiones del pool antes de utilizarlas; no reejecutar
+    # transacciones ni envíos cuando una conexión falla a mitad del ciclo.
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 else:
     # Para SQLite, usar tipos String normales
     contact_status_enum = String(50)
@@ -20655,6 +20677,21 @@ class AdminPendingTask(Base):
 
     created_at = Column(DateTime, default=func.now())
     resolved_at = Column(DateTime, nullable=True)
+
+class AdminAlertAttempt(Base):
+    """Durable claim per inbound event; uncertain sends are never retried blindly."""
+    __tablename__ = "admin_alert_attempts"
+
+    id = Column(Integer, primary_key=True)
+    event_key = Column(String(100), unique=True, nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+    task_id = Column(Integer, ForeignKey("admin_pending_tasks.id"), nullable=True)
+    status = Column(String(30), nullable=False, default="INTENTANDO")
+    provider_sid = Column(String(50), nullable=True)
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
 
 class AdminWhatsappState(Base):
     """
@@ -24716,6 +24753,7 @@ async def debug_structured_admin_escalation(
     }
 
 class DebugStructuredAdminEscalationLiveRequest(BaseModel):
+    source_message_id: int
     phone_number: str
     message: str
     confirmation: str
@@ -24844,6 +24882,7 @@ async def debug_structured_admin_escalation_live(
                 resultado_memoria_historica
             ),
             ejecutar_envio=True,
+            source_message_id=payload.source_message_id,
         )
     )
 
@@ -26539,6 +26578,27 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
             return resultado_final
 
+        resultado_escalacion_alcance = {}
+
+        if (
+            categoria_alcance
+            == "SIN_RUTA_CONFIGURADA"
+        ):
+
+            resultado_escalacion_alcance = procesar_escalacion_admin_estructurada(
+                db=db, contact=contact, mensaje_usuario=mensaje,
+                respuesta_bot=respuesta_alcance,
+                resultado_orquestador={"decision": {
+                    "requiere_admin": True, "accion": "CONSULTAR_ADMIN",
+                    "motivo": alcance_detectado.get("motivo_escalacion", ""),
+                }},
+                ejecutar_envio=True, source_message_id=max_message_id,
+            )
+
+        respuesta_alcance = respuesta_segun_resultado_escalacion(
+            respuesta_alcance, resultado_escalacion_alcance,
+        )
+
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
@@ -26615,88 +26675,6 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # notificamos al administrador por WhatsApp.
         # ----------------------------------------------------
 
-        resultado_escalacion_alcance = {}
-
-        if (
-            categoria_alcance
-            == "SIN_RUTA_CONFIGURADA"
-        ):
-
-            try:
-                tarea_admin = (
-                    crear_tarea_admin_pendiente(
-                        db=db,
-                        contact=contact,
-                        mensaje_usuario=mensaje,
-                        respuesta_bot=respuesta_alcance,
-                    )
-                )
-
-                resultado_alerta_admin = (
-                    enviar_alerta_admin_whatsapp(
-                        db=db,
-                        contact=contact,
-                        mensaje_usuario=mensaje,
-                        respuesta_bot=respuesta_alcance,
-                        tarea_id=getattr(
-                            tarea_admin,
-                            "id",
-                            None,
-                        ),
-                    )
-                )
-
-                resultado_escalacion_alcance = {
-                    "requiere_escalacion": True,
-                    "ejecutada": True,
-                    "tarea_id": getattr(
-                        tarea_admin,
-                        "id",
-                        None,
-                    ),
-                    "alerta_admin": (
-                        resultado_alerta_admin
-                    ),
-                    "motivo": str(
-                        alcance_detectado.get(
-                            "motivo_escalacion",
-                            "",
-                        )
-                        or ""
-                    ).strip(),
-                    "error": "",
-                }
-
-                print(
-                    "📣 ESCALACIÓN DE ALCANCE EJECUTADA: "
-                    f"contact_id={contact.id}, "
-                    f"tarea_id="
-                    f"{getattr(tarea_admin, 'id', None)}"
-                )
-
-            except Exception as e:
-                db.rollback()
-
-                resultado_escalacion_alcance = {
-                    "requiere_escalacion": True,
-                    "ejecutada": False,
-                    "tarea_id": None,
-                    "alerta_admin": "",
-                    "motivo": str(
-                        alcance_detectado.get(
-                            "motivo_escalacion",
-                            "",
-                        )
-                        or ""
-                    ).strip(),
-                    "error": str(e),
-                }
-
-                print(
-                    "⚠️ ERROR ESCALANDO ALCANCE "
-                    "SIN_RUTA_CONFIGURADA: "
-                    f"{e}"
-                )
 
         resultado_final.update({
             "procesado": envio_exitoso,
@@ -27372,6 +27350,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
                         resultado_memoria_historica
                     ),
                     ejecutar_envio=True,
+                    source_message_id=max_message_id,
                 )
             )
 
@@ -27516,6 +27495,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
             return resultado_final
             
         
+        if escalacion_critica_pre_outbound is not None:
+            respuesta_bot = respuesta_segun_resultado_escalacion(
+                respuesta_bot, escalacion_critica_pre_outbound,
+            )
+            resultado_orquestador["respuesta_generada"] = respuesta_bot
+            resultado_final["respuesta"] = respuesta_bot
+
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
@@ -27788,6 +27774,7 @@ def procesar_mensaje_whatsapp_estructurado_real(
                         resultado_memoria_historica
                     ),
                     ejecutar_envio=True,
+                    source_message_id=max_message_id,
                 )
             )
             
@@ -30160,6 +30147,28 @@ def enviar_notificacion_admin_whatsapp(
 
     return resultado_template
     
+def respuesta_segun_resultado_escalacion(respuesta: str, escalacion: Dict[str, Any]) -> str:
+    """No prometer canalización o atención inmediata sin aviso aceptado."""
+    if not escalacion.get("requiere_escalacion"):
+        return respuesta
+    if escalacion.get("estado_envio") == "ACEPTADO_PROVEEDOR":
+        # Provider acceptance does not prove a person has read the request.
+        return (
+            "Su solicitud quedó registrada para revisión. "
+            "La respuesta de una persona sigue pendiente por este medio."
+        )
+    if escalacion.get("tarea_id"):
+        return (
+            "Su solicitud quedó registrada, pero no pude confirmar el aviso "
+            "a la persona encargada. La atención sigue pendiente; "
+            "disculpe el inconveniente."
+        )
+    return (
+        "No pude completar la canalización de su solicitud en este momento. "
+        "Por favor, vuelva a escribirnos más tarde. Disculpe el inconveniente."
+    )
+
+
 def procesar_escalacion_admin_estructurada(
     db: Session,
     contact,
@@ -30168,6 +30177,7 @@ def procesar_escalacion_admin_estructurada(
     resultado_orquestador: Dict[str, Any],
     memoria_historica: Optional[Dict[str, Any]] = None,
     ejecutar_envio: bool = False,
+    source_message_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Prepara o ejecuta una escalación administrativa originada
@@ -30190,6 +30200,8 @@ def procesar_escalacion_admin_estructurada(
     resultado = {
         "requiere_escalacion": False,
         "ejecutada": False,
+        "estado_envio": "NO_INTENTADO",
+        "duplicada": False,
         "tarea_id": None,
         "alerta_admin": "",
         "motivo": "",
@@ -30370,6 +30382,29 @@ def procesar_escalacion_admin_estructurada(
     if not ejecutar_envio:
         return resultado
 
+    # Never derive identity from message text or the latest row: both can
+    # conflate a new request with a retry, especially with concurrent buffers.
+    source = db.get(Message, source_message_id) if source_message_id else None
+    if source is None or source.contact_id != contact.id or source.direction != "incoming":
+        resultado["error"] = "EVENTO_ENTRANTE_REQUERIDO"
+        return resultado
+
+    event_key = f"admin:{contact.id}:{source.id}"
+    attempt = AdminAlertAttempt(event_key=event_key, contact_id=contact.id,
+                                source_message_id=source.id, status="INTENTANDO")
+    try:
+        db.add(attempt)
+        db.commit()  # Claim before any external side effect, across workers.
+    except IntegrityError:
+        db.rollback()
+        previous = db.query(AdminAlertAttempt).filter_by(event_key=event_key).one()
+        resultado.update(duplicada=True, estado_envio=previous.status,
+                         ejecutada=previous.status == "ACEPTADO_PROVEEDOR",
+                         tarea_id=previous.task_id, alerta_admin=previous.result or "")
+        if not resultado["ejecutada"]:
+            resultado["error"] = "INTENTO_PREVIO_REQUIERE_REVISION"
+        return resultado
+
     try:
         tarea_admin = crear_tarea_admin_pendiente(
             db=db,
@@ -30384,6 +30419,9 @@ def procesar_escalacion_admin_estructurada(
             None,
         )
 
+        attempt.task_id = resultado["tarea_id"]
+        db.commit()
+
         resultado_alerta = enviar_alerta_admin_whatsapp(
             db=db,
             contact=contact,
@@ -30392,10 +30430,21 @@ def procesar_escalacion_admin_estructurada(
             tarea_id=resultado["tarea_id"],
         )
 
+        # Existing sender contract returns a SID only after provider acceptance.
+        # This is NOT proof of WhatsApp delivery (which requires a status callback).
+        accepted = re.fullmatch(
+            r"✅ (?:Mensaje enviado|Template admin enviado)\. SID: (SM[0-9a-fA-F]{32})",
+            str(resultado_alerta).strip(),
+        )
+        attempt.status = "ACEPTADO_PROVEEDOR" if accepted else "NO_CONFIRMADO"
+        attempt.provider_sid = accepted.group(1) if accepted else None
+        attempt.result = str(resultado_alerta)
+        db.commit()
         resultado.update({
-            "ejecutada": True,
+            "ejecutada": bool(accepted),
+            "estado_envio": attempt.status,
             "alerta_admin": resultado_alerta,
-            "error": "",
+            "error": "" if accepted else "ENVIO_ADMIN_NO_CONFIRMADO",
         })
 
         return resultado
@@ -30408,6 +30457,7 @@ def procesar_escalacion_admin_estructurada(
             f"administrativa estructurada: {e}"
         )
 
+        resultado["estado_envio"] = "NO_CONFIRMADO"
         resultado["error"] = str(e)
         return resultado
         
@@ -30589,7 +30639,7 @@ def enviar_alerta_admin_whatsapp(
     )
 
     print(
-        f"📣 Alerta interna enviada a: "
+        f"📣 Intento de alerta interna a: "
         f"{admin_number}"
     )
     print(
