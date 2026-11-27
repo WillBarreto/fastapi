@@ -26578,6 +26578,27 @@ def procesar_mensaje_whatsapp_estructurado_real(
 
             return resultado_final
 
+        resultado_escalacion_alcance = {}
+
+        if (
+            categoria_alcance
+            == "SIN_RUTA_CONFIGURADA"
+        ):
+
+            resultado_escalacion_alcance = procesar_escalacion_admin_estructurada(
+                db=db, contact=contact, mensaje_usuario=mensaje,
+                respuesta_bot=respuesta_alcance,
+                resultado_orquestador={"decision": {
+                    "requiere_admin": True, "accion": "CONSULTAR_ADMIN",
+                    "motivo": alcance_detectado.get("motivo_escalacion", ""),
+                }},
+                ejecutar_envio=True, source_message_id=max_message_id,
+            )
+
+        respuesta_alcance = respuesta_segun_resultado_escalacion(
+            respuesta_alcance, resultado_escalacion_alcance,
+        )
+
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
@@ -26654,22 +26675,6 @@ def procesar_mensaje_whatsapp_estructurado_real(
         # notificamos al administrador por WhatsApp.
         # ----------------------------------------------------
 
-        resultado_escalacion_alcance = {}
-
-        if (
-            categoria_alcance
-            == "SIN_RUTA_CONFIGURADA"
-        ):
-
-            resultado_escalacion_alcance = procesar_escalacion_admin_estructurada(
-                db=db, contact=contact, mensaje_usuario=mensaje,
-                respuesta_bot=respuesta_alcance,
-                resultado_orquestador={"decision": {
-                    "requiere_admin": True, "accion": "CONSULTAR_ADMIN",
-                    "motivo": alcance_detectado.get("motivo_escalacion", ""),
-                }},
-                ejecutar_envio=True, source_message_id=max_message_id,
-            )
 
         resultado_final.update({
             "procesado": envio_exitoso,
@@ -27490,6 +27495,13 @@ def procesar_mensaje_whatsapp_estructurado_real(
             return resultado_final
             
         
+        if escalacion_critica_pre_outbound is not None:
+            respuesta_bot = respuesta_segun_resultado_escalacion(
+                respuesta_bot, escalacion_critica_pre_outbound,
+            )
+            resultado_orquestador["respuesta_generada"] = respuesta_bot
+            resultado_final["respuesta"] = respuesta_bot
+
         resultado_twilio = (
             enviar_respuesta_twilio(
                 numero_destino,
@@ -30135,6 +30147,28 @@ def enviar_notificacion_admin_whatsapp(
 
     return resultado_template
     
+def respuesta_segun_resultado_escalacion(respuesta: str, escalacion: Dict[str, Any]) -> str:
+    """No prometer canalización o atención inmediata sin aviso aceptado."""
+    if not escalacion.get("requiere_escalacion"):
+        return respuesta
+    if escalacion.get("estado_envio") == "ACEPTADO_PROVEEDOR":
+        # Provider acceptance does not prove a person has read the request.
+        return (
+            "Su solicitud quedó registrada para revisión. "
+            "La respuesta de una persona sigue pendiente por este medio."
+        )
+    if escalacion.get("tarea_id"):
+        return (
+            "Su solicitud quedó registrada, pero no pude confirmar el aviso "
+            "a la persona encargada. La atención sigue pendiente; "
+            "disculpe el inconveniente."
+        )
+    return (
+        "No pude completar la canalización de su solicitud en este momento. "
+        "Por favor, vuelva a escribirnos más tarde. Disculpe el inconveniente."
+    )
+
+
 def procesar_escalacion_admin_estructurada(
     db: Session,
     contact,

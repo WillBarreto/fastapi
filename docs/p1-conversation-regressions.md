@@ -145,3 +145,9 @@ P1_TEST_DATABASE_URL=postgresql://USER@127.0.0.1:55439/whaps_test_native python 
 
 
 Release gates still open: verify production backup/restoration before additive schema change; controlled end-to-end administrative delivery and prospect-facing promises on failed notification; assess legacy direct alert path. No production deployment or data migration performed. Reverting code does not undo accepted messages or persisted claims; do not drop this table as a rollback shortcut.
+
+## Prospect response after administrative notification
+
+Administrative notification is attempted before the prospect response on the structured admissions and unconfigured-scope paths. The final response reflects the recorded outcome: provider acceptance leaves human attention pending; an unconfirmed notification acknowledges the problem without claiming completed handoff; absence of a recorded task does not claim registration. No promise of immediate attention is made.
+
+Validation: 55 local tests and 15 persistence/integration tests on isolated PostgreSQL 17.12. Three new tests run the full structured production function with a real ORM and mocked interpretation/provider, assert notification-before-response ordering, and verify that stored outgoing text matches the text sent. Actual WhatsApp delivery and production backup/restoration remain unverified. No production deployment.

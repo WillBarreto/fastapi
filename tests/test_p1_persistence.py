@@ -143,4 +143,46 @@ class Persistence(unittest.TestCase):
         self.assertEqual(sum(r['duplicada'] for r in results),1)
         self.assertEqual(self.db.query(m.AdminAlertAttempt).filter_by(contact_id=cid).count(),1)
 
+    def run_handoff_flow(self, category, provider_result):
+        m=self.m;ident=self.incoming();sent=[];events=[]
+        scope={'exitoso':True,'alcance':{'alcance_conversacion':category,
+            'ruta_configurada':False,'requiere_aclaracion':False,'requiere_admin':True}}
+        orchestration={'procesado':True,'analisis':{},'decision':{
+            'accion':'CONSULTAR_ADMIN','requiere_admin':True,'datos_detectados':{}},
+            'respuesta_generada':'Ya le avisé a la persona y en un momento le atiende.'}
+        def admin(**kw):events.append('admin');return provider_result
+        def prospect(number, message):
+            events.append('prospect');sent.append(message)
+            return '✅ Mensaje enviado. SID: SM'+'d'*32
+        with patch.object(m,'detectar_admisiones_evidentes_para_alcance',return_value=False), \
+             patch.object(m,'clasificar_alcance_conversacion_con_ia',return_value=scope), \
+             patch.object(m,'procesar_mensaje_prospecto_estructurado',return_value=orchestration), \
+             patch.object(m,'enviar_alerta_admin_whatsapp',side_effect=admin), \
+             patch.object(m,'enviar_respuesta_twilio',side_effect=prospect):
+            result=m.procesar_mensaje_whatsapp_estructurado_real(
+                self.db,self.c,'whatsapp:synthetic','Solicito atención',max_message_id=ident)
+        self.assertTrue(result['procesado'],result)
+        self.assertEqual(events,['admin','prospect'])
+        self.assertEqual(len(sent),1)
+        self.assertNotIn('en un momento',sent[0])
+        self.assertNotIn('Ya le avisé',sent[0])
+        stored=self.db.query(m.Message).filter_by(contact_id=self.c.id,direction='outgoing').one()
+        self.assertEqual(stored.content,sent[0])
+        return sent[0], result
+
+    def test_admissions_failed_alert_does_not_claim_handoff(self):
+        message,r=self.run_handoff_flow('ADMISIONES','❌ Error Twilio: simulated')
+        self.assertIn('no pude confirmar el aviso',message)
+        self.assertFalse(r['escalacion_admin']['ejecutada'])
+
+    def test_non_admissions_failed_alert_before_prospect_message(self):
+        message,r=self.run_handoff_flow('SIN_RUTA_CONFIGURADA','❌ Error Twilio: simulated')
+        self.assertIn('no pude confirmar el aviso',message)
+        self.assertFalse(r['escalacion_admin']['ejecutada'])
+
+    def test_accepted_alert_keeps_human_attention_pending(self):
+        message,r=self.run_handoff_flow('ADMISIONES','✅ Mensaje enviado. SID: SM'+'e'*32)
+        self.assertIn('sigue pendiente',message)
+        self.assertTrue(r['escalacion_admin']['ejecutada'])
+
 if __name__=='__main__':unittest.main()
